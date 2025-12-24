@@ -4,6 +4,28 @@ This directory contains example Kubernetes manifests for integrating NixFleet PK
 
 ## Quick Start
 
+### Two-Tier PKI (Recommended)
+
+```bash
+# 1. Initialize Root and Intermediate CA
+nixfleet pki init -r age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+nixfleet pki init-intermediate -r age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 2. Export intermediate CA secret and ClusterIssuer
+nixfleet pki certmanager export --intermediate -n cert-manager -o ca-secret.json
+nixfleet pki certmanager issuer -o cluster-issuer.json
+
+# 3. Apply to cluster
+kubectl apply -f ca-secret.json
+kubectl apply -f cluster-issuer.json
+
+# 4. Apply example resources
+kubectl apply -f certificate.yaml
+kubectl apply -f deployment.yaml
+```
+
+### Single-Tier PKI (Simple)
+
 ```bash
 # 1. Initialize CA (if not already done)
 nixfleet pki init -r age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

@@ -210,6 +210,7 @@ type KubernetesSecret struct {
 }
 
 // ExportToK8sSecret exports a certificate as a Kubernetes TLS secret
+// If the certificate has a chain (from intermediate CA), the full chain is exported
 func ExportToK8sSecret(cert *IssuedCert, caCert []byte, namespace, secretName string) (*KubernetesSecret, error) {
 	if namespace == "" {
 		namespace = "default"
@@ -219,6 +220,12 @@ func ExportToK8sSecret(cert *IssuedCert, caCert []byte, namespace, secretName st
 		if cert.Name != "" && cert.Name != "host" {
 			secretName = cert.Hostname + "-" + cert.Name + "-tls"
 		}
+	}
+
+	// Use chain if available (cert + intermediate + root), otherwise just the cert
+	certData := cert.CertPEM
+	if len(cert.ChainPEM) > 0 {
+		certData = cert.ChainPEM
 	}
 
 	secret := &KubernetesSecret{
@@ -237,10 +244,11 @@ func ExportToK8sSecret(cert *IssuedCert, caCert []byte, namespace, secretName st
 				"nixfleet.io/serial":     cert.Serial,
 				"nixfleet.io/expires":    cert.NotAfter.Format(time.RFC3339),
 				"nixfleet.io/thumbprint": cert.Thumbprint,
+				"nixfleet.io/has-chain":  fmt.Sprintf("%t", len(cert.ChainPEM) > 0),
 			},
 		},
 		Data: map[string]string{
-			"tls.crt": base64.StdEncoding.EncodeToString(cert.CertPEM),
+			"tls.crt": base64.StdEncoding.EncodeToString(certData),
 			"tls.key": base64.StdEncoding.EncodeToString(cert.KeyPEM),
 		},
 	}
@@ -281,6 +289,42 @@ func ExportCAToK8sSecret(ca *CA, namespace, secretName string) (*KubernetesSecre
 		Data: map[string]string{
 			"tls.crt": base64.StdEncoding.EncodeToString(ca.CertPEM),
 			"tls.key": base64.StdEncoding.EncodeToString(ca.KeyPEM),
+		},
+	}
+
+	return secret, nil
+}
+
+// ExportIntermediateCAToK8sSecret exports the intermediate CA as a Kubernetes secret
+// The secret includes the full chain (intermediate + root) for proper validation
+func ExportIntermediateCAToK8sSecret(ica *IntermediateCA, namespace, secretName string) (*KubernetesSecret, error) {
+	if namespace == "" {
+		namespace = "cert-manager"
+	}
+	if secretName == "" {
+		secretName = "nixfleet-ca"
+	}
+
+	secret := &KubernetesSecret{
+		APIVersion: "v1",
+		Kind:       "Secret",
+		Type:       "kubernetes.io/tls",
+		Metadata: map[string]any{
+			"name":      secretName,
+			"namespace": namespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/managed-by": "nixfleet",
+				"nixfleet.io/ca":               "true",
+				"nixfleet.io/intermediate":     "true",
+			},
+			"annotations": map[string]string{
+				"nixfleet.io/expires": ica.Certificate.NotAfter.Format(time.RFC3339),
+			},
+		},
+		Data: map[string]string{
+			"tls.crt": base64.StdEncoding.EncodeToString(ica.CertPEM),
+			"tls.key": base64.StdEncoding.EncodeToString(ica.KeyPEM),
+			"ca.crt":  base64.StdEncoding.EncodeToString(ica.ChainPEM), // Full chain for trust
 		},
 	}
 

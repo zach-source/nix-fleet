@@ -83,8 +83,86 @@ func (s *Store) LoadCA(ctx context.Context) (*CA, error) {
 	return LoadCA(certPEM, keyPEM)
 }
 
+// IntermediateCAExists checks if an intermediate CA has been initialized
+func (s *Store) IntermediateCAExists() bool {
+	intermediateCertPath := filepath.Join(s.baseDir, "ca", "intermediate.crt")
+	intermediateKeyPath := filepath.Join(s.baseDir, "ca", "intermediate.key.age")
+
+	_, certErr := os.Stat(intermediateCertPath)
+	_, keyErr := os.Stat(intermediateKeyPath)
+
+	return certErr == nil && keyErr == nil
+}
+
+// SaveIntermediateCA saves the intermediate CA certificate and encrypted private key
+func (s *Store) SaveIntermediateCA(ica *IntermediateCA) error {
+	caDir := filepath.Join(s.baseDir, "ca")
+	if err := os.MkdirAll(caDir, 0755); err != nil {
+		return fmt.Errorf("creating CA directory: %w", err)
+	}
+
+	// Save intermediate certificate (public, not encrypted)
+	certPath := filepath.Join(caDir, "intermediate.crt")
+	if err := os.WriteFile(certPath, ica.CertPEM, 0644); err != nil {
+		return fmt.Errorf("writing intermediate CA certificate: %w", err)
+	}
+
+	// Save the full chain (intermediate + root)
+	chainPath := filepath.Join(caDir, "chain.crt")
+	if err := os.WriteFile(chainPath, ica.ChainPEM, 0644); err != nil {
+		return fmt.Errorf("writing CA chain: %w", err)
+	}
+
+	// Encrypt and save private key
+	keyPath := filepath.Join(caDir, "intermediate.key.age")
+	if err := s.encryptAndSave(ica.KeyPEM, keyPath); err != nil {
+		return fmt.Errorf("encrypting intermediate CA private key: %w", err)
+	}
+
+	return nil
+}
+
+// LoadIntermediateCA loads the intermediate CA from disk
+func (s *Store) LoadIntermediateCA(ctx context.Context) (*IntermediateCA, error) {
+	caDir := filepath.Join(s.baseDir, "ca")
+
+	// Read intermediate certificate
+	certPath := filepath.Join(caDir, "intermediate.crt")
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading intermediate CA certificate: %w", err)
+	}
+
+	// Read root certificate
+	rootCertPath := filepath.Join(caDir, "root.crt")
+	rootCertPEM, err := os.ReadFile(rootCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading root CA certificate: %w", err)
+	}
+
+	// Decrypt and read private key
+	keyPath := filepath.Join(caDir, "intermediate.key.age")
+	keyPEM, err := s.decryptFile(ctx, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting intermediate CA private key: %w", err)
+	}
+
+	return LoadIntermediateCA(certPEM, keyPEM, rootCertPEM)
+}
+
+// GetIntermediateCertPath returns the path to the intermediate CA certificate
+func (s *Store) GetIntermediateCertPath() string {
+	return filepath.Join(s.baseDir, "ca", "intermediate.crt")
+}
+
+// GetChainCertPath returns the path to the full certificate chain
+func (s *Store) GetChainCertPath() string {
+	return filepath.Join(s.baseDir, "ca", "chain.crt")
+}
+
 // SaveHostCert saves a host certificate and encrypted private key
 // Supports named certificates: secrets/pki/hosts/{hostname}/{name}.crt
+// If the certificate includes a chain (from intermediate CA), saves it as {name}.chain.crt
 func (s *Store) SaveHostCert(cert *IssuedCert) error {
 	certName := cert.Name
 	if certName == "" {
@@ -100,6 +178,14 @@ func (s *Store) SaveHostCert(cert *IssuedCert) error {
 	certPath := filepath.Join(hostDir, certName+".crt")
 	if err := os.WriteFile(certPath, cert.CertPEM, 0644); err != nil {
 		return fmt.Errorf("writing host certificate: %w", err)
+	}
+
+	// Save chain if present (cert + intermediate + root)
+	if len(cert.ChainPEM) > 0 {
+		chainPath := filepath.Join(hostDir, certName+".chain.crt")
+		if err := os.WriteFile(chainPath, cert.ChainPEM, 0644); err != nil {
+			return fmt.Errorf("writing certificate chain: %w", err)
+		}
 	}
 
 	// Encrypt and save private key
@@ -134,6 +220,13 @@ func (s *Store) LoadNamedCert(ctx context.Context, hostname, certName string) (*
 		return nil, fmt.Errorf("reading host certificate: %w", err)
 	}
 
+	// Read chain if it exists (optional)
+	var chainPEM []byte
+	chainPath := filepath.Join(hostDir, certName+".chain.crt")
+	if chainData, err := os.ReadFile(chainPath); err == nil {
+		chainPEM = chainData
+	}
+
 	// Decrypt private key
 	keyPath := filepath.Join(hostDir, certName+".key.age")
 	keyPEM, err := s.decryptFile(ctx, keyPath)
@@ -150,6 +243,7 @@ func (s *Store) LoadNamedCert(ctx context.Context, hostname, certName string) (*
 	return &IssuedCert{
 		CertPEM:    certPEM,
 		KeyPEM:     keyPEM,
+		ChainPEM:   chainPEM,
 		Hostname:   hostname,
 		Name:       certName,
 		Serial:     info.Serial,

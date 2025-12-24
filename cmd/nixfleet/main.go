@@ -3014,14 +3014,16 @@ func pkiCmd() *cobra.Command {
 		Long: `Manage the fleet's Public Key Infrastructure.
 
 Commands:
-  init        - Initialize a new Certificate Authority for the fleet
-  issue       - Issue a certificate for a host
-  status      - Show certificate status for fleet hosts
-  export      - Export CA certificate for external trust
-  certmanager - Integration with Kubernetes cert-manager`,
+  init             - Initialize a new root Certificate Authority
+  init-intermediate - Create an intermediate CA (signed by root)
+  issue            - Issue a certificate for a host
+  status           - Show certificate status for fleet hosts
+  export           - Export CA certificate for external trust
+  certmanager      - Integration with Kubernetes cert-manager`,
 	}
 
 	cmd.AddCommand(pkiInitCmd())
+	cmd.AddCommand(pkiInitIntermediateCmd())
 	cmd.AddCommand(pkiIssueCmd())
 	cmd.AddCommand(pkiStatusCmd())
 	cmd.AddCommand(pkiExportCmd())
@@ -3134,6 +3136,122 @@ The private key is encrypted and only used to sign host certificates.`,
 	return cmd
 }
 
+func pkiInitIntermediateCmd() *cobra.Command {
+	var (
+		pkiDir       string
+		recipients   []string
+		identities   []string
+		commonName   string
+		organization string
+		validity     string
+		force        bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init-intermediate",
+		Short: "Create an intermediate CA signed by the root CA",
+		Long: `Create an intermediate CA for signing host certificates.
+
+This provides better security by keeping the root CA private key offline.
+The intermediate CA:
+  - Is signed by the root CA
+  - Has a shorter validity than root (default 5 years)
+  - Can only sign end-entity certificates (not other CAs)
+
+The certificate chain (intermediate + root) is automatically included
+when issuing certificates, enabling full chain validation.
+
+Examples:
+  nixfleet pki init-intermediate -r age1...
+  nixfleet pki init-intermediate --cn "NixFleet Signing CA" --validity 3y`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			store := pki.NewStore(pkiDir, recipients, identities)
+
+			// Check if root CA exists
+			if !store.CAExists() {
+				return fmt.Errorf("root CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			// Check if intermediate already exists
+			if store.IntermediateCAExists() && !force {
+				return fmt.Errorf("intermediate CA already exists. Use --force to overwrite")
+			}
+
+			if len(recipients) == 0 {
+				return fmt.Errorf("at least one --recipient is required for encrypting the intermediate CA key")
+			}
+
+			// Parse validity
+			validityDuration, err := time.ParseDuration(validity)
+			if err != nil {
+				if strings.HasSuffix(validity, "y") {
+					years := strings.TrimSuffix(validity, "y")
+					var y int
+					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
+						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
+					}
+				}
+				if validityDuration == 0 {
+					return fmt.Errorf("invalid validity format: %s (use e.g., 5y, 8760h)", validity)
+				}
+			}
+
+			// Load root CA
+			rootCA, err := store.LoadCA(ctx)
+			if err != nil {
+				return fmt.Errorf("loading root CA: %w", err)
+			}
+
+			cfg := &pki.IntermediateCAConfig{
+				CommonName:   commonName,
+				Organization: organization,
+				Validity:     validityDuration,
+			}
+
+			fmt.Println("Creating intermediate CA...")
+			fmt.Printf("  Common Name:  %s\n", cfg.CommonName)
+			fmt.Printf("  Organization: %s\n", cfg.Organization)
+			fmt.Printf("  Validity:     %s\n", validity)
+			fmt.Println()
+
+			// Create intermediate CA
+			intermediateCA, err := rootCA.InitIntermediateCA(cfg)
+			if err != nil {
+				return fmt.Errorf("creating intermediate CA: %w", err)
+			}
+
+			// Save to disk
+			if err := store.SaveIntermediateCA(intermediateCA); err != nil {
+				return fmt.Errorf("saving intermediate CA: %w", err)
+			}
+
+			fmt.Println("Intermediate CA created successfully!")
+			fmt.Println()
+			fmt.Printf("Files created:\n")
+			fmt.Printf("  Certificate: %s/ca/intermediate.crt\n", pkiDir)
+			fmt.Printf("  Chain:       %s/ca/chain.crt (intermediate + root)\n", pkiDir)
+			fmt.Printf("  Private Key: %s/ca/intermediate.key.age (encrypted)\n", pkiDir)
+			fmt.Println()
+			fmt.Println("Host certificates will now be signed by the intermediate CA")
+			fmt.Println("and include the full certificate chain.")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting intermediate CA key (required)")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&commonName, "cn", "NixFleet Intermediate CA", "Intermediate CA common name")
+	cmd.Flags().StringVar(&organization, "org", "NixFleet", "Organization name")
+	cmd.Flags().StringVar(&validity, "validity", "5y", "Intermediate CA validity (e.g., 5y, 8760h)")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing intermediate CA")
+
+	return cmd
+}
+
 func pkiIssueCmd() *cobra.Command {
 	var (
 		pkiDir     string
@@ -3183,10 +3301,27 @@ Examples:
 				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
 			}
 
-			// Load CA
-			ca, err := store.LoadCA(ctx)
-			if err != nil {
-				return fmt.Errorf("loading CA: %w", err)
+			// Determine which CA to use for signing
+			// Prefer intermediate CA if available, otherwise use root
+			var issuer interface {
+				IssueCert(req *pki.CertRequest) (*pki.IssuedCert, error)
+			}
+			var signerName string
+
+			if store.IntermediateCAExists() {
+				ica, err := store.LoadIntermediateCA(ctx)
+				if err != nil {
+					return fmt.Errorf("loading intermediate CA: %w", err)
+				}
+				issuer = ica
+				signerName = "intermediate CA"
+			} else {
+				ca, err := store.LoadCA(ctx)
+				if err != nil {
+					return fmt.Errorf("loading CA: %w", err)
+				}
+				issuer = ca
+				signerName = "root CA"
 			}
 
 			// Parse validity
@@ -3228,7 +3363,7 @@ Examples:
 				return fmt.Errorf("at least one --recipient is required")
 			}
 
-			fmt.Printf("Issuing certificates for %d host(s)...\n\n", len(hostnames))
+			fmt.Printf("Issuing certificates for %d host(s) using %s...\n\n", len(hostnames), signerName)
 
 			for _, hostname := range hostnames {
 				req := &pki.CertRequest{
@@ -3238,7 +3373,7 @@ Examples:
 					Validity: validityDuration,
 				}
 
-				cert, err := ca.IssueCert(req)
+				cert, err := issuer.IssueCert(req)
 				if err != nil {
 					fmt.Printf("  %s: FAILED - %v\n", hostname, err)
 					continue
@@ -3809,14 +3944,15 @@ Examples:
 
 func pkiCertManagerExportCmd() *cobra.Command {
 	var (
-		pkiDir     string
-		identities []string
-		namespace  string
-		secretName string
-		exportCA   bool
-		hostname   string
-		certName   string
-		output     string
+		pkiDir             string
+		identities         []string
+		namespace          string
+		secretName         string
+		exportCA           bool
+		exportIntermediate bool
+		hostname           string
+		certName           string
+		output             string
 	)
 
 	cmd := &cobra.Command{
@@ -3828,7 +3964,10 @@ The generated secret can be applied directly to a Kubernetes cluster
 using kubectl apply, or saved to a file for later use.
 
 Examples:
-  # Export CA as a secret for cert-manager
+  # Export intermediate CA as a secret for cert-manager (recommended)
+  nixfleet pki certmanager export --intermediate -n cert-manager
+
+  # Export root CA as a secret for cert-manager
   nixfleet pki certmanager export --ca -n cert-manager
 
   # Export a host certificate
@@ -3838,7 +3977,7 @@ Examples:
   nixfleet pki certmanager export --hostname myhost --cert-name web
 
   # Save to file
-  nixfleet pki certmanager export --ca -o ca-secret.yaml`,
+  nixfleet pki certmanager export --intermediate -o ca-secret.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -3850,7 +3989,27 @@ Examples:
 
 			var secretJSON []byte
 
-			if exportCA {
+			if exportIntermediate {
+				if !store.IntermediateCAExists() {
+					return fmt.Errorf("intermediate CA not initialized. Run 'nixfleet pki init-intermediate' first")
+				}
+
+				ica, err := store.LoadIntermediateCA(ctx)
+				if err != nil {
+					return fmt.Errorf("loading intermediate CA: %w", err)
+				}
+
+				secret, err := pki.ExportIntermediateCAToK8sSecret(ica, namespace, secretName)
+				if err != nil {
+					return fmt.Errorf("exporting intermediate CA secret: %w", err)
+				}
+
+				data, err := json.MarshalIndent(secret, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling secret: %w", err)
+				}
+				secretJSON = data
+			} else if exportCA {
 				ca, err := store.LoadCA(ctx)
 				if err != nil {
 					return fmt.Errorf("loading CA: %w", err)
@@ -3889,7 +4048,7 @@ Examples:
 				}
 				secretJSON = data
 			} else {
-				return fmt.Errorf("either --ca or --hostname must be specified")
+				return fmt.Errorf("either --intermediate, --ca, or --hostname must be specified")
 			}
 
 			if output != "" {
@@ -3909,7 +4068,8 @@ Examples:
 	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Kubernetes namespace (default: cert-manager for CA, default for certs)")
 	cmd.Flags().StringVar(&secretName, "secret-name", "", "Secret name (auto-generated if not specified)")
-	cmd.Flags().BoolVar(&exportCA, "ca", false, "Export CA certificate (for cert-manager CA issuer)")
+	cmd.Flags().BoolVar(&exportCA, "ca", false, "Export root CA certificate")
+	cmd.Flags().BoolVar(&exportIntermediate, "intermediate", false, "Export intermediate CA certificate (recommended for cert-manager)")
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Export certificate for this host")
 	cmd.Flags().StringVar(&certName, "cert-name", "", "Certificate name (default: host)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (prints to stdout if not specified)")

@@ -9,14 +9,63 @@ NixFleet can integrate with cert-manager in two ways:
 1. **CA Issuer** - Export the CA certificate and key to Kubernetes, letting cert-manager sign certificates directly
 2. **Webhook Signer** - Run a webhook server that signs CSRs without exposing the CA private key to Kubernetes
 
+## PKI Hierarchy Options
+
+NixFleet supports two PKI architectures:
+
+### Single-Tier (Root CA Only)
+
+```
+Root CA → Server Certificates
+```
+
+Simple setup where the root CA directly signs server certificates.
+
+### Two-Tier (Root + Intermediate CA) - Recommended
+
+```
+Root CA → Intermediate CA → Server Certificates
+```
+
+The recommended architecture for production:
+- **Root CA**: Kept offline/encrypted, only used to sign the intermediate CA
+- **Intermediate CA**: Used for day-to-day certificate signing
+- **Server Certificates**: Include full chain (cert + intermediate + root) for validation
+
+```bash
+# Initialize two-tier PKI
+nixfleet pki init -r age1...                    # Create root CA
+nixfleet pki init-intermediate -r age1...       # Create intermediate CA
+
+# Issue certificates (automatically uses intermediate CA)
+nixfleet pki issue myhost --san myhost.example.com
+```
+
+When an intermediate CA is present, `pki issue` automatically uses it for signing and includes the full certificate chain.
+
 ## Option 1: CA Issuer (Simple)
 
 This approach exports the CA to Kubernetes and lets cert-manager handle signing.
 
 ### Step 1: Export CA Secret
 
+For **two-tier PKI** (recommended), export the intermediate CA:
+
 ```bash
-# Export the CA as a Kubernetes secret
+# Export the intermediate CA as a Kubernetes secret
+nixfleet pki certmanager export --intermediate \
+  --namespace cert-manager \
+  --secret-name nixfleet-ca \
+  -o ca-secret.yaml
+
+# Apply to cluster
+kubectl apply -f ca-secret.yaml
+```
+
+For **single-tier PKI**, export the root CA:
+
+```bash
+# Export the root CA as a Kubernetes secret
 nixfleet pki certmanager export --ca \
   --namespace cert-manager \
   --secret-name nixfleet-ca \
@@ -25,6 +74,8 @@ nixfleet pki certmanager export --ca \
 # Apply to cluster
 kubectl apply -f ca-secret.yaml
 ```
+
+> **Note**: When using two-tier PKI, the intermediate CA secret includes the chain certificate (`ca.crt`) which contains both the intermediate and root CA certificates, allowing clients to build the full trust chain.
 
 ### Step 2: Create ClusterIssuer
 
