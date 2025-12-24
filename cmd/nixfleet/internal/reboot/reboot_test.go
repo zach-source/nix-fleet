@@ -232,7 +232,7 @@ func TestConcurrencyLimiterCancel(t *testing.T) {
 	limiter := NewConcurrencyLimiter(1)
 
 	ctx := context.Background()
-	limiter.Acquire(ctx) // Take the only slot
+	_ = limiter.Acquire(ctx) // Take the only slot
 
 	// Create a context that will be cancelled
 	cancelCtx, cancel := context.WithCancel(context.Background())

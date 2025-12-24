@@ -1,40 +1,40 @@
-run:
-  timeout: 5m
-
+version: "2"
 linters:
-  enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
-linters-settings:
-  errcheck:
-    # Ignore specific function calls that are safe to ignore
-    exclude-functions:
-      # SSH client methods - fire-and-forget calls are intentional
-      - (*github.com/nixfleet/nixfleet/internal/ssh.Client).Exec
-      - (*github.com/nixfleet/nixfleet/internal/ssh.Client).ExecSudo
-      # State manager methods - background updates where errors are logged but not fatal
-      - (*github.com/nixfleet/nixfleet/internal/state.Manager).WriteState
-      - (*github.com/nixfleet/nixfleet/internal/state.Manager).UpdateAfterApply
-      # Semaphore acquire in tests
-      - (*golang.org/x/sync/semaphore.Weighted).Acquire
-      # Standard library
-      - (*golang.org/x/crypto/ssh.Session).Signal
-      - fmt.Sscanf
-      - (*os/exec.Cmd).Run
-      - (*github.com/spf13/cobra.Command).MarkFlagRequired
-      - (*encoding/json.Encoder).Encode
-
-issues:
-  # Don't fail on staticcheck SA5011 nil pointer warnings for now
-  exclude-rules:
-    - linters:
-        - staticcheck
-      text: "SA5011"
-    - linters:
-        - gosimple
-      text: "S1039"
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*github.com/nixfleet/nixfleet/internal/ssh.Client).Exec
+        - (*github.com/nixfleet/nixfleet/internal/ssh.Client).ExecSudo
+        - (*github.com/nixfleet/nixfleet/internal/state.Manager).WriteState
+        - (*github.com/nixfleet/nixfleet/internal/state.Manager).UpdateAfterApply
+        - (*golang.org/x/sync/semaphore.Weighted).Acquire
+        - (*golang.org/x/crypto/ssh.Session).Signal
+        - fmt.Sscanf
+        - (*os/exec.Cmd).Run
+        - (*github.com/spf13/cobra.Command).MarkFlagRequired
+        - (*encoding/json.Encoder).Encode
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        text: SA5011
+      - linters:
+          - staticcheck
+        text: S1039
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

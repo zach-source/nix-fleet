@@ -50,9 +50,9 @@ func TestMockClientRegisterCommandOutput(t *testing.T) {
 func TestMockClientExecLog(t *testing.T) {
 	client := NewMockClient()
 
-	client.Exec(context.Background(), "echo 1")
-	client.Exec(context.Background(), "echo 2")
-	client.Exec(context.Background(), "echo 3")
+	_, _ = client.Exec(context.Background(), "echo 1")
+	_, _ = client.Exec(context.Background(), "echo 2")
+	_, _ = client.Exec(context.Background(), "echo 3")
 
 	if len(client.ExecLog) != 3 {
 		t.Errorf("Expected 3 commands in log, got %d", len(client.ExecLog))

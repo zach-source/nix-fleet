@@ -2073,10 +2073,11 @@ func driftCheckCmd() *cobra.Command {
 						if r.HasDrift() {
 							fmt.Printf("  - %s: %s\n", r.Path, r.Status)
 							if verbose {
-								if r.Status == state.DriftStatusContentChanged {
+								switch r.Status {
+								case state.DriftStatusContentChanged:
 									fmt.Printf("      expected hash: %s\n", r.Expected.Hash[:16]+"...")
 									fmt.Printf("      actual hash:   %s\n", r.Actual.Hash[:16]+"...")
-								} else if r.Status == state.DriftStatusPermissionsChanged {
+								case state.DriftStatusPermissionsChanged:
 									fmt.Printf("      expected: %s %s:%s\n", r.Expected.Mode, r.Expected.Owner, r.Expected.Group)
 									fmt.Printf("      actual:   %s %s:%s\n", r.Actual.Mode, r.Actual.Owner, r.Actual.Group)
 								}
