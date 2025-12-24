@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -1461,15 +1462,23 @@ func secretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Manage encrypted secrets",
-		Long: `Manage encrypted secrets with age or sops.
+		Long: `Manage encrypted secrets with age encryption.
 
 Subcommands:
+  rekey    - Re-encrypt all secrets after modifying secrets.nix
+  edit     - Edit a secret in-place
+  add      - Add a new encrypted secret
+  host-key - Get age public key from a host's SSH key
   deploy   - Deploy secrets to hosts
   encrypt  - Encrypt a secret file
   decrypt  - Decrypt a secret file
   keygen   - Generate age key pair`,
 	}
 
+	cmd.AddCommand(secretsRekeyCmd())
+	cmd.AddCommand(secretsEditCmd())
+	cmd.AddCommand(secretsAddCmd())
+	cmd.AddCommand(secretsHostKeyCmd())
 	cmd.AddCommand(secretsDeployCmd())
 	cmd.AddCommand(secretsEncryptCmd())
 	cmd.AddCommand(secretsDecryptCmd())
@@ -1644,6 +1653,337 @@ func secretsKeygenCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "age-key.txt", "Output file for secret key")
+
+	return cmd
+}
+
+func secretsRekeyCmd() *cobra.Command {
+	var secretsNixPath string
+	var secretsDir string
+	var identityPath string
+
+	cmd := &cobra.Command{
+		Use:   "rekey",
+		Short: "Re-encrypt all secrets after modifying secrets.nix",
+		Long: `Re-encrypt all secrets using the recipients defined in secrets.nix.
+
+Use this after:
+  - Adding a new host to secrets.nix
+  - Removing a host from secrets.nix
+  - Changing which secrets a host can access
+
+Example:
+  nixfleet secrets rekey -c secrets/secrets.nix -i ~/.config/age/admin-key.txt`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if identityPath == "" {
+				// Default to admin key location
+				home, _ := os.UserHomeDir()
+				identityPath = home + "/.config/age/admin-key.txt"
+			}
+
+			// Check identity exists
+			if _, err := os.Stat(identityPath); os.IsNotExist(err) {
+				return fmt.Errorf("identity file not found: %s\nUse -i to specify your age identity file", identityPath)
+			}
+
+			// Parse secrets.nix
+			config, err := secrets.ParseSecretsNix(ctx, secretsNixPath)
+			if err != nil {
+				return fmt.Errorf("parsing secrets.nix: %w", err)
+			}
+
+			fmt.Printf("Parsed secrets.nix:\n")
+			fmt.Printf("  Admins: %d\n", len(config.Admins))
+			fmt.Printf("  Hosts: %d\n", len(config.Hosts))
+			fmt.Printf("  Secrets: %d\n\n", len(config.Secrets))
+
+			if dryRun {
+				fmt.Println("Would rekey the following secrets:")
+				for name, entry := range config.Secrets {
+					fmt.Printf("  %s -> %d recipients\n", name, len(entry.PublicKeys))
+				}
+				return nil
+			}
+
+			rekeyed, err := secrets.RekeyAll(ctx, secretsDir, config, identityPath, false)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Rekeyed %d secret(s):\n", len(rekeyed))
+			for _, name := range rekeyed {
+				entry := config.Secrets[name]
+				fmt.Printf("  ✓ %s (%d recipients)\n", name, len(entry.PublicKeys))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&secretsNixPath, "config", "c", "secrets/secrets.nix", "Path to secrets.nix")
+	cmd.Flags().StringVarP(&secretsDir, "secrets-dir", "s", "secrets/", "Directory containing .age files")
+	cmd.Flags().StringVar(&identityPath, "identity", "", "Path to age identity for decryption (default: ~/.config/age/admin-key.txt)")
+
+	return cmd
+}
+
+func secretsEditCmd() *cobra.Command {
+	var secretsNixPath string
+	var identityPath string
+
+	cmd := &cobra.Command{
+		Use:   "edit [secret-file]",
+		Short: "Edit a secret in-place",
+		Long: `Decrypt a secret, open in $EDITOR, and re-encrypt with the same recipients.
+
+The recipients are looked up from secrets.nix to ensure proper multi-recipient encryption.
+
+Example:
+  nixfleet secrets edit secrets/api-key.age`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			secretPath := args[0]
+
+			if identityPath == "" {
+				home, _ := os.UserHomeDir()
+				identityPath = home + "/.config/age/admin-key.txt"
+			}
+
+			// Check identity exists
+			if _, err := os.Stat(identityPath); os.IsNotExist(err) {
+				return fmt.Errorf("identity file not found: %s", identityPath)
+			}
+
+			// Check secret exists
+			if _, err := os.Stat(secretPath); os.IsNotExist(err) {
+				return fmt.Errorf("secret file not found: %s", secretPath)
+			}
+
+			// Parse secrets.nix to get recipients
+			config, err := secrets.ParseSecretsNix(ctx, secretsNixPath)
+			if err != nil {
+				return fmt.Errorf("parsing secrets.nix: %w", err)
+			}
+
+			// Get secret name (basename)
+			secretName := filepath.Base(secretPath)
+			recipients, err := config.LookupRecipientsForSecret(secretName)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Editing %s (%d recipients)\n", secretName, len(recipients))
+			fmt.Printf("Opening in $EDITOR...\n\n")
+
+			if err := secrets.EditSecret(ctx, secretPath, recipients, identityPath); err != nil {
+				return err
+			}
+
+			fmt.Println("Secret updated successfully")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&secretsNixPath, "config", "c", "secrets/secrets.nix", "Path to secrets.nix")
+	cmd.Flags().StringVar(&identityPath, "identity", "", "Path to age identity for decryption (default: ~/.config/age/admin-key.txt)")
+
+	return cmd
+}
+
+func secretsAddCmd() *cobra.Command {
+	var secretsNixPath string
+	var secretsDir string
+	var recipients []string
+	var fromFile string
+	var hostNames []string
+
+	cmd := &cobra.Command{
+		Use:   "add [secret-name]",
+		Short: "Add a new encrypted secret",
+		Long: `Create a new encrypted secret file.
+
+Secret value can be provided via:
+  - stdin (pipe or interactive)
+  - --from-file flag
+
+Recipients are determined by:
+  - --recipient flags (explicit keys)
+  - --host flags (looked up from secrets.nix)
+  - Default: all admins from secrets.nix
+
+Example:
+  echo "my-secret-value" | nixfleet secrets add api-key.age
+  nixfleet secrets add db-password.age --host gtr --host web-1
+  nixfleet secrets add ssl-cert.age --from-file /path/to/cert.pem`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			secretName := args[0]
+
+			// Ensure .age extension
+			if !strings.HasSuffix(secretName, ".age") {
+				secretName += ".age"
+			}
+
+			secretPath := filepath.Join(secretsDir, secretName)
+
+			// Check if already exists
+			if _, err := os.Stat(secretPath); err == nil {
+				return fmt.Errorf("secret already exists: %s\nUse 'nixfleet secrets edit' to modify", secretPath)
+			}
+
+			// Determine recipients
+			var finalRecipients []string
+			if len(recipients) > 0 {
+				finalRecipients = recipients
+			} else {
+				// Parse secrets.nix
+				config, err := secrets.ParseSecretsNix(ctx, secretsNixPath)
+				if err != nil {
+					return fmt.Errorf("parsing secrets.nix: %w", err)
+				}
+
+				// Start with all admins
+				finalRecipients = append(finalRecipients, config.AllAdmins...)
+
+				// Add specified hosts
+				for _, hostName := range hostNames {
+					if key, ok := config.Hosts[hostName]; ok {
+						finalRecipients = append(finalRecipients, key)
+					} else {
+						return fmt.Errorf("host %q not found in secrets.nix", hostName)
+					}
+				}
+
+				if len(finalRecipients) == 0 {
+					return fmt.Errorf("no recipients specified and no admins in secrets.nix")
+				}
+			}
+
+			// Get secret content
+			var content []byte
+			var err error
+			if fromFile != "" {
+				content, err = os.ReadFile(fromFile)
+				if err != nil {
+					return fmt.Errorf("reading file: %w", err)
+				}
+			} else {
+				// Read from stdin
+				fmt.Println("Enter secret value (Ctrl+D to finish):")
+				content, err = os.ReadFile("/dev/stdin")
+				if err != nil {
+					return fmt.Errorf("reading stdin: %w", err)
+				}
+			}
+
+			if len(content) == 0 {
+				return fmt.Errorf("empty secret content")
+			}
+
+			if dryRun {
+				fmt.Printf("Would create %s with %d recipients\n", secretPath, len(finalRecipients))
+				return nil
+			}
+
+			if err := secrets.AddSecret(ctx, secretPath, content, finalRecipients); err != nil {
+				return err
+			}
+
+			fmt.Printf("Created %s (%d recipients)\n", secretPath, len(finalRecipients))
+			fmt.Println("\nDon't forget to add this secret to secrets.nix:")
+			fmt.Printf("  \"%s\".publicKeys = allAdmins ++ [ hosts.<hostname> ];\n", secretName)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&secretsNixPath, "config", "c", "secrets/secrets.nix", "Path to secrets.nix")
+	cmd.Flags().StringVarP(&secretsDir, "secrets-dir", "s", "secrets/", "Output directory")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipient public key(s)")
+	cmd.Flags().StringSliceVar(&hostNames, "host", nil, "Host name(s) from secrets.nix to add as recipients")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read secret value from file")
+
+	return cmd
+}
+
+func secretsHostKeyCmd() *cobra.Command {
+	var sshKeyPath string
+
+	cmd := &cobra.Command{
+		Use:   "host-key [host]",
+		Short: "Get age public key from a host's SSH key",
+		Long: `Derive an age public key from a host's SSH ed25519 host key.
+
+This can be used to:
+  - Get a host's age key for adding to secrets.nix
+  - Verify the expected key for a host
+
+Examples:
+  # Get key from remote host
+  nixfleet secrets host-key gtr
+
+  # Get key from local SSH key file
+  nixfleet secrets host-key --ssh-key /path/to/ssh_host_ed25519_key.pub`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if sshKeyPath != "" {
+				// Local file mode
+				key, err := secrets.GetHostAgeKey(ctx, sshKeyPath)
+				if err != nil {
+					return err
+				}
+				fmt.Println(key)
+				return nil
+			}
+
+			// Remote host mode - need a host argument
+			if len(args) == 0 {
+				return fmt.Errorf("specify a host or use --ssh-key for a local file")
+			}
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Find the target host
+			var targetHost *inventory.Host
+			for _, h := range hosts {
+				if h.Name == args[0] {
+					targetHost = h
+					break
+				}
+			}
+
+			if targetHost == nil {
+				return fmt.Errorf("host %q not found in inventory", args[0])
+			}
+
+			port := targetHost.SSHPort
+			if port == 0 {
+				port = 22
+			}
+
+			key, err := secrets.GetHostAgeKeyFromRemote(ctx, targetHost.Addr, targetHost.SSHUser, port)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Host: %s\n", targetHost.Name)
+			fmt.Printf("Age public key: %s\n", key)
+			fmt.Println("\nAdd to secrets.nix:")
+			fmt.Printf("  %s = \"%s\";\n", targetHost.Name, key)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "Path to SSH public key file (for local keys)")
 
 	return cmd
 }
