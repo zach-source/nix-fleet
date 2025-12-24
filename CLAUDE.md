@@ -141,3 +141,112 @@ The evaluator extracts: packages, files, users, groups, directories, systemd uni
 1. Add field to `HostState` or create new struct in `state/state.go`
 2. Add gathering method (e.g., `GatherOSInfo()`)
 3. Call from `UpdateAllHosts()` or create new update method
+
+## Versioning & Releases
+
+NixFleet uses [Semantic Versioning](https://semver.org/):
+- **MAJOR**: Breaking changes to CLI or configuration format
+- **MINOR**: New features, backward compatible
+- **PATCH**: Bug fixes, backward compatible
+
+### Current Version
+- **v0.1.0** - Initial release (2024-12-24)
+
+### Creating a Release
+
+1. **Update version** in `flake.nix` if needed
+
+2. **Create and push tag**:
+   ```bash
+   jj describe -m "Release v0.x.x" && jj new
+   jj bookmark set main -r @-
+   jj git push
+
+   # Create tag (use git for tags)
+   git tag v0.x.x
+   git push origin v0.x.x
+   ```
+
+3. **GitHub Actions will automatically**:
+   - Build binaries for linux/darwin (amd64/arm64)
+   - Create GitHub release with tarballs and checksums
+   - Trigger homebrew-tap update
+
+4. **Manual steps after release**:
+   - Update `nix-packages` overlay with new version hash
+   - Verify homebrew formula updated correctly
+
+### Release Artifacts
+
+Each release includes:
+- `nixfleet-linux-amd64.tar.gz`
+- `nixfleet-linux-arm64.tar.gz`
+- `nixfleet-darwin-amd64.tar.gz`
+- `nixfleet-darwin-arm64.tar.gz`
+- `checksums.txt` (SHA256)
+
+### Distribution Channels
+
+| Channel | Repository | Update Method |
+|---------|------------|---------------|
+| Homebrew | `zach-source/homebrew-tap` | Auto via GitHub Actions |
+| Nix | `zach-source/nix-packages` | Manual overlay update |
+| GitHub | This repo releases | Auto via GitHub Actions |
+
+## Secrets Management
+
+### Architecture
+
+NixFleet uses age encryption with SSH host key integration:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     Encryption (secrets.nix)                  │
+│  Admin Keys + Host Keys (SSH-derived) → Multi-Recipient .age │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                     Decryption (on host)                      │
+│  SSH Host Key → ssh-to-age → Age Identity → Plaintext        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `secrets/secrets.nix` | Declarative access control (keys + secret→key mapping) |
+| `secrets/*.age` | Encrypted secret files |
+| `~/.config/age/admin-key.txt` | Admin key for local decryption/rekey |
+
+### CLI Commands
+
+```bash
+# Onboard new host (get age key, setup secrets)
+nixfleet host onboard -H newhost --repo git@github.com:org/config.git
+
+# Re-encrypt after modifying secrets.nix
+nixfleet secrets rekey
+
+# Edit a secret in place
+nixfleet secrets edit secrets/api-key.age
+
+# Add a new secret
+echo "value" | nixfleet secrets add secret-name --host hostname
+```
+
+## CI/CD
+
+### Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | Push/PR to main | Build, test, lint, nix check |
+| `release.yml` | Tag push (v*) | Build releases, create GitHub release |
+
+### Required Secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `GITHUB_TOKEN` | Auto-provided, for releases |
+| `TAP_GITHUB_TOKEN` | PAT for triggering homebrew-tap update |
