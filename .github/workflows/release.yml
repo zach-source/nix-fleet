@@ -129,19 +129,57 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  update-homebrew:
-    name: Update Homebrew Tap
+  update-packages:
+    name: Update Package Repositories
     needs: release
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Get version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
+      - name: Download checksums
+        run: |
+          curl -sL "https://github.com/zach-source/nix-fleet/releases/download/v${{ steps.version.outputs.VERSION }}/checksums.txt" -o checksums.txt
+          cat checksums.txt
+
+      - name: Extract SHA256 hashes
+        id: hashes
+        run: |
+          echo "DARWIN_ARM64=$(grep 'darwin-arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "DARWIN_AMD64=$(grep 'darwin-amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "LINUX_ARM64=$(grep 'linux-arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "LINUX_AMD64=$(grep 'linux-amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
       - name: Trigger Homebrew tap update
         uses: peter-evans/repository-dispatch@v2
         with:
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          token: ${{ secrets.PACKAGES_TOKEN }}
           repository: zach-source/homebrew-tap
           event-type: nixfleet-release
-          client-payload: '{"version": "${{ steps.version.outputs.VERSION }}"}'
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.VERSION }}",
+              "darwin_arm64_sha256": "${{ steps.hashes.outputs.DARWIN_ARM64 }}",
+              "darwin_amd64_sha256": "${{ steps.hashes.outputs.DARWIN_AMD64 }}",
+              "linux_arm64_sha256": "${{ steps.hashes.outputs.LINUX_ARM64 }}",
+              "linux_amd64_sha256": "${{ steps.hashes.outputs.LINUX_AMD64 }}"
+            }
+
+      - name: Trigger nix-packages update
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PACKAGES_TOKEN }}
+          repository: zach-source/nix-packages
+          event-type: nixfleet-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.VERSION }}",
+              "darwin_arm64_sha256": "${{ steps.hashes.outputs.DARWIN_ARM64 }}",
+              "darwin_amd64_sha256": "${{ steps.hashes.outputs.DARWIN_AMD64 }}",
+              "linux_arm64_sha256": "${{ steps.hashes.outputs.LINUX_ARM64 }}",
+              "linux_amd64_sha256": "${{ steps.hashes.outputs.LINUX_AMD64 }}"
+            }
