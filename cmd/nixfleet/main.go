@@ -13,6 +13,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/nix"
 	"github.com/nixfleet/nixfleet/internal/osupdate"
+	"github.com/nixfleet/nixfleet/internal/pullmode"
 	"github.com/nixfleet/nixfleet/internal/reboot"
 	"github.com/nixfleet/nixfleet/internal/secrets"
 	"github.com/nixfleet/nixfleet/internal/server"
@@ -88,6 +89,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(driftCmd())
 	cmd.AddCommand(runCmd())
 	cmd.AddCommand(serverCmd())
+	cmd.AddCommand(pullModeCmd())
 
 	return cmd
 }
@@ -2056,6 +2058,342 @@ API Endpoints:
 	cmd.Flags().DurationVar(&driftInterval, "drift-interval", 0, "Interval for drift checks (e.g., 1h)")
 	cmd.Flags().DurationVar(&updateInterval, "update-interval", 0, "Interval for update checks (e.g., 6h)")
 	cmd.Flags().DurationVar(&healthInterval, "health-interval", 0, "Interval for health checks (e.g., 5m)")
+
+	return cmd
+}
+
+func pullModeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pull-mode",
+		Short: "Configure pull-based deployment mode",
+		Long: `Pull mode allows hosts to fetch and apply their own configuration
+from a Git repository, rather than having a central server push changes.
+
+This is ideal for:
+  - Air-gapped environments
+  - Hosts behind NAT/firewalls
+  - GitOps workflows
+  - Self-managing infrastructure
+
+The host will periodically:
+  1. Pull from the configured Git repository
+  2. Build its configuration locally
+  3. Apply changes automatically
+  4. Report status via webhooks (optional)`,
+	}
+
+	cmd.AddCommand(pullModeInstallCmd())
+	cmd.AddCommand(pullModeUninstallCmd())
+	cmd.AddCommand(pullModeStatusCmd())
+	cmd.AddCommand(pullModeTriggerCmd())
+
+	return cmd
+}
+
+func pullModeInstallCmd() *cobra.Command {
+	var repoURL string
+	var branch string
+	var interval string
+	var sshKeyPath string
+	var ageKeyPath string
+	var applyOnBoot bool
+	var webhookURL string
+	var webhookSecret string
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install pull mode on hosts",
+		Long: `Install and configure pull mode on target hosts.
+
+This will:
+  1. Set up SSH config for Git repository access
+  2. Clone the configuration repository
+  3. Install the nixfleet-pull script
+  4. Create and enable systemd timer for periodic pulls
+
+Example:
+  nixfleet pull-mode install -H gtr --repo git@github.com:org/fleet-config.git`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if repoURL == "" {
+				return fmt.Errorf("--repo is required")
+			}
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) == 0 {
+				return fmt.Errorf("no hosts selected")
+			}
+
+			defaults := pullmode.DefaultConfig()
+			config := pullmode.Config{
+				RepoURL:       repoURL,
+				Branch:        branch,
+				SSHKeyPath:    sshKeyPath,
+				AgeKeyPath:    ageKeyPath,
+				Interval:      interval,
+				ApplyOnBoot:   applyOnBoot,
+				RepoPath:      defaults.RepoPath,
+				WebhookURL:    webhookURL,
+				WebhookSecret: webhookSecret,
+			}
+
+			if config.Branch == "" {
+				config.Branch = defaults.Branch
+			}
+			if config.SSHKeyPath == "" {
+				config.SSHKeyPath = defaults.SSHKeyPath
+			}
+			if config.AgeKeyPath == "" {
+				config.AgeKeyPath = defaults.AgeKeyPath
+			}
+			if config.Interval == "" {
+				config.Interval = defaults.Interval
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			installer := pullmode.NewInstaller()
+
+			fmt.Printf("Installing pull mode on %d host(s)...\n\n", len(hosts))
+
+			var failed int
+			for _, host := range hosts {
+				fmt.Printf("%s: ", host.Name)
+
+				if dryRun {
+					fmt.Println("would install pull mode")
+					continue
+				}
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("connection failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				// Set host name for this installation
+				hostConfig := config
+				hostConfig.HostName = host.Name
+
+				if err := installer.Install(ctx, client, hostConfig); err != nil {
+					fmt.Printf("failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				fmt.Println("OK")
+			}
+
+			if failed > 0 {
+				return fmt.Errorf("%d host(s) failed", failed)
+			}
+
+			fmt.Printf("\nPull mode installed successfully. Hosts will pull every %s.\n", interval)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&repoURL, "repo", "", "Git repository URL (SSH format, e.g., git@github.com:org/repo.git)")
+	cmd.Flags().StringVar(&branch, "branch", "main", "Branch to track")
+	cmd.Flags().StringVar(&interval, "interval", "15min", "Pull interval (systemd timer format)")
+	cmd.Flags().StringVar(&sshKeyPath, "ssh-key", "/run/nixfleet-secrets/github-deploy-key", "Path to SSH key for Git access")
+	cmd.Flags().StringVar(&ageKeyPath, "age-key", "/root/.config/age/key.txt", "Path to age key for secrets")
+	cmd.Flags().BoolVar(&applyOnBoot, "apply-on-boot", true, "Apply configuration on boot")
+	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for status notifications")
+	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Webhook secret for signing")
+
+	cmd.MarkFlagRequired("repo")
+
+	return cmd
+}
+
+func pullModeUninstallCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove pull mode from hosts",
+		Long:  `Stop and remove pull mode configuration from target hosts.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) == 0 {
+				return fmt.Errorf("no hosts selected")
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			installer := pullmode.NewInstaller()
+
+			fmt.Printf("Uninstalling pull mode from %d host(s)...\n\n", len(hosts))
+
+			var failed int
+			for _, host := range hosts {
+				fmt.Printf("%s: ", host.Name)
+
+				if dryRun {
+					fmt.Println("would uninstall pull mode")
+					continue
+				}
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("connection failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				if err := installer.Uninstall(ctx, client); err != nil {
+					fmt.Printf("failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				fmt.Println("OK")
+			}
+
+			if failed > 0 {
+				return fmt.Errorf("%d host(s) failed", failed)
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func pullModeStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show pull mode status on hosts",
+		Long:  `Display pull mode status including last run, next scheduled run, and current commit.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) == 0 {
+				return fmt.Errorf("no hosts selected")
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			installer := pullmode.NewInstaller()
+
+			fmt.Printf("Pull mode status for %d host(s):\n\n", len(hosts))
+
+			for _, host := range hosts {
+				fmt.Printf("%s:\n", host.Name)
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  Connection failed: %v\n\n", err)
+					continue
+				}
+
+				status, err := installer.Status(ctx, client)
+				if err != nil {
+					fmt.Printf("  Status check failed: %v\n\n", err)
+					continue
+				}
+
+				if !status.Installed {
+					fmt.Println("  Pull mode: not installed")
+				} else {
+					fmt.Println("  Pull mode: installed")
+					if status.TimerActive {
+						fmt.Println("  Timer: active")
+					} else {
+						fmt.Println("  Timer: inactive")
+					}
+					fmt.Printf("  Last run: %s", status.LastRun)
+					fmt.Printf("  Last result: %s", status.LastResult)
+					fmt.Printf("  Next run: %s", status.NextRun)
+					fmt.Printf("  Current commit: %s", status.CurrentCommit)
+				}
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func pullModeTriggerCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "trigger",
+		Short: "Manually trigger a pull operation",
+		Long:  `Immediately trigger a pull and apply operation on target hosts.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) == 0 {
+				return fmt.Errorf("no hosts selected")
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			installer := pullmode.NewInstaller()
+
+			fmt.Printf("Triggering pull on %d host(s)...\n\n", len(hosts))
+
+			var failed int
+			for _, host := range hosts {
+				fmt.Printf("%s: ", host.Name)
+
+				if dryRun {
+					fmt.Println("would trigger pull")
+					continue
+				}
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("connection failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				if err := installer.TriggerPull(ctx, client); err != nil {
+					fmt.Printf("failed - %v\n", err)
+					failed++
+					continue
+				}
+
+				fmt.Println("triggered")
+			}
+
+			if failed > 0 {
+				return fmt.Errorf("%d host(s) failed", failed)
+			}
+
+			fmt.Println("\nPull operations triggered. Use 'nixfleet pull-mode status' to check progress.")
+			return nil
+		},
+	}
 
 	return cmd
 }
