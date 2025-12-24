@@ -156,6 +156,7 @@
               jq
               yq-go
               age
+              ssh-to-age
               sops
             ];
 

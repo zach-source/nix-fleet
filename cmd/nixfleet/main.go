@@ -91,6 +91,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(runCmd())
 	cmd.AddCommand(serverCmd())
 	cmd.AddCommand(pullModeCmd())
+	cmd.AddCommand(hostCmd())
 
 	return cmd
 }
@@ -2734,6 +2735,236 @@ func pullModeTriggerCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+func hostCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "host",
+		Short: "Host management commands",
+		Long: `Commands for managing hosts in the fleet.
+
+Subcommands:
+  onboard  - Onboard a new host (get age key, setup secrets, install pull mode)`,
+	}
+
+	cmd.AddCommand(hostOnboardCmd())
+
+	return cmd
+}
+
+func hostOnboardCmd() *cobra.Command {
+	var secretsNixPath string
+	var secretsDir string
+	var repoURL string
+	var branch string
+	var interval string
+	var skipPullMode bool
+	var skipRekey bool
+	var outputSecretsNix bool
+
+	cmd := &cobra.Command{
+		Use:   "onboard",
+		Short: "Onboard a new host to the fleet",
+		Long: `Onboard a new host by performing the following steps:
+
+1. Get the host's SSH host key and convert to age public key
+2. Display what to add to secrets.nix (or output in copy-paste format)
+3. Optionally rekey all secrets to include the new host
+4. Optionally install pull mode for GitOps deployments
+
+Prerequisites:
+  - Host must be bootstrapped (run bootstrap-ubuntu.sh first)
+  - Host must be in your inventory file
+  - SSH access must be configured
+
+Example:
+  # Onboard a new host with full setup
+  nixfleet host onboard -H newhost --repo git@github.com:org/fleet-hosts.git
+
+  # Just get the age key (for manual setup)
+  nixfleet host onboard -H newhost --skip-pull-mode --skip-rekey
+
+  # Output secrets.nix snippet for copy-paste
+  nixfleet host onboard -H newhost --output-secrets-nix`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) == 0 {
+				return fmt.Errorf("no hosts selected. Use -H to specify a host")
+			}
+
+			if len(hosts) > 1 {
+				return fmt.Errorf("onboard operates on one host at a time. Found %d hosts", len(hosts))
+			}
+
+			host := hosts[0]
+			fmt.Printf("Onboarding host: %s (%s)\n\n", host.Name, host.Addr)
+
+			// Step 1: Get age public key from SSH host key
+			fmt.Println("Step 1: Getting age public key from SSH host key...")
+
+			port := host.SSHPort
+			if port == 0 {
+				port = 22
+			}
+
+			ageKey, err := secrets.GetHostAgeKeyFromRemote(ctx, host.Addr, host.SSHUser, port)
+			if err != nil {
+				return fmt.Errorf("failed to get age key: %w", err)
+			}
+
+			fmt.Printf("  Age public key: %s\n\n", ageKey)
+
+			// Step 2: Show secrets.nix addition
+			fmt.Println("Step 2: secrets.nix configuration")
+
+			if outputSecretsNix {
+				// Output in copy-paste format
+				fmt.Println("Add to your secrets.nix hosts section:")
+				fmt.Println("```nix")
+				fmt.Printf("  %s = \"%s\";\n", host.Name, ageKey)
+				fmt.Println("```")
+				fmt.Println()
+				fmt.Println("Then add secrets access:")
+				fmt.Println("```nix")
+				fmt.Printf("  \"your-secret.age\".publicKeys = allAdmins ++ [ hosts.%s ];\n", host.Name)
+				fmt.Println("```")
+			} else {
+				fmt.Println("  Add to secrets.nix hosts section:")
+				fmt.Printf("    %s = \"%s\";\n\n", host.Name, ageKey)
+				fmt.Println("  Then add secrets access for this host:")
+				fmt.Printf("    \"secret-name.age\".publicKeys = allAdmins ++ [ hosts.%s ];\n\n", host.Name)
+			}
+
+			// Step 3: Rekey secrets (optional)
+			if !skipRekey {
+				fmt.Println("Step 3: Rekeying secrets...")
+
+				// Check if secrets.nix exists
+				if _, err := os.Stat(secretsNixPath); os.IsNotExist(err) {
+					fmt.Printf("  Skipped: secrets.nix not found at %s\n", secretsNixPath)
+					fmt.Println("  After adding the host to secrets.nix, run: nixfleet secrets rekey")
+				} else {
+					// Parse and check if host is in secrets.nix
+					config, err := secrets.ParseSecretsNix(ctx, secretsNixPath)
+					if err != nil {
+						fmt.Printf("  Warning: Could not parse secrets.nix: %v\n", err)
+						fmt.Println("  After adding the host to secrets.nix, run: nixfleet secrets rekey")
+					} else if _, exists := config.Hosts[host.Name]; !exists {
+						fmt.Printf("  Host %s not yet in secrets.nix\n", host.Name)
+						fmt.Println("  After adding the host, run: nixfleet secrets rekey")
+					} else {
+						// Host exists, get identity and rekey
+						home, _ := os.UserHomeDir()
+						identityPath := filepath.Join(home, ".config", "age", "admin-key.txt")
+
+						if _, err := os.Stat(identityPath); os.IsNotExist(err) {
+							fmt.Printf("  Skipped: Admin key not found at %s\n", identityPath)
+							fmt.Println("  Run manually: nixfleet secrets rekey --identity /path/to/key")
+						} else {
+							rekeyed, err := secrets.RekeyAll(ctx, secretsDir, config, identityPath, dryRun)
+							if err != nil {
+								fmt.Printf("  Warning: Rekey failed: %v\n", err)
+							} else if dryRun {
+								fmt.Printf("  Would rekey %d secret(s)\n", len(rekeyed))
+							} else {
+								fmt.Printf("  Rekeyed %d secret(s)\n", len(rekeyed))
+							}
+						}
+					}
+				}
+				fmt.Println()
+			} else {
+				fmt.Println("Step 3: Skipped (--skip-rekey)")
+				fmt.Println()
+			}
+
+			// Step 4: Install pull mode (optional)
+			if !skipPullMode {
+				fmt.Println("Step 4: Installing pull mode...")
+
+				if repoURL == "" {
+					fmt.Println("  Skipped: No --repo specified")
+					fmt.Println("  To install later: nixfleet pull-mode install -H " + host.Name + " --repo <url>")
+				} else if dryRun {
+					fmt.Printf("  Would install pull mode with repo: %s\n", repoURL)
+				} else {
+					pool := ssh.NewPool(nil)
+					defer pool.Close()
+
+					client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+					if err != nil {
+						return fmt.Errorf("SSH connection failed: %w", err)
+					}
+
+					defaults := pullmode.DefaultConfig()
+					pmConfig := pullmode.Config{
+						RepoURL:     repoURL,
+						Branch:      branch,
+						HostName:    host.Name,
+						SSHKeyPath:  defaults.SSHKeyPath,
+						AgeKeyPath:  defaults.AgeKeyPath,
+						Interval:    interval,
+						ApplyOnBoot: true,
+						RepoPath:    defaults.RepoPath,
+					}
+					if pmConfig.Branch == "" {
+						pmConfig.Branch = defaults.Branch
+					}
+					if pmConfig.Interval == "" {
+						pmConfig.Interval = defaults.Interval
+					}
+
+					installer := pullmode.NewInstaller()
+					if err := installer.Install(ctx, client, pmConfig); err != nil {
+						return fmt.Errorf("pull mode installation failed: %w", err)
+					}
+
+					fmt.Println("  Pull mode installed successfully")
+				}
+				fmt.Println()
+			} else {
+				fmt.Println("Step 4: Skipped (--skip-pull-mode)")
+				fmt.Println()
+			}
+
+			// Summary
+			fmt.Println("========================================")
+			fmt.Printf("Onboarding complete for %s\n", host.Name)
+			fmt.Println("========================================")
+			fmt.Println()
+			fmt.Println("Next steps:")
+			if skipRekey || skipPullMode {
+				fmt.Println("  1. Add host to secrets.nix (see above)")
+				fmt.Println("  2. Run: nixfleet secrets rekey")
+				fmt.Println("  3. Commit and push changes")
+				if skipPullMode && repoURL == "" {
+					fmt.Println("  4. Install pull mode: nixfleet pull-mode install -H " + host.Name + " --repo <url>")
+				}
+			} else {
+				fmt.Println("  1. Verify deployment: nixfleet pull-mode status -H " + host.Name)
+				fmt.Println("  2. Trigger first pull: nixfleet pull-mode trigger -H " + host.Name)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&secretsNixPath, "secrets-nix", "c", "secrets/secrets.nix", "Path to secrets.nix")
+	cmd.Flags().StringVarP(&secretsDir, "secrets-dir", "s", "secrets/", "Directory containing .age files")
+	cmd.Flags().StringVar(&repoURL, "repo", "", "Git repository URL for pull mode")
+	cmd.Flags().StringVar(&branch, "branch", "main", "Git branch for pull mode")
+	cmd.Flags().StringVar(&interval, "interval", "5m", "Pull interval (e.g., 5m, 1h)")
+	cmd.Flags().BoolVar(&skipPullMode, "skip-pull-mode", false, "Skip pull mode installation")
+	cmd.Flags().BoolVar(&skipRekey, "skip-rekey", false, "Skip secrets rekey step")
+	cmd.Flags().BoolVar(&outputSecretsNix, "output-secrets-nix", false, "Output secrets.nix snippet in copy-paste format")
 
 	return cmd
 }
