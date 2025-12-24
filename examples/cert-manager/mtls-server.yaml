@@ -1,0 +1,157 @@
+# mTLS Server Example
+#
+# This deployment requires clients to present a valid certificate
+# signed by the NixFleet CA for authentication.
+#
+# Prerequisites:
+# 1. Apply ClusterIssuer: kubectl apply -f cluster-issuer.yaml
+# 2. Create CA ConfigMap for client verification (see below)
+#
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-server-tls
+  namespace: default
+spec:
+  secretName: api-server-tls-secret
+  duration: 2160h
+  renewBefore: 360h
+  commonName: api-server.default.svc.cluster.local
+  dnsNames:
+    - api-server
+    - api-server.default
+    - api-server.default.svc
+    - api-server.default.svc.cluster.local
+  usages:
+    - server auth
+    - client auth
+  issuerRef:
+    name: nixfleet-ca-issuer
+    kind: ClusterIssuer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nixfleet-ca-bundle
+  namespace: default
+data:
+  # Replace with your actual CA certificate
+  # Get it with: cat secrets/pki/ca/root.crt
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # Paste your NixFleet CA certificate here
+    # nixfleet pki export --format pem
+    -----END CERTIFICATE-----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  namespace: default
+  labels:
+    app: api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-server
+  template:
+    metadata:
+      labels:
+        app: api-server
+    spec:
+      containers:
+        - name: api-server
+          # Example using a Go HTTP server with mTLS
+          # Replace with your actual application image
+          image: golang:1.21-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cat > /tmp/server.go << 'EOF'
+              package main
+
+              import (
+                  "crypto/tls"
+                  "crypto/x509"
+                  "fmt"
+                  "io/ioutil"
+                  "log"
+                  "net/http"
+              )
+
+              func main() {
+                  // Load CA cert for client verification
+                  caCert, err := ioutil.ReadFile("/etc/tls/ca/ca.crt")
+                  if err != nil {
+                      log.Fatal(err)
+                  }
+                  caCertPool := x509.NewCertPool()
+                  caCertPool.AppendCertsFromPEM(caCert)
+
+                  // Configure TLS with client cert verification
+                  tlsConfig := &tls.Config{
+                      ClientCAs:  caCertPool,
+                      ClientAuth: tls.RequireAndVerifyClientCert,
+                  }
+
+                  server := &http.Server{
+                      Addr:      ":8443",
+                      TLSConfig: tlsConfig,
+                  }
+
+                  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+                      if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+                          cn := r.TLS.PeerCertificates[0].Subject.CommonName
+                          fmt.Fprintf(w, "Hello %s! mTLS authentication successful.\n", cn)
+                      } else {
+                          fmt.Fprintf(w, "Hello! No client certificate provided.\n")
+                      }
+                  })
+
+                  http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+                      w.WriteHeader(http.StatusOK)
+                      w.Write([]byte("OK"))
+                  })
+
+                  log.Println("Starting mTLS server on :8443")
+                  log.Fatal(server.ListenAndServeTLS("/etc/tls/server/tls.crt", "/etc/tls/server/tls.key"))
+              }
+              EOF
+              go run /tmp/server.go
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            # Server certificate
+            - name: server-tls
+              mountPath: /etc/tls/server
+              readOnly: true
+            # CA for verifying client certs
+            - name: ca-bundle
+              mountPath: /etc/tls/ca
+              readOnly: true
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: server-tls
+          secret:
+            secretName: api-server-tls-secret
+        - name: ca-bundle
+          configMap:
+            name: nixfleet-ca-bundle
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-server
+  namespace: default
+spec:
+  selector:
+    app: api-server
+  ports:
+    - port: 8443
+      targetPort: 8443
+      name: https

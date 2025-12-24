@@ -1,0 +1,89 @@
+# mTLS Client Example
+#
+# This deployment connects to the mTLS server using a client certificate
+# for authentication.
+#
+# Prerequisites:
+# 1. Apply ClusterIssuer: kubectl apply -f cluster-issuer.yaml
+# 2. Apply mTLS server: kubectl apply -f mtls-server.yaml
+# 3. Create CA ConfigMap (included in mtls-server.yaml)
+#
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-client-tls
+  namespace: default
+spec:
+  secretName: api-client-tls-secret
+  duration: 2160h
+  renewBefore: 360h
+  commonName: api-client
+  dnsNames:
+    - api-client
+    - api-client.default.svc.cluster.local
+  usages:
+    - client auth
+  issuerRef:
+    name: nixfleet-ca-issuer
+    kind: ClusterIssuer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-client
+  namespace: default
+  labels:
+    app: api-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-client
+  template:
+    metadata:
+      labels:
+        app: api-client
+    spec:
+      containers:
+        - name: api-client
+          image: curlimages/curl:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for certificates to be ready..."
+              sleep 10
+
+              echo "Testing mTLS connection to api-server..."
+              while true; do
+                echo "---"
+                echo "Making request with client certificate..."
+                curl -v \
+                  --cacert /etc/tls/ca/ca.crt \
+                  --cert /etc/tls/client/tls.crt \
+                  --key /etc/tls/client/tls.key \
+                  https://api-server:8443/
+
+                echo ""
+                echo "Sleeping 30 seconds..."
+                sleep 30
+              done
+          volumeMounts:
+            # Client certificate for authentication
+            - name: client-tls
+              mountPath: /etc/tls/client
+              readOnly: true
+            # CA for verifying server cert
+            - name: ca-bundle
+              mountPath: /etc/tls/ca
+              readOnly: true
+          resources:
+            limits:
+              memory: "64Mi"
+              cpu: "50m"
+      volumes:
+        - name: client-tls
+          secret:
+            secretName: api-client-tls-secret
+        - name: ca-bundle
+          configMap:
+            name: nixfleet-ca-bundle

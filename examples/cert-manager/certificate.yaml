@@ -1,0 +1,58 @@
+# Example Certificate resource
+#
+# cert-manager will automatically:
+# 1. Generate a private key
+# 2. Create a CSR
+# 3. Sign it using the NixFleet CA (via ClusterIssuer)
+# 4. Store the certificate in the specified secret
+# 5. Renew before expiration
+#
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-app-tls
+  namespace: default
+spec:
+  # Name of the secret to store the certificate
+  secretName: my-app-tls-secret
+
+  # Certificate validity period
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # Renew 15 days before expiry
+
+  # Certificate subject
+  subject:
+    organizations:
+      - NixFleet
+
+  # Common name (deprecated but still supported)
+  commonName: my-app.example.com
+
+  # Subject Alternative Names (preferred over CN)
+  dnsNames:
+    - my-app.example.com
+    - my-app.default.svc.cluster.local
+    - my-app
+
+  # Optional: IP addresses
+  ipAddresses:
+    - 10.0.0.1
+
+  # Private key configuration
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Or use RSA:
+    # algorithm: RSA
+    # size: 2048
+
+  # Key usages
+  usages:
+    - server auth
+    - client auth  # Include for mTLS
+
+  # Reference to the ClusterIssuer
+  issuerRef:
+    name: nixfleet-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io

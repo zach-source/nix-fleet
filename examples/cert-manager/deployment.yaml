@@ -1,0 +1,101 @@
+# Example deployment using a cert-manager issued certificate
+#
+# Prerequisites:
+# 1. Apply the ClusterIssuer: kubectl apply -f cluster-issuer.yaml
+# 2. Apply the Certificate: kubectl apply -f certificate.yaml
+# 3. Wait for certificate to be ready: kubectl get certificate my-app-tls
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: default
+  labels:
+    app: my-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: my-app
+          image: nginx:alpine
+          ports:
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            # Mount the TLS certificate
+            - name: tls-certs
+              mountPath: /etc/nginx/ssl
+              readOnly: true
+            # Mount custom nginx config
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+      volumes:
+        # Certificate secret created by cert-manager
+        - name: tls-certs
+          secret:
+            secretName: my-app-tls-secret
+        # nginx configuration for TLS
+        - name: nginx-config
+          configMap:
+            name: my-app-nginx-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-nginx-config
+  namespace: default
+data:
+  default.conf: |
+    server {
+        listen 443 ssl;
+        server_name my-app.example.com;
+
+        ssl_certificate /etc/nginx/ssl/tls.crt;
+        ssl_certificate_key /etc/nginx/ssl/tls.key;
+
+        # Optional: Verify client certificates (mTLS)
+        # ssl_client_certificate /etc/nginx/ssl/ca.crt;
+        # ssl_verify_client on;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+        ssl_prefer_server_ciphers off;
+
+        location / {
+            root /usr/share/nginx/html;
+            index index.html;
+        }
+
+        location /health {
+            return 200 'OK';
+            add_header Content-Type text/plain;
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  selector:
+    app: my-app
+  ports:
+    - port: 443
+      targetPort: 443
+      name: https
+  type: ClusterIP

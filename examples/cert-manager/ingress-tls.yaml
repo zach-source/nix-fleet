@@ -1,0 +1,91 @@
+# Ingress with automatic TLS via cert-manager
+#
+# cert-manager will automatically create a Certificate resource
+# when it detects the annotation. No separate Certificate YAML needed.
+#
+# Prerequisites:
+# 1. Apply the ClusterIssuer: kubectl apply -f cluster-issuer.yaml
+# 2. Have an Ingress controller installed (nginx-ingress, traefik, etc.)
+#
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app-ingress
+  namespace: default
+  annotations:
+    # Tell cert-manager to issue a certificate using our ClusterIssuer
+    cert-manager.io/cluster-issuer: nixfleet-ca-issuer
+
+    # Optional: specify certificate duration
+    cert-manager.io/duration: "2160h"       # 90 days
+    cert-manager.io/renew-before: "360h"    # 15 days
+
+    # nginx-ingress specific annotations
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - my-app.example.com
+        - www.my-app.example.com
+      # cert-manager will create this secret automatically
+      secretName: my-app-ingress-tls
+  rules:
+    - host: my-app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 80
+    - host: www.my-app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 80
+---
+# Simple backend service for testing
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  selector:
+    app: my-app
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: my-app
+          image: hashicorp/http-echo
+          args:
+            - "-text=Hello from my-app!"
+            - "-listen=:8080"
+          ports:
+            - containerPort: 8080

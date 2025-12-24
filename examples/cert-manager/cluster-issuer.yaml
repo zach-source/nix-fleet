@@ -1,0 +1,16 @@
+# ClusterIssuer for NixFleet CA
+#
+# This issuer references a secret containing the NixFleet CA certificate
+# and private key. Generate the secret with:
+#
+#   nixfleet pki certmanager export --ca -n cert-manager | kubectl apply -f -
+#
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: nixfleet-ca-issuer
+  labels:
+    app.kubernetes.io/managed-by: nixfleet
+spec:
+  ca:
+    secretName: nixfleet-ca

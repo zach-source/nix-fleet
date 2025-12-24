@@ -1,0 +1,27 @@
+# Kustomization for cert-manager examples
+#
+# Deploy all examples:
+#   kubectl apply -k examples/cert-manager/
+#
+# Or selectively:
+#   kubectl apply -f examples/cert-manager/cluster-issuer.yaml
+#   kubectl apply -f examples/cert-manager/certificate.yaml
+#
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+resources:
+  - cluster-issuer.yaml
+  - certificate.yaml
+  - deployment.yaml
+  # Uncomment for additional examples:
+  # - ingress-tls.yaml
+  # - mtls-server.yaml
+  # - mtls-client.yaml
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/managed-by: nixfleet
+  app.kubernetes.io/part-of: cert-manager-examples
