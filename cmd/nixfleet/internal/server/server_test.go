@@ -147,6 +147,7 @@ func newTestServer(t *testing.T) *TestServer {
 		jobs:      make(map[string]*Job),
 		startTime: time.Now(),
 		mux:       http.NewServeMux(),
+		pool:      ssh.NewPool(nil),
 	}
 	s.setupRoutes()
 
@@ -229,25 +230,31 @@ func TestHandleListHosts(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", rec.Code)
 	}
 
-	var response []map[string]any
+	var response map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	if len(response) != 2 {
-		t.Errorf("Expected 2 hosts, got %d", len(response))
+	hosts, ok := response["hosts"].([]any)
+	if !ok {
+		t.Fatalf("Expected hosts array in response")
+	}
+
+	if len(hosts) != 2 {
+		t.Errorf("Expected 2 hosts, got %d", len(hosts))
 	}
 
 	// Check first host
 	found := false
-	for _, h := range response {
-		if h["name"] == "web1" {
+	for _, h := range hosts {
+		host := h.(map[string]any)
+		if host["name"] == "web1" {
 			found = true
-			if h["address"] != "10.0.0.1" {
-				t.Errorf("Expected address '10.0.0.1', got '%v'", h["address"])
+			if host["addr"] != "10.0.0.1" {
+				t.Errorf("Expected addr '10.0.0.1', got '%v'", host["addr"])
 			}
-			if h["base"] != "ubuntu" {
-				t.Errorf("Expected base 'ubuntu', got '%v'", h["base"])
+			if host["base"] != "ubuntu" {
+				t.Errorf("Expected base 'ubuntu', got '%v'", host["base"])
 			}
 		}
 	}

@@ -11,7 +11,7 @@ buildGoModule rec {
 
   src = ../../cmd/nixfleet;
 
-  vendorHash = null; # Will be set once we have go.mod
+  vendorHash = "sha256-mX9RPVn7vhmhge9WD4vdA2iKyoioVurS0T3hjeY5umo=";
 
   nativeBuildInputs = [ installShellFiles ];
 
