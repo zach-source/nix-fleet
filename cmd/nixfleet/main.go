@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/signal"
@@ -2991,6 +2992,7 @@ Commands:
 	cmd.AddCommand(pkiIssueCmd())
 	cmd.AddCommand(pkiStatusCmd())
 	cmd.AddCommand(pkiExportCmd())
+	cmd.AddCommand(pkiDeployCmd())
 
 	return cmd
 }
@@ -3344,4 +3346,163 @@ Example:
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
 
 	return cmd
+}
+
+func pkiDeployCmd() *cobra.Command {
+	var (
+		pkiDir      string
+		identities  []string
+		destDir     string
+		trustSystem bool
+		caOnly      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "deploy",
+		Short: "Deploy certificates to fleet hosts",
+		Long: `Deploy CA and host certificates to fleet hosts via SSH.
+
+This command:
+  - Deploys the CA certificate to all hosts
+  - Deploys host-specific certificates and private keys
+  - Optionally adds CA to system trust store
+
+The host private keys are decrypted using age and deployed securely.
+
+Examples:
+  nixfleet pki deploy --identity ~/.config/age/key.txt
+  nixfleet pki deploy --ca-only      # Only deploy CA cert
+  nixfleet pki deploy -H myhost      # Deploy to specific host`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			store := pki.NewStore(pkiDir, nil, identities)
+
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			// Read CA certificate
+			caCertPath := store.GetCACertPath()
+			caCertPEM, err := os.ReadFile(caCertPath)
+			if err != nil {
+				return fmt.Errorf("reading CA certificate: %w", err)
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			fmt.Printf("Deploying PKI to %d host(s)...\n\n", len(hosts))
+
+			successCount := 0
+			failedCount := 0
+
+			for _, host := range hosts {
+				fmt.Printf("%s:\n", host.Name)
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  Connection failed: %v\n", err)
+					failedCount++
+					continue
+				}
+
+				// Create PKI directory
+				mkdirCmd := fmt.Sprintf("sudo mkdir -p %s && sudo chmod 755 %s", destDir, destDir)
+				if _, err := client.Exec(ctx, mkdirCmd); err != nil {
+					fmt.Printf("  Failed to create directory: %v\n", err)
+					failedCount++
+					continue
+				}
+
+				// Deploy CA certificate
+				caCertDest := destDir + "/ca.crt"
+				if err := deployFileContent(ctx, client, caCertPEM, caCertDest, "0644"); err != nil {
+					fmt.Printf("  Failed to deploy CA cert: %v\n", err)
+					failedCount++
+					continue
+				}
+				fmt.Printf("  CA cert: %s\n", caCertDest)
+
+				// Update system trust store if requested
+				if trustSystem {
+					updateCmd := ""
+					switch host.Base {
+					case "ubuntu":
+						updateCmd = fmt.Sprintf("sudo cp %s /usr/local/share/ca-certificates/nixfleet-ca.crt && sudo update-ca-certificates", caCertDest)
+					case "nixos", "darwin":
+						// NixOS/darwin handle this differently via configuration
+						updateCmd = ""
+					}
+					if updateCmd != "" {
+						if _, err := client.Exec(ctx, updateCmd); err != nil {
+							fmt.Printf("  Warning: failed to update system trust: %v\n", err)
+						} else {
+							fmt.Printf("  System trust updated\n")
+						}
+					}
+				}
+
+				// Deploy host certificate and key (unless CA-only mode)
+				if !caOnly {
+					if store.HostCertExists(host.Name) {
+						hostCert, err := store.LoadHostCert(ctx, host.Name)
+						if err != nil {
+							fmt.Printf("  Failed to load host cert: %v\n", err)
+						} else {
+							// Deploy host certificate
+							hostCertDest := destDir + "/host.crt"
+							if err := deployFileContent(ctx, client, hostCert.CertPEM, hostCertDest, "0644"); err != nil {
+								fmt.Printf("  Failed to deploy host cert: %v\n", err)
+							} else {
+								fmt.Printf("  Host cert: %s\n", hostCertDest)
+							}
+
+							// Deploy host key (restricted permissions)
+							hostKeyDest := destDir + "/host.key"
+							if err := deployFileContent(ctx, client, hostCert.KeyPEM, hostKeyDest, "0600"); err != nil {
+								fmt.Printf("  Failed to deploy host key: %v\n", err)
+							} else {
+								fmt.Printf("  Host key: %s\n", hostKeyDest)
+							}
+						}
+					} else {
+						fmt.Printf("  No host certificate found (run 'nixfleet pki issue %s')\n", host.Name)
+					}
+				}
+
+				fmt.Println()
+				successCount++
+			}
+
+			fmt.Printf("Summary: %d succeeded, %d failed\n", successCount, failedCount)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decrypting host keys")
+	cmd.Flags().StringVar(&destDir, "dest-dir", "/etc/nixfleet/pki", "Destination directory on hosts")
+	cmd.Flags().BoolVar(&trustSystem, "trust-system", false, "Add CA to system trust store")
+	cmd.Flags().BoolVar(&caOnly, "ca-only", false, "Only deploy CA certificate (skip host certs)")
+
+	return cmd
+}
+
+// deployFileContent deploys content to a remote path via SSH
+func deployFileContent(ctx context.Context, client *ssh.Client, content []byte, destPath, mode string) error {
+	// Use a heredoc to write content
+	// Base64 encode to handle binary/special characters
+	encoded := base64.StdEncoding.EncodeToString(content)
+
+	cmd := fmt.Sprintf("echo '%s' | base64 -d | sudo tee %s > /dev/null && sudo chmod %s %s",
+		encoded, destPath, mode, destPath)
+
+	_, err := client.Exec(ctx, cmd)
+	return err
 }
