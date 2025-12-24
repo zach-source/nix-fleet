@@ -412,14 +412,14 @@ git reset --hard "origin/$BRANCH" 2>&1 | tee -a "$LOG_FILE"
 
 # Build and apply configuration
 log "Building configuration for $HOST_NAME..."
-if ! nix build ".#nixfleetConfigurations.$HOST_NAME.config.system.build.toplevel" --no-link 2>&1 | tee -a "$LOG_FILE"; then
+if ! nix build ".#nixfleetConfigurations.$HOST_NAME.system" --no-link 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: Build failed"
     notify "failed" "Build failed for commit $NEW_COMMIT"
     git reset --hard "$OLD_COMMIT"
     exit 1
 fi
 
-SYSTEM_PATH=$(nix path-info ".#nixfleetConfigurations.$HOST_NAME.config.system.build.toplevel")
+SYSTEM_PATH=$(nix path-info ".#nixfleetConfigurations.$HOST_NAME.system")
 log "System path: $SYSTEM_PATH"
 
 # Activate the configuration
