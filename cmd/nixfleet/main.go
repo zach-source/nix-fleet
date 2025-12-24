@@ -255,7 +255,14 @@ Compares desired configuration against current deployed state to show:
 }
 
 func applyCmd() *cobra.Command {
-	var skipPreflight, skipHealth, skipState bool
+	var (
+		skipPreflight bool
+		skipHealth    bool
+		skipState     bool
+		withPKI       bool
+		pkiDir        string
+		pkiIdentities []string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "apply",
@@ -359,6 +366,27 @@ func applyCmd() *cobra.Command {
 					continue
 				}
 
+				// Deploy PKI certificates if enabled
+				if withPKI {
+					pkiConfig := pki.DefaultDeployConfig()
+					pkiConfig.PKIDir = pkiDir
+					pkiConfig.Identities = pkiIdentities
+					pkiDeployer := pki.NewDeployer(pkiConfig)
+
+					if pkiDeployer.IsEnabled() {
+						pkiResult := pkiDeployer.Deploy(ctx, client, host)
+						if pkiResult.Success {
+							if pkiResult.CertDeployed && pkiResult.CertInfo != nil {
+								fmt.Printf("  PKI: deployed cert (expires in %d days)\n", pkiResult.CertInfo.DaysLeft)
+							} else if pkiResult.CADeployed {
+								fmt.Printf("  PKI: deployed CA only\n")
+							}
+						} else {
+							fmt.Printf("  PKI warning: %s\n", pkiResult.Error)
+						}
+					}
+				}
+
 				duration := time.Since(startTime)
 
 				// Update state
@@ -394,6 +422,9 @@ func applyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&skipHealth, "skip-health", false, "Skip post-apply health checks")
 	cmd.Flags().BoolVar(&skipState, "skip-state", false, "Skip updating host state after apply")
+	cmd.Flags().BoolVar(&withPKI, "with-pki", false, "Deploy PKI certificates after activation")
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory containing PKI files")
+	cmd.Flags().StringSliceVar(&pkiIdentities, "pki-identity", nil, "Age identity files for decrypting PKI keys")
 
 	return cmd
 }
@@ -2993,6 +3024,8 @@ Commands:
 	cmd.AddCommand(pkiStatusCmd())
 	cmd.AddCommand(pkiExportCmd())
 	cmd.AddCommand(pkiDeployCmd())
+	cmd.AddCommand(pkiRenewCmd())
+	cmd.AddCommand(pkiRevokeCmd())
 
 	return cmd
 }
@@ -3490,6 +3523,165 @@ Examples:
 	cmd.Flags().StringVar(&destDir, "dest-dir", "/etc/nixfleet/pki", "Destination directory on hosts")
 	cmd.Flags().BoolVar(&trustSystem, "trust-system", false, "Add CA to system trust store")
 	cmd.Flags().BoolVar(&caOnly, "ca-only", false, "Only deploy CA certificate (skip host certs)")
+
+	return cmd
+}
+
+func pkiRenewCmd() *cobra.Command {
+	var (
+		pkiDir     string
+		identities []string
+		validity   time.Duration
+		days       int
+		force      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "renew [hostname...]",
+		Short: "Renew expiring certificates",
+		Long: `Renew certificates that are expiring or have expired.
+
+Without arguments, checks all certificates and renews those expiring within --days.
+With hostnames, renews certificates for the specified hosts.
+
+Examples:
+  nixfleet pki renew --days 30         # Renew certs expiring in 30 days
+  nixfleet pki renew myhost            # Renew cert for myhost
+  nixfleet pki renew --force myhost    # Force renew even if not expiring`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			store := pki.NewStore(pkiDir, nil, identities)
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			deployer := pki.NewDeployer(&pki.DeployConfig{
+				PKIDir:     pkiDir,
+				Identities: identities,
+			})
+
+			// Determine which certs to renew
+			var toRenew []string
+			if len(args) > 0 {
+				// Specific hosts provided
+				toRenew = args
+			} else {
+				// Check for expiring certs
+				renewalInfos, err := deployer.CheckRenewalNeeded(ctx, days)
+				if err != nil {
+					return fmt.Errorf("checking renewal: %w", err)
+				}
+				if len(renewalInfos) == 0 {
+					fmt.Println("No certificates need renewal")
+					return nil
+				}
+				for _, info := range renewalInfos {
+					toRenew = append(toRenew, info.Hostname)
+				}
+			}
+
+			fmt.Printf("Renewing %d certificate(s)...\n\n", len(toRenew))
+
+			for _, hostname := range toRenew {
+				// Check if cert exists and needs renewal (unless force)
+				if !force && len(args) > 0 {
+					info, err := store.GetCertInfo(hostname)
+					if err != nil {
+						fmt.Printf("%s: certificate not found\n", hostname)
+						continue
+					}
+					if info.DaysLeft > days {
+						fmt.Printf("%s: skipping (expires in %d days, use --force to renew anyway)\n",
+							hostname, info.DaysLeft)
+						continue
+					}
+				}
+
+				cert, err := deployer.RenewCert(ctx, hostname, nil, validity)
+				if err != nil {
+					fmt.Printf("%s: renewal failed - %v\n", hostname, err)
+					continue
+				}
+
+				fmt.Printf("%s: renewed (valid until %s)\n",
+					hostname, cert.NotAfter.Format("2006-01-02"))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().DurationVar(&validity, "validity", 365*24*time.Hour, "Validity period for renewed certs")
+	cmd.Flags().IntVar(&days, "days", 30, "Renew certs expiring within this many days")
+	cmd.Flags().BoolVar(&force, "force", false, "Force renewal even if cert is not expiring")
+
+	return cmd
+}
+
+func pkiRevokeCmd() *cobra.Command {
+	var (
+		pkiDir string
+		force  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "revoke <hostname>",
+		Short: "Revoke a host certificate",
+		Long: `Revoke a host certificate by removing it from the PKI store.
+
+This removes the certificate and key files for the specified host.
+The certificate will no longer be deployed to the host.
+
+Examples:
+  nixfleet pki revoke oldhost
+  nixfleet pki revoke --force oldhost  # Skip confirmation`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			hostname := args[0]
+
+			store := pki.NewStore(pkiDir, nil, nil)
+
+			// Check if cert exists
+			if !store.HostCertExists(hostname) {
+				return fmt.Errorf("no certificate found for %s", hostname)
+			}
+
+			// Get cert info for confirmation
+			info, err := store.GetCertInfo(hostname)
+			if err != nil {
+				return fmt.Errorf("reading certificate: %w", err)
+			}
+
+			if !force {
+				fmt.Printf("Certificate for %s:\n", hostname)
+				fmt.Printf("  Serial: %s\n", info.Serial)
+				fmt.Printf("  Expires: %s (%d days)\n", info.NotAfter.Format("2006-01-02"), info.DaysLeft)
+				fmt.Printf("\nThis will permanently remove this certificate.\n")
+				fmt.Printf("Type 'yes' to confirm: ")
+
+				var confirm string
+				if _, err := fmt.Scanln(&confirm); err != nil || confirm != "yes" {
+					fmt.Println("Aborted")
+					return nil
+				}
+			}
+
+			deployer := pki.NewDeployer(&pki.DeployConfig{PKIDir: pkiDir})
+			if err := deployer.RevokeCert(ctx, hostname); err != nil {
+				return fmt.Errorf("revoking certificate: %w", err)
+			}
+
+			fmt.Printf("Certificate for %s has been revoked\n", hostname)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 
 	return cmd
 }

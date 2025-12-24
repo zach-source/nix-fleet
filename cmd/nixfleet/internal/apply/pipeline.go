@@ -11,6 +11,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/health"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/nix"
+	"github.com/nixfleet/nixfleet/internal/pki"
 	"github.com/nixfleet/nixfleet/internal/preflight"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 )
@@ -32,6 +33,13 @@ type PipelineConfig struct {
 	HealthCheckPolicy FailurePolicy
 	Parallel          int
 	HealthCheckDelay  time.Duration // delay after activation before health checks
+
+	// PKI configuration
+	PKIEnabled    bool
+	PKIConfig     *pki.DeployConfig
+	PKIAutoRenew  bool     // Auto-renew expiring certs before deploy
+	PKIRenewDays  int      // Renew certs expiring within this many days
+	PKIIdentities []string // Age identity files for decryption
 }
 
 // DefaultPipelineConfig returns sensible defaults
@@ -43,6 +51,9 @@ func DefaultPipelineConfig() PipelineConfig {
 		HealthCheckPolicy: PolicyRollback,
 		Parallel:          5,
 		HealthCheckDelay:  5 * time.Second,
+		PKIEnabled:        false,
+		PKIAutoRenew:      true,
+		PKIRenewDays:      30,
 	}
 }
 
@@ -52,6 +63,7 @@ type HostResult struct {
 	Success           bool                        `json:"success"`
 	PreflightResults  *preflight.PreflightResults `json:"preflight,omitempty"`
 	DeployResult      *DeployResult               `json:"deploy,omitempty"`
+	PKIResult         *pki.DeployResult           `json:"pki,omitempty"`
 	HealthResults     *health.HealthResults       `json:"health,omitempty"`
 	RollbackPerformed bool                        `json:"rollbackPerformed,omitempty"`
 	Error             string                      `json:"error,omitempty"`
@@ -77,17 +89,18 @@ type PipelineResults struct {
 
 // Pipeline orchestrates the apply process
 type Pipeline struct {
-	config    PipelineConfig
-	sshPool   *ssh.Pool
-	evaluator *nix.Evaluator
-	deployer  *nix.Deployer
-	preflight *preflight.Checker
-	health    *health.Checker
+	config      PipelineConfig
+	sshPool     *ssh.Pool
+	evaluator   *nix.Evaluator
+	deployer    *nix.Deployer
+	preflight   *preflight.Checker
+	health      *health.Checker
+	pkiDeployer *pki.Deployer
 }
 
 // NewPipeline creates a new apply pipeline
 func NewPipeline(config PipelineConfig, sshPool *ssh.Pool, evaluator *nix.Evaluator, deployer *nix.Deployer) *Pipeline {
-	return &Pipeline{
+	p := &Pipeline{
 		config:    config,
 		sshPool:   sshPool,
 		evaluator: evaluator,
@@ -95,6 +108,20 @@ func NewPipeline(config PipelineConfig, sshPool *ssh.Pool, evaluator *nix.Evalua
 		preflight: preflight.NewChecker(),
 		health:    health.NewChecker(),
 	}
+
+	// Initialize PKI deployer if enabled
+	if config.PKIEnabled {
+		pkiConfig := config.PKIConfig
+		if pkiConfig == nil {
+			pkiConfig = pki.DefaultDeployConfig()
+		}
+		if len(config.PKIIdentities) > 0 {
+			pkiConfig.Identities = config.PKIIdentities
+		}
+		p.pkiDeployer = pki.NewDeployer(pkiConfig)
+	}
+
+	return p
 }
 
 // Apply runs the full apply pipeline for the given hosts
@@ -103,6 +130,13 @@ func (p *Pipeline) Apply(ctx context.Context, hosts []*inventory.Host, action st
 		StartTime:   time.Now(),
 		TotalHosts:  len(hosts),
 		HostResults: make([]*HostResult, 0, len(hosts)),
+	}
+
+	// Auto-renew expiring certificates before deployment
+	if p.pkiDeployer != nil && p.config.PKIAutoRenew && p.pkiDeployer.IsEnabled() {
+		if err := p.autoRenewCerts(ctx, hosts); err != nil {
+			log.Printf("Warning: certificate auto-renewal failed: %v", err)
+		}
 	}
 
 	// Create semaphore for parallelism control
@@ -227,6 +261,25 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 		return result
 	}
 
+	// Phase 4.5: PKI deployment (if enabled)
+	if p.pkiDeployer != nil && p.pkiDeployer.IsEnabled() {
+		log.Printf("[%s] Deploying PKI certificates...", host.Name)
+		pkiResult := p.pkiDeployer.Deploy(ctx, client, host)
+		result.PKIResult = pkiResult
+
+		if !pkiResult.Success {
+			// PKI failure is non-fatal by default, just log warning
+			log.Printf("[%s] PKI deployment warning: %s", host.Name, pkiResult.Error)
+		} else {
+			if pkiResult.CertDeployed {
+				log.Printf("[%s] PKI: deployed host certificate (expires in %d days)",
+					host.Name, pkiResult.CertInfo.DaysLeft)
+			} else if pkiResult.CADeployed {
+				log.Printf("[%s] PKI: deployed CA certificate only", host.Name)
+			}
+		}
+	}
+
 	// Phase 5: Health checks
 	if !p.config.SkipHealthChecks {
 		// Wait for services to stabilize
@@ -304,4 +357,49 @@ func (p *Pipeline) ApplyWithHealthChecks(ctx context.Context, hosts []*inventory
 	// Store health configs for use during apply
 	// This is a simplified approach - in production you'd want proper config passing
 	return p.Apply(ctx, hosts, action)
+}
+
+// autoRenewCerts checks for expiring certificates and renews them before deployment
+func (p *Pipeline) autoRenewCerts(ctx context.Context, hosts []*inventory.Host) error {
+	// Check which certs need renewal
+	renewalInfos, err := p.pkiDeployer.CheckRenewalNeeded(ctx, p.config.PKIRenewDays)
+	if err != nil {
+		return fmt.Errorf("checking renewal: %w", err)
+	}
+
+	if len(renewalInfos) == 0 {
+		return nil
+	}
+
+	// Build a set of hostnames we're deploying to
+	targetHosts := make(map[string]bool)
+	for _, h := range hosts {
+		targetHosts[h.Name] = true
+	}
+
+	// Renew certificates for hosts we're deploying to
+	renewed := 0
+	for _, info := range renewalInfos {
+		if !targetHosts[info.Hostname] {
+			continue // Skip hosts not in this deployment
+		}
+
+		log.Printf("Auto-renewing certificate for %s (%s)", info.Hostname, info.Reason)
+
+		// Renew with default validity (1 year)
+		_, err := p.pkiDeployer.RenewCert(ctx, info.Hostname, nil, 365*24*time.Hour)
+		if err != nil {
+			log.Printf("Warning: failed to renew cert for %s: %v", info.Hostname, err)
+			continue
+		}
+
+		renewed++
+		log.Printf("Renewed certificate for %s", info.Hostname)
+	}
+
+	if renewed > 0 {
+		log.Printf("Auto-renewed %d certificate(s)", renewed)
+	}
+
+	return nil
 }
