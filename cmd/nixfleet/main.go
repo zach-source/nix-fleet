@@ -14,6 +14,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/nix"
 	"github.com/nixfleet/nixfleet/internal/osupdate"
+	"github.com/nixfleet/nixfleet/internal/pki"
 	"github.com/nixfleet/nixfleet/internal/pullmode"
 	"github.com/nixfleet/nixfleet/internal/reboot"
 	"github.com/nixfleet/nixfleet/internal/secrets"
@@ -92,6 +93,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(serverCmd())
 	cmd.AddCommand(pullModeCmd())
 	cmd.AddCommand(hostCmd())
+	cmd.AddCommand(pkiCmd())
 
 	return cmd
 }
@@ -2966,6 +2968,380 @@ Example:
 	cmd.Flags().BoolVar(&skipPullMode, "skip-pull-mode", false, "Skip pull mode installation")
 	cmd.Flags().BoolVar(&skipRekey, "skip-rekey", false, "Skip secrets rekey step")
 	cmd.Flags().BoolVar(&outputSecretsNix, "output-secrets-nix", false, "Output secrets.nix snippet in copy-paste format")
+
+	return cmd
+}
+
+// PKI Commands
+
+func pkiCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pki",
+		Short: "Manage fleet PKI and certificates",
+		Long: `Manage the fleet's Public Key Infrastructure.
+
+Commands:
+  init   - Initialize a new Certificate Authority for the fleet
+  issue  - Issue a certificate for a host
+  status - Show certificate status for fleet hosts
+  export - Export CA certificate for external trust`,
+	}
+
+	cmd.AddCommand(pkiInitCmd())
+	cmd.AddCommand(pkiIssueCmd())
+	cmd.AddCommand(pkiStatusCmd())
+	cmd.AddCommand(pkiExportCmd())
+
+	return cmd
+}
+
+func pkiInitCmd() *cobra.Command {
+	var (
+		pkiDir       string
+		recipients   []string
+		identities   []string
+		commonName   string
+		organization string
+		validity     string
+		force        bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize a new Certificate Authority",
+		Long: `Create a new root CA for the fleet.
+
+This generates:
+  - A self-signed root CA certificate (public)
+  - An age-encrypted CA private key
+
+The CA certificate will be deployed to all hosts to establish trust.
+The private key is encrypted and only used to sign host certificates.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			_ = ctx // for future use
+
+			store := pki.NewStore(pkiDir, recipients, identities)
+
+			// Check if CA already exists
+			if store.CAExists() && !force {
+				return fmt.Errorf("CA already exists at %s. Use --force to overwrite", pkiDir)
+			}
+
+			if len(recipients) == 0 {
+				return fmt.Errorf("at least one --recipient is required for encrypting the CA private key")
+			}
+
+			// Parse validity
+			validityDuration, err := time.ParseDuration(validity)
+			if err != nil {
+				// Try parsing as "10y" style
+				if strings.HasSuffix(validity, "y") {
+					years := strings.TrimSuffix(validity, "y")
+					var y int
+					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
+						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
+					}
+				}
+				if validityDuration == 0 {
+					return fmt.Errorf("invalid validity format: %s (use e.g., 10y, 8760h)", validity)
+				}
+			}
+
+			cfg := &pki.CAConfig{
+				CommonName:   commonName,
+				Organization: organization,
+				Validity:     validityDuration,
+			}
+
+			fmt.Println("Initializing NixFleet PKI...")
+			fmt.Printf("  Common Name:  %s\n", cfg.CommonName)
+			fmt.Printf("  Organization: %s\n", cfg.Organization)
+			fmt.Printf("  Validity:     %s\n", validity)
+			fmt.Println()
+
+			// Create CA
+			ca, err := pki.InitCA(cfg)
+			if err != nil {
+				return fmt.Errorf("creating CA: %w", err)
+			}
+
+			// Save to disk
+			if err := store.SaveCA(ca); err != nil {
+				return fmt.Errorf("saving CA: %w", err)
+			}
+
+			fmt.Println("CA initialized successfully!")
+			fmt.Println()
+			fmt.Printf("Files created:\n")
+			fmt.Printf("  Certificate: %s/ca/root.crt (public)\n", pkiDir)
+			fmt.Printf("  Private Key: %s/ca/root.key.age (encrypted)\n", pkiDir)
+			fmt.Println()
+			fmt.Println("Next steps:")
+			fmt.Println("  1. Issue certificates: nixfleet pki issue <hostname>")
+			fmt.Println("  2. Deploy to hosts:    nixfleet apply")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting CA key (required)")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&commonName, "cn", "NixFleet Root CA", "CA common name")
+	cmd.Flags().StringVar(&organization, "org", "NixFleet", "Organization name")
+	cmd.Flags().StringVar(&validity, "validity", "10y", "CA certificate validity (e.g., 10y, 8760h)")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing CA")
+
+	return cmd
+}
+
+func pkiIssueCmd() *cobra.Command {
+	var (
+		pkiDir     string
+		recipients []string
+		identities []string
+		sans       []string
+		validity   string
+		all        bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "issue [hostname]",
+		Short: "Issue a certificate for a host",
+		Long: `Issue a TLS certificate for a host, signed by the fleet CA.
+
+The certificate includes:
+  - The hostname as Common Name
+  - Additional SANs (DNS names and IP addresses)
+  - Server and client auth extended key usage (for mTLS)
+
+Examples:
+  nixfleet pki issue host-a
+  nixfleet pki issue host-a --san host-a.internal --san 192.168.1.10
+  nixfleet pki issue --all`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				return nil
+			}
+			if len(args) != 1 {
+				return fmt.Errorf("hostname required (or use --all)")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			store := pki.NewStore(pkiDir, recipients, identities)
+
+			// Check CA exists
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			// Load CA
+			ca, err := store.LoadCA(ctx)
+			if err != nil {
+				return fmt.Errorf("loading CA: %w", err)
+			}
+
+			// Parse validity
+			validityDuration, err := time.ParseDuration(validity)
+			if err != nil {
+				if strings.HasSuffix(validity, "d") {
+					days := strings.TrimSuffix(validity, "d")
+					var d int
+					if _, err := fmt.Sscanf(days, "%d", &d); err == nil {
+						validityDuration = time.Duration(d) * 24 * time.Hour
+					}
+				} else if strings.HasSuffix(validity, "y") {
+					years := strings.TrimSuffix(validity, "y")
+					var y int
+					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
+						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
+					}
+				}
+				if validityDuration == 0 {
+					return fmt.Errorf("invalid validity format: %s", validity)
+				}
+			}
+
+			// Determine hosts to issue certs for
+			var hostnames []string
+			if all {
+				_, hosts, err := loadInventoryAndHosts(ctx)
+				if err != nil {
+					return err
+				}
+				for _, h := range hosts {
+					hostnames = append(hostnames, h.Name)
+				}
+			} else {
+				hostnames = []string{args[0]}
+			}
+
+			if len(recipients) == 0 {
+				return fmt.Errorf("at least one --recipient is required")
+			}
+
+			fmt.Printf("Issuing certificates for %d host(s)...\n\n", len(hostnames))
+
+			for _, hostname := range hostnames {
+				req := &pki.CertRequest{
+					Hostname: hostname,
+					SANs:     sans,
+					Validity: validityDuration,
+				}
+
+				cert, err := ca.IssueCert(req)
+				if err != nil {
+					fmt.Printf("  %s: FAILED - %v\n", hostname, err)
+					continue
+				}
+
+				if err := store.SaveHostCert(cert); err != nil {
+					fmt.Printf("  %s: FAILED to save - %v\n", hostname, err)
+					continue
+				}
+
+				fmt.Printf("  %s: OK (expires %s)\n", hostname, cert.NotAfter.Format("2006-01-02"))
+			}
+
+			fmt.Println()
+			fmt.Println("Certificates issued. Deploy with: nixfleet apply")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting host keys")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringSliceVar(&sans, "san", nil, "Subject Alternative Names (DNS names or IPs)")
+	cmd.Flags().StringVar(&validity, "validity", "365d", "Certificate validity (e.g., 365d, 1y)")
+	cmd.Flags().BoolVar(&all, "all", false, "Issue certificates for all hosts in inventory")
+
+	return cmd
+}
+
+func pkiStatusCmd() *cobra.Command {
+	var (
+		pkiDir     string
+		identities []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show certificate status for fleet hosts",
+		Long: `Display certificate status for all hosts in the fleet.
+
+Shows:
+  - Certificate expiration dates
+  - Days remaining until expiry
+  - Status (valid, expiring, expired)
+  - Subject Alternative Names`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			_ = ctx
+
+			store := pki.NewStore(pkiDir, nil, identities)
+
+			// Check CA exists
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			// List host certs
+			hosts, err := store.ListHostCerts()
+			if err != nil {
+				return fmt.Errorf("listing certificates: %w", err)
+			}
+
+			if len(hosts) == 0 {
+				fmt.Println("No host certificates found.")
+				fmt.Println("Issue certificates with: nixfleet pki issue <hostname>")
+				return nil
+			}
+
+			fmt.Printf("%-20s %-12s %-10s %-10s %s\n", "HOST", "EXPIRES", "DAYS LEFT", "STATUS", "SANs")
+			fmt.Println(strings.Repeat("-", 80))
+
+			for _, hostname := range hosts {
+				info, err := store.GetCertInfo(hostname)
+				if err != nil {
+					fmt.Printf("%-20s %-12s %-10s %-10s %s\n", hostname, "ERROR", "-", "error", err.Error())
+					continue
+				}
+
+				// Format status with color indicators
+				var statusIcon string
+				switch info.Status {
+				case "valid":
+					statusIcon = "✓ valid"
+				case "expiring":
+					statusIcon = "⚠ expiring"
+				case "expired":
+					statusIcon = "✗ expired"
+				}
+
+				sansStr := strings.Join(info.SANs, ", ")
+				if len(sansStr) > 30 {
+					sansStr = sansStr[:27] + "..."
+				}
+
+				fmt.Printf("%-20s %-12s %-10d %-10s %s\n",
+					hostname,
+					info.NotAfter.Format("2006-01-02"),
+					info.DaysLeft,
+					statusIcon,
+					sansStr,
+				)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files (for CA info)")
+
+	return cmd
+}
+
+func pkiExportCmd() *cobra.Command {
+	var pkiDir string
+
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export CA certificate",
+		Long: `Export the CA certificate in PEM format.
+
+This can be used to add the fleet CA to external trust stores
+or configure applications to trust fleet certificates.
+
+Example:
+  nixfleet pki export > fleet-ca.crt
+  sudo cp fleet-ca.crt /usr/local/share/ca-certificates/
+  sudo update-ca-certificates`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := pki.NewStore(pkiDir, nil, nil)
+
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			caCertPath := store.GetCACertPath()
+			certPEM, err := os.ReadFile(caCertPath)
+			if err != nil {
+				return fmt.Errorf("reading CA certificate: %w", err)
+			}
+
+			fmt.Print(string(certPEM))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
 
 	return cmd
 }
