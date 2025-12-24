@@ -1,0 +1,33 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    # Ignore specific function calls that are safe to ignore
+    exclude-functions:
+      - (*golang.org/x/crypto/ssh.Session).Signal
+      - (*github.com/zach-source/nix-fleet/cmd/nixfleet/internal/ssh.Client).Exec
+      - (*golang.org/x/sync/semaphore.Weighted).Acquire
+      - fmt.Sscanf
+      - (*os/exec.Cmd).Run
+      - (*github.com/spf13/cobra.Command).MarkFlagRequired
+      - (*encoding/json.Encoder).Encode
+
+issues:
+  # Don't fail on staticcheck SA5011 nil pointer warnings for now
+  exclude-rules:
+    - linters:
+        - staticcheck
+      text: "SA5011"
+    - linters:
+        - gosimple
+      text: "S1039"

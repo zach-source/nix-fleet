@@ -173,30 +173,10 @@
         inherit mkNixFleetConfiguration mkNixOSFleetConfiguration mkDarwinFleetConfiguration;
       };
 
-      # Example NixFleet configurations for Ubuntu hosts
-      # Users would define their own hosts here or in separate files
-      nixfleetConfigurations = {
-        # Example: web-1 Ubuntu host
-        web-1 = mkNixFleetConfiguration {
-          modules = [ ./hosts/web-1.nix ];
-        };
-      };
-
-      # NixOS configurations for NixOS-based hosts
-      nixosConfigurations = {
-        # Example: db-1 NixOS database host
-        db-1 = mkNixOSFleetConfiguration {
-          modules = [ ./hosts/db-1.nix ];
-        };
-      };
-
-      # nix-darwin configurations for macOS hosts
-      darwinConfigurations = {
-        # Example: mac-1 macOS workstation
-        mac-1 = mkDarwinFleetConfiguration {
-          system = "aarch64-darwin";
-          modules = [ ./hosts/mac-1.nix ];
-        };
-      };
+      # NixFleet library functions are available via self.lib
+      # Users can create their own configurations using:
+      #   nixfleetConfigurations.myhost = self.lib.mkNixFleetConfiguration { ... };
+      #   nixosConfigurations.myhost = self.lib.mkNixOSFleetConfiguration { ... };
+      #   darwinConfigurations.myhost = self.lib.mkDarwinFleetConfiguration { ... };
     };
 }
