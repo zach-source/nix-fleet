@@ -1,0 +1,29 @@
+# Nix build outputs
+result
+result-*
+
+# Development
+.direnv/
+.envrc.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go
+cmd/nixfleet/nixfleet
+
+# Secrets (decrypted)
+secrets/**/*.dec
+secrets/**/*.plain
+*.age.dec
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude working files
+.claude/

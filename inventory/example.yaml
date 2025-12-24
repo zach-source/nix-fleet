@@ -1,0 +1,61 @@
+# NixFleet Inventory Example
+# This file defines hosts and groups for fleet management
+
+groups:
+  web:
+    hosts:
+      - web-1
+      - web-2
+    vars:
+      max_parallel: 2
+
+  db:
+    hosts:
+      - db-1
+    vars:
+      max_parallel: 1
+
+  all:
+    children:
+      - web
+      - db
+
+hosts:
+  web-1:
+    base: ubuntu
+    addr: 10.0.1.11
+    ssh_user: deploy
+    roles:
+      - base
+      - nginx
+      - myapp
+    os_updates:
+      mode: security-daily
+      auto_reboot: true
+      reboot_window: "Sun 02:00-04:00"
+      holds:
+        - nvidia-driver-*
+      max_concurrent_reboots: 1
+
+  web-2:
+    base: ubuntu
+    addr: 10.0.1.12
+    ssh_user: deploy
+    roles:
+      - base
+      - nginx
+      - myapp
+    os_updates:
+      mode: security-daily
+      auto_reboot: true
+      reboot_window: "Sun 02:00-04:00"
+
+  db-1:
+    base: nixos
+    addr: 10.0.2.10
+    ssh_user: deploy
+    roles:
+      - base
+      - postgresql
+    os_updates:
+      auto_switch: true
