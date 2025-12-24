@@ -3037,6 +3037,7 @@ Commands:
 
 func pkiInitCmd() *cobra.Command {
 	var (
+		configFile   string
 		pkiDir       string
 		recipients   []string
 		identities   []string
@@ -3056,10 +3057,46 @@ This generates:
   - An age-encrypted CA private key
 
 The CA certificate will be deployed to all hosts to establish trust.
-The private key is encrypted and only used to sign host certificates.`,
+The private key is encrypted and only used to sign host certificates.
+
+You can use a config file instead of CLI flags:
+  nixfleet pki init --config secrets/pki.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			_ = ctx // for future use
+
+			// Load config file if specified
+			var pkiCfg *pki.PKIConfig
+			if configFile != "" {
+				var err error
+				pkiCfg, err = pki.LoadPKIConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("loading config: %w", err)
+				}
+				if err := pkiCfg.Validate(); err != nil {
+					return fmt.Errorf("invalid config: %w", err)
+				}
+
+				// Use config values as defaults (CLI flags override)
+				if pkiDir == "secrets/pki" && pkiCfg.Directory != "" {
+					pkiDir = pkiCfg.Directory
+				}
+				if len(recipients) == 0 {
+					recipients = pkiCfg.Recipients
+				}
+				if len(identities) == 0 {
+					identities = pkiCfg.Identities
+				}
+				if commonName == "NixFleet Root CA" && pkiCfg.RootCA.CommonName != "" {
+					commonName = pkiCfg.RootCA.CommonName
+				}
+				if organization == "NixFleet" && pkiCfg.RootCA.Organization != "" {
+					organization = pkiCfg.RootCA.Organization
+				}
+				if validity == "10y" && pkiCfg.RootCA.Validity != "" {
+					validity = pkiCfg.RootCA.Validity
+				}
+			}
 
 			store := pki.NewStore(pkiDir, recipients, identities)
 
@@ -3072,20 +3109,10 @@ The private key is encrypted and only used to sign host certificates.`,
 				return fmt.Errorf("at least one --recipient is required for encrypting the CA private key")
 			}
 
-			// Parse validity
-			validityDuration, err := time.ParseDuration(validity)
+			// Parse validity using our helper
+			validityDuration, err := pki.ParseValidityDuration(validity)
 			if err != nil {
-				// Try parsing as "10y" style
-				if strings.HasSuffix(validity, "y") {
-					years := strings.TrimSuffix(validity, "y")
-					var y int
-					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
-						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
-					}
-				}
-				if validityDuration == 0 {
-					return fmt.Errorf("invalid validity format: %s (use e.g., 10y, 8760h)", validity)
-				}
+				return fmt.Errorf("invalid validity format: %s (use e.g., 10y, 90d, 8760h)", validity)
 			}
 
 			cfg := &pki.CAConfig{
@@ -3117,16 +3144,24 @@ The private key is encrypted and only used to sign host certificates.`,
 			fmt.Printf("  Certificate: %s/ca/root.crt (public)\n", pkiDir)
 			fmt.Printf("  Private Key: %s/ca/root.key.age (encrypted)\n", pkiDir)
 			fmt.Println()
-			fmt.Println("Next steps:")
-			fmt.Println("  1. Issue certificates: nixfleet pki issue <hostname>")
-			fmt.Println("  2. Deploy to hosts:    nixfleet apply")
+			if pkiCfg != nil && pkiCfg.IntermediateCA != nil {
+				fmt.Println("Next steps:")
+				fmt.Println("  1. Create intermediate CA: nixfleet pki init-intermediate --config " + configFile)
+				fmt.Println("  2. Issue certificates:     nixfleet pki issue <hostname>")
+				fmt.Println("  3. Deploy to hosts:        nixfleet apply")
+			} else {
+				fmt.Println("Next steps:")
+				fmt.Println("  1. Issue certificates: nixfleet pki issue <hostname>")
+				fmt.Println("  2. Deploy to hosts:    nixfleet apply")
+			}
 
 			return nil
 		},
 	}
 
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "PKI config file (e.g., secrets/pki.yaml)")
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
-	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting CA key (required)")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting CA key")
 	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
 	cmd.Flags().StringVar(&commonName, "cn", "NixFleet Root CA", "CA common name")
 	cmd.Flags().StringVar(&organization, "org", "NixFleet", "Organization name")
@@ -3138,6 +3173,7 @@ The private key is encrypted and only used to sign host certificates.`,
 
 func pkiInitIntermediateCmd() *cobra.Command {
 	var (
+		configFile   string
 		pkiDir       string
 		recipients   []string
 		identities   []string
@@ -3162,10 +3198,47 @@ The certificate chain (intermediate + root) is automatically included
 when issuing certificates, enabling full chain validation.
 
 Examples:
+  nixfleet pki init-intermediate --config secrets/pki.yaml
   nixfleet pki init-intermediate -r age1...
   nixfleet pki init-intermediate --cn "NixFleet Signing CA" --validity 3y`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			// Load config file if specified
+			if configFile != "" {
+				pkiCfg, err := pki.LoadPKIConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("loading config: %w", err)
+				}
+				if err := pkiCfg.Validate(); err != nil {
+					return fmt.Errorf("invalid config: %w", err)
+				}
+
+				// Check if intermediate CA is configured
+				if pkiCfg.IntermediateCA == nil {
+					return fmt.Errorf("intermediate CA not configured in %s", configFile)
+				}
+
+				// Use config values as defaults (CLI flags override)
+				if pkiDir == "secrets/pki" && pkiCfg.Directory != "" {
+					pkiDir = pkiCfg.Directory
+				}
+				if len(recipients) == 0 {
+					recipients = pkiCfg.Recipients
+				}
+				if len(identities) == 0 {
+					identities = pkiCfg.Identities
+				}
+				if commonName == "NixFleet Intermediate CA" && pkiCfg.IntermediateCA.CommonName != "" {
+					commonName = pkiCfg.IntermediateCA.CommonName
+				}
+				if organization == "NixFleet" && pkiCfg.IntermediateCA.Organization != "" {
+					organization = pkiCfg.IntermediateCA.Organization
+				}
+				if validity == "5y" && pkiCfg.IntermediateCA.Validity != "" {
+					validity = pkiCfg.IntermediateCA.Validity
+				}
+			}
 
 			store := pki.NewStore(pkiDir, recipients, identities)
 
@@ -3183,19 +3256,10 @@ Examples:
 				return fmt.Errorf("at least one --recipient is required for encrypting the intermediate CA key")
 			}
 
-			// Parse validity
-			validityDuration, err := time.ParseDuration(validity)
+			// Parse validity using our helper
+			validityDuration, err := pki.ParseValidityDuration(validity)
 			if err != nil {
-				if strings.HasSuffix(validity, "y") {
-					years := strings.TrimSuffix(validity, "y")
-					var y int
-					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
-						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
-					}
-				}
-				if validityDuration == 0 {
-					return fmt.Errorf("invalid validity format: %s (use e.g., 5y, 8760h)", validity)
-				}
+				return fmt.Errorf("invalid validity format: %s (use e.g., 5y, 90d, 8760h)", validity)
 			}
 
 			// Load root CA
@@ -3241,8 +3305,9 @@ Examples:
 		},
 	}
 
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "PKI config file (e.g., secrets/pki.yaml)")
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
-	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting intermediate CA key (required)")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting intermediate CA key")
 	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
 	cmd.Flags().StringVar(&commonName, "cn", "NixFleet Intermediate CA", "Intermediate CA common name")
 	cmd.Flags().StringVar(&organization, "org", "NixFleet", "Organization name")
@@ -3254,6 +3319,7 @@ Examples:
 
 func pkiIssueCmd() *cobra.Command {
 	var (
+		configFile string
 		pkiDir     string
 		recipients []string
 		identities []string
@@ -3277,10 +3343,12 @@ Multiple named certificates per host are supported using --name:
   - Default name is "host" if not specified
   - Stored at: secrets/pki/hosts/{hostname}/{name}.crt
 
+With a config file, host SANs and certificate settings can be predefined.
+
 Examples:
   nixfleet pki issue host-a
   nixfleet pki issue host-a --name web --san host-a.example.com
-  nixfleet pki issue host-a --name api --san api.host-a.internal
+  nixfleet pki issue host-a --config secrets/pki.yaml  # Uses SANs from config
   nixfleet pki issue --all`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
@@ -3293,6 +3361,30 @@ Examples:
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			// Load config file if specified
+			var pkiCfg *pki.PKIConfig
+			if configFile != "" {
+				var err error
+				pkiCfg, err = pki.LoadPKIConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("loading config: %w", err)
+				}
+
+				// Use config values as defaults (CLI flags override)
+				if pkiDir == "secrets/pki" && pkiCfg.Directory != "" {
+					pkiDir = pkiCfg.Directory
+				}
+				if len(recipients) == 0 {
+					recipients = pkiCfg.Recipients
+				}
+				if len(identities) == 0 {
+					identities = pkiCfg.Identities
+				}
+				if validity == "365d" && pkiCfg.Defaults.Validity != "" {
+					validity = pkiCfg.Defaults.Validity
+				}
+			}
 
 			store := pki.NewStore(pkiDir, recipients, identities)
 
@@ -3324,25 +3416,10 @@ Examples:
 				signerName = "root CA"
 			}
 
-			// Parse validity
-			validityDuration, err := time.ParseDuration(validity)
+			// Parse validity using helper
+			validityDuration, err := pki.ParseValidityDuration(validity)
 			if err != nil {
-				if strings.HasSuffix(validity, "d") {
-					days := strings.TrimSuffix(validity, "d")
-					var d int
-					if _, err := fmt.Sscanf(days, "%d", &d); err == nil {
-						validityDuration = time.Duration(d) * 24 * time.Hour
-					}
-				} else if strings.HasSuffix(validity, "y") {
-					years := strings.TrimSuffix(validity, "y")
-					var y int
-					if _, err := fmt.Sscanf(years, "%d", &y); err == nil {
-						validityDuration = time.Duration(y) * 365 * 24 * time.Hour
-					}
-				}
-				if validityDuration == 0 {
-					return fmt.Errorf("invalid validity format: %s", validity)
-				}
+				return fmt.Errorf("invalid validity format: %s (use e.g., 90d, 1y)", validity)
 			}
 
 			// Determine hosts to issue certs for
@@ -3366,11 +3443,30 @@ Examples:
 			fmt.Printf("Issuing certificates for %d host(s) using %s...\n\n", len(hostnames), signerName)
 
 			for _, hostname := range hostnames {
-				req := &pki.CertRequest{
-					Hostname: hostname,
-					Name:     certName,
-					SANs:     sans,
-					Validity: validityDuration,
+				// Build request, merging config and CLI flags
+				var req *pki.CertRequest
+
+				// Try to get config-defined request first
+				if pkiCfg != nil {
+					var err error
+					req, err = pkiCfg.GetHostCertRequest(hostname, certName)
+					if err != nil {
+						req = nil // Fall back to manual construction
+					}
+				}
+
+				// If no config or config failed, build manually
+				if req == nil {
+					req = &pki.CertRequest{
+						Hostname: hostname,
+						Name:     certName,
+						Validity: validityDuration,
+					}
+				}
+
+				// CLI sans always override/append
+				if len(sans) > 0 {
+					req.SANs = append(req.SANs, sans...)
 				}
 
 				cert, err := issuer.IssueCert(req)
@@ -3398,6 +3494,7 @@ Examples:
 		},
 	}
 
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "PKI config file (e.g., secrets/pki.yaml)")
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
 	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for encrypting host keys")
 	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
