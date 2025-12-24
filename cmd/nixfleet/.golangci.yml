@@ -14,9 +14,16 @@ linters-settings:
   errcheck:
     # Ignore specific function calls that are safe to ignore
     exclude-functions:
-      - (*golang.org/x/crypto/ssh.Session).Signal
-      - (*github.com/zach-source/nix-fleet/cmd/nixfleet/internal/ssh.Client).Exec
+      # SSH client methods - fire-and-forget calls are intentional
+      - (*github.com/nixfleet/nixfleet/internal/ssh.Client).Exec
+      - (*github.com/nixfleet/nixfleet/internal/ssh.Client).ExecSudo
+      # State manager methods - background updates where errors are logged but not fatal
+      - (*github.com/nixfleet/nixfleet/internal/state.Manager).WriteState
+      - (*github.com/nixfleet/nixfleet/internal/state.Manager).UpdateAfterApply
+      # Semaphore acquire in tests
       - (*golang.org/x/sync/semaphore.Weighted).Acquire
+      # Standard library
+      - (*golang.org/x/crypto/ssh.Session).Signal
       - fmt.Sscanf
       - (*os/exec.Cmd).Run
       - (*github.com/spf13/cobra.Command).MarkFlagRequired
