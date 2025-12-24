@@ -113,6 +113,28 @@ let
   # Generate health checks JSON
   healthChecksData = builtins.toJSON cfg.healthChecks;
 
+  # Generate secrets payload (encrypted .age files)
+  secretsPayload = pkgs.runCommand "nixfleet-secrets" { } ''
+    mkdir -p $out
+
+    ${concatStringsSep "\n" (
+      mapAttrsToList (name: secretCfg: ''
+        cp ${secretCfg.source} $out/${name}.age
+      '') cfg.secrets.items
+    )}
+  '';
+
+  # Generate secrets metadata JSON
+  secretsMetadata = builtins.toJSON (
+    mapAttrs (name: secretCfg: {
+      path = secretCfg.path;
+      owner = secretCfg.owner;
+      group = secretCfg.group;
+      mode = secretCfg.mode;
+      restartUnits = secretCfg.restartUnits;
+    }) cfg.secrets.items
+  );
+
   # Calculate manifest hash for change detection
   manifestInputs = builtins.toJSON {
     packages = map (p: p.outPath) cfg.packages;
@@ -130,6 +152,14 @@ let
     users = cfg.users;
     groups = cfg.groups;
     directories = cfg.directories;
+    secrets = mapAttrs (name: secretCfg: {
+      source = builtins.hashFile "sha256" secretCfg.source;
+      path = secretCfg.path;
+      owner = secretCfg.owner;
+      group = secretCfg.group;
+      mode = secretCfg.mode;
+    }) cfg.secrets.items;
+    secretsMode = cfg.secrets.mode;
   };
 
   manifestHash = builtins.hashString "sha256" manifestInputs;
@@ -137,6 +167,11 @@ let
   # Main activation script
   activateScript = pkgs.writeShellScript "nixfleet-activate" ''
     set -euo pipefail
+
+    # Ensure Nix is in PATH
+    if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+      . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+    fi
 
     NIXFLEET_ROOT="/nix/var/nix/profiles/nixfleet"
     NIXFLEET_STATE="/var/lib/nixfleet"
@@ -207,7 +242,98 @@ let
       ) cfg.users
     )}
 
-    # Step 5: Stage and deploy /etc files
+    # Step 5: Decrypt and deploy secrets
+    log "Deploying secrets..."
+    SECRETS_DIR="${cfg.secrets.secretsDir}"
+    CHANGED_SECRETS=""
+
+    # Create secrets directory with restrictive permissions
+    mkdir -p "$SECRETS_DIR"
+    chmod 0700 "$SECRETS_DIR"
+
+    # Determine decryption identity based on mode
+    SECRETS_MODE="${cfg.secrets.mode}"
+    DECRYPT_READY=false
+
+    case "$SECRETS_MODE" in
+      ssh-host-key)
+        SSH_HOST_KEY="${cfg.secrets.sshHostKeyPath}"
+        if [ -f "$SSH_HOST_KEY" ]; then
+          log "  Using SSH host key for decryption: $SSH_HOST_KEY"
+          # Convert SSH key to age identity (stored in temp file, deleted after use)
+          AGE_IDENTITY_FILE=$(mktemp)
+          if ${pkgs.ssh-to-age}/bin/ssh-to-age -private-key -i "$SSH_HOST_KEY" > "$AGE_IDENTITY_FILE" 2>/dev/null; then
+            DECRYPT_READY=true
+          else
+            log "  Error: Failed to convert SSH host key to age identity"
+            rm -f "$AGE_IDENTITY_FILE"
+          fi
+        else
+          log "  Error: SSH host key not found at $SSH_HOST_KEY"
+        fi
+        ;;
+      age-key)
+        AGE_KEY="${
+          if cfg.secrets.ageKeyPath != null then
+            cfg.secrets.ageKeyPath
+          else if cfg.ageKeyPath != null then
+            cfg.ageKeyPath
+          else
+            "/root/.config/age/key.txt"
+        }"
+        if [ -f "$AGE_KEY" ]; then
+          log "  Using age key for decryption: $AGE_KEY"
+          AGE_IDENTITY_FILE="$AGE_KEY"
+          DECRYPT_READY=true
+        else
+          log "  Warning: Age key not found at $AGE_KEY"
+        fi
+        ;;
+      *)
+        log "  Error: Unknown secrets mode: $SECRETS_MODE"
+        ;;
+    esac
+
+    if [ "$DECRYPT_READY" = "true" ]; then
+      ${concatStringsSep "\n" (
+        mapAttrsToList (name: secretCfg: ''
+          SECRET_SRC="${secretsPayload}/${name}.age"
+          SECRET_DST="${secretCfg.path}"
+
+          if [ -f "$SECRET_SRC" ]; then
+            # Create parent directory if needed
+            mkdir -p "$(dirname "$SECRET_DST")"
+
+            # Decrypt secret to temporary file first
+            TEMP_SECRET=$(mktemp)
+            if ${pkgs.age}/bin/age -d -i "$AGE_IDENTITY_FILE" -o "$TEMP_SECRET" "$SECRET_SRC" 2>/dev/null; then
+              # Check if secret changed
+              if ! cmp -s "$TEMP_SECRET" "$SECRET_DST" 2>/dev/null; then
+                log "  Updating secret: ${name}"
+                mv "$TEMP_SECRET" "$SECRET_DST"
+                chmod ${secretCfg.mode} "$SECRET_DST"
+                chown ${secretCfg.owner}:${secretCfg.group} "$SECRET_DST"
+                CHANGED_SECRETS="$CHANGED_SECRETS ${name}"
+              else
+                rm -f "$TEMP_SECRET"
+              fi
+            else
+              log "  Warning: Failed to decrypt secret ${name}"
+              rm -f "$TEMP_SECRET"
+            fi
+          fi
+        '') cfg.secrets.items
+      )}
+
+      # Clean up temporary identity file if we created one
+      if [ "$SECRETS_MODE" = "ssh-host-key" ]; then
+        rm -f "$AGE_IDENTITY_FILE"
+      fi
+    else
+      log "  Warning: No valid decryption identity available - skipping secrets"
+    fi
+
+    # Step 6: Stage and deploy /etc files
     log "Deploying managed files..."
     CHANGED_FILES=""
     ${concatStringsSep "\n" (
@@ -232,7 +358,7 @@ let
       ) cfg.files
     )}
 
-    # Step 6: Deploy systemd units
+    # Step 7: Deploy systemd units
     log "Deploying systemd units..."
     CHANGED_UNITS=""
     ${concatStringsSep "\n" (
@@ -262,13 +388,13 @@ let
       '') cfg.systemd.units
     )}
 
-    # Step 7: Reload systemd if units changed
+    # Step 8: Reload systemd if units changed
     if [ -n "$CHANGED_UNITS" ]; then
       log "Reloading systemd daemon..."
       systemctl daemon-reload
     fi
 
-    # Step 8: Restart units that depend on changed files
+    # Step 9: Restart units that depend on changed files or secrets
     UNITS_TO_RESTART=""
     ${concatStringsSep "\n" (
       mapAttrsToList (
@@ -285,6 +411,22 @@ let
       ) cfg.files
     )}
 
+    # Check for units that depend on changed secrets
+    ${concatStringsSep "\n" (
+      mapAttrsToList (
+        name: secretCfg:
+        concatStringsSep "\n" (
+          map (unit: ''
+            if echo "$CHANGED_SECRETS" | grep -q "${name}"; then
+              if ! echo "$UNITS_TO_RESTART" | grep -q "${unit}"; then
+                UNITS_TO_RESTART="$UNITS_TO_RESTART ${unit}"
+              fi
+            fi
+          '') secretCfg.restartUnits
+        )
+      ) cfg.secrets.items
+    )}
+
     # Also restart changed units
     for unit in $CHANGED_UNITS; do
       if ! echo "$UNITS_TO_RESTART" | grep -q "$unit"; then
@@ -299,13 +441,13 @@ let
       done
     fi
 
-    # Step 9: Run post-activate hook
+    # Step 10: Run post-activate hook
     ${optionalString (cfg.hooks.postActivate != "") ''
       log "Running post-activate hook..."
       ${cfg.hooks.postActivate}
     ''}
 
-    # Step 10: Update state file
+    # Step 11: Update state file
     log "Updating state..."
     mkdir -p "$NIXFLEET_STATE"
     cat > "$NIXFLEET_STATE/state.json" << 'STATE_EOF'
@@ -334,12 +476,18 @@ in
               packagesProfile
               etcPayload
               unitsDir
+              secretsPayload
               activateScript
               manifestHash
               ;
             inherit (cfg) files;
             inherit (cfg.systemd) units;
-            inherit (cfg) users groups directories;
+            inherit (cfg)
+              users
+              groups
+              directories
+              ;
+            secrets = cfg.secrets.items;
           };
         }
         ''
@@ -354,6 +502,9 @@ in
           # Link the units
           ln -s ${unitsDir} $out/units
 
+          # Link the secrets (encrypted)
+          ln -s ${secretsPayload} $out/secrets
+
           # Install the activation script
           cp ${activateScript} $out/activate
           chmod +x $out/activate
@@ -365,6 +516,7 @@ in
           echo '${groupsData}' > $out/groups.json
           echo '${directoriesData}' > $out/directories.json
           echo '${healthChecksData}' > $out/health-checks.json
+          echo '${secretsMetadata}' > $out/secrets.json
           echo '${manifestHash}' > $out/manifest-hash
 
           # Create bin symlinks for convenience

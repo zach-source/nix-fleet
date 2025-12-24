@@ -175,6 +175,48 @@ let
     }
   );
 
+  # Secret type (age-encrypted secrets)
+  secretType = types.submodule (
+    { name, ... }:
+    {
+      options = {
+        source = mkOption {
+          type = types.path;
+          description = "Path to the age-encrypted secret file";
+        };
+
+        path = mkOption {
+          type = types.str;
+          description = "Destination path on the host";
+        };
+
+        owner = mkOption {
+          type = types.str;
+          default = "root";
+          description = "File owner";
+        };
+
+        group = mkOption {
+          type = types.str;
+          default = "root";
+          description = "File group";
+        };
+
+        mode = mkOption {
+          type = types.str;
+          default = "0400";
+          description = "File permissions (octal)";
+        };
+
+        restartUnits = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          description = "Systemd units to restart when this secret changes";
+        };
+      };
+    }
+  );
+
   # Health check type
   healthCheckType = types.submodule (
     { name, ... }:
@@ -307,6 +349,58 @@ in
       type = types.attrsOf healthCheckType;
       default = { };
       description = "Health checks to run after activation";
+    };
+
+    # Secrets (age-encrypted)
+    secrets = {
+      # Secret definitions
+      items = mkOption {
+        type = types.attrsOf secretType;
+        default = { };
+        description = "Age-encrypted secrets to deploy";
+      };
+
+      # Decryption mode: use SSH host key (recommended) or explicit age key
+      mode = mkOption {
+        type = types.enum [
+          "ssh-host-key"
+          "age-key"
+        ];
+        default = "ssh-host-key";
+        description = ''
+          How to derive the age decryption identity:
+          - ssh-host-key: Derive from SSH host ed25519 key (recommended, no manual key management)
+          - age-key: Use an explicit age private key file
+        '';
+      };
+
+      # Path to SSH host key (for ssh-host-key mode)
+      sshHostKeyPath = mkOption {
+        type = types.path;
+        default = "/etc/ssh/ssh_host_ed25519_key";
+        description = "Path to SSH host ed25519 private key (used when mode = ssh-host-key)";
+      };
+
+      # Path to age key (for age-key mode, backward compatible)
+      ageKeyPath = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to age private key file (used when mode = age-key)";
+      };
+
+      # Directory where decrypted secrets are stored
+      secretsDir = mkOption {
+        type = types.path;
+        default = "/run/nixfleet-secrets";
+        description = "Directory where decrypted secrets are stored";
+      };
+    };
+
+    # Backward compatibility alias
+    ageKeyPath = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "DEPRECATED: Use secrets.ageKeyPath instead";
     };
 
     # Hooks
