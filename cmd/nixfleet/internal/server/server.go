@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nixfleet/nixfleet/internal/apt"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/nix"
+	"github.com/nixfleet/nixfleet/internal/pullmode"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 	"github.com/nixfleet/nixfleet/internal/state"
 )
@@ -45,6 +47,7 @@ type Server struct {
 	deployer  *nix.Deployer
 	pool      *ssh.Pool
 	stateMgr  *state.Manager
+	aptMgr    *apt.Manager
 
 	// Scheduler
 	scheduler *Scheduler
@@ -89,6 +92,7 @@ func New(config Config) (*Server, error) {
 		deployer:  nix.NewDeployer(evaluator),
 		pool:      ssh.NewPool(nil),
 		stateMgr:  state.NewManager(),
+		aptMgr:    apt.NewManager(),
 		jobs:      make(map[string]*Job),
 		startTime: time.Now(),
 		mux:       http.NewServeMux(),
@@ -128,6 +132,26 @@ func (s *Server) setupRoutes() {
 
 	// Apply (fleet-wide)
 	s.mux.HandleFunc("POST /api/apply", s.authMiddleware(s.handleApplyAll))
+
+	// Pull mode
+	s.mux.HandleFunc("GET /api/pull-mode/status", s.authMiddleware(s.handlePullModeStatus))
+	s.mux.HandleFunc("POST /api/pull-mode/{name}/trigger", s.authMiddleware(s.handlePullModeTrigger))
+
+	// APT package management (Ubuntu hosts)
+	s.mux.HandleFunc("GET /api/hosts/{name}/apt/updates", s.authMiddleware(s.handleGetAptUpdates))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/update", s.authMiddleware(s.handleAptUpdate))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/upgrade", s.authMiddleware(s.handleAptUpgrade))
+	s.mux.HandleFunc("GET /api/hosts/{name}/apt/packages", s.authMiddleware(s.handleGetAptPackages))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/install", s.authMiddleware(s.handleAptInstall))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/remove", s.authMiddleware(s.handleAptRemove))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/autoremove", s.authMiddleware(s.handleAptAutoremove))
+	s.mux.HandleFunc("POST /api/hosts/{name}/apt/clean", s.authMiddleware(s.handleAptClean))
+
+	// OS info
+	s.mux.HandleFunc("GET /api/hosts/{name}/os-info", s.authMiddleware(s.handleGetOSInfo))
+
+	// Web UI
+	s.setupUIRoutes()
 }
 
 // authMiddleware wraps handlers with token authentication
@@ -222,20 +246,52 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	hosts := s.inventory.AllHosts()
 	result := make([]map[string]any, 0, len(hosts))
 
+	// Check pull mode status for hosts
+	installer := pullmode.NewInstaller()
+
 	for _, h := range hosts {
-		result = append(result, map[string]any{
-			"name":    h.Name,
-			"address": h.Addr,
-			"port":    h.SSHPort,
-			"base":    h.Base,
-			"roles":   h.Roles,
-		})
+		hostData := map[string]any{
+			"name":     h.Name,
+			"addr":     h.Addr,
+			"port":     h.SSHPort,
+			"base":     h.Base,
+			"roles":    h.Roles,
+			"ssh_user": h.SSHUser,
+		}
+
+		// Try to get connection and state
+		client, err := s.pool.GetWithUser(ctx, h.Addr, h.SSHPort, h.SSHUser)
+		if err != nil {
+			hostData["online"] = false
+			hostData["error"] = err.Error()
+		} else {
+			hostData["online"] = true
+
+			// Get host state
+			hostState, _ := s.stateMgr.ReadState(ctx, client)
+			if hostState != nil {
+				hostData["drift_detected"] = hostState.DriftDetected
+				hostData["last_apply"] = hostState.LastApply
+				hostData["last_drift_check"] = hostState.LastDriftCheck
+				hostData["generation"] = hostState.CurrentGeneration
+				hostData["healthy"] = !hostState.DriftDetected
+			}
+
+			// Check pull mode status
+			status, err := installer.Status(ctx, client)
+			if err == nil && status.Installed {
+				hostData["pull_mode"] = true
+			}
+		}
+
+		result = append(result, hostData)
 	}
 
-	s.jsonResponse(w, result, http.StatusOK)
+	s.jsonResponse(w, map[string]any{"hosts": result}, http.StatusOK)
 }
 
 func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
@@ -247,18 +303,21 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	installer := pullmode.NewInstaller()
 
 	// Get connection and state
 	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
 	if err != nil {
 		s.jsonResponse(w, map[string]any{
-			"name":    host.Name,
-			"address": host.Addr,
-			"port":    host.SSHPort,
-			"base":    host.Base,
-			"groups":  host.Roles,
-			"online":  false,
-			"error":   err.Error(),
+			"name":      host.Name,
+			"addr":      host.Addr,
+			"port":      host.SSHPort,
+			"base":      host.Base,
+			"ssh_user":  host.SSHUser,
+			"roles":     host.Roles,
+			"online":    false,
+			"pull_mode": false,
+			"error":     err.Error(),
 		}, http.StatusOK)
 		return
 	}
@@ -270,20 +329,74 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	gen, storePath, _ := s.deployer.GetCurrentGeneration(ctx, client, host.Base)
 	reboot, _ := s.deployer.CheckRebootNeeded(ctx, client, host.Base)
 
+	// Check pull mode status
+	pullModeEnabled := false
+	var pullModeStatus map[string]any
+	if status, err := installer.Status(ctx, client); err == nil {
+		pullModeEnabled = status.Installed
+		if status.Installed {
+			pullModeStatus = map[string]any{
+				"timer_active":   status.TimerActive,
+				"last_run":       strings.TrimSpace(status.LastRun),
+				"last_result":    strings.TrimSpace(status.LastResult),
+				"next_run":       strings.TrimSpace(status.NextRun),
+				"current_commit": strings.TrimSpace(status.CurrentCommit),
+			}
+		}
+	}
+
 	result := map[string]any{
 		"name":       host.Name,
-		"address":    host.Addr,
+		"addr":       host.Addr,
 		"port":       host.SSHPort,
 		"base":       host.Base,
-		"groups":     host.Roles,
+		"ssh_user":   host.SSHUser,
+		"roles":      host.Roles,
 		"online":     true,
 		"generation": gen,
 		"store_path": storePath,
 		"reboot":     reboot,
+		"pull_mode":  pullModeEnabled,
 	}
 
+	if pullModeStatus != nil {
+		result["pull_mode_status"] = pullModeStatus
+	}
+
+	// Only include non-empty state fields
 	if hostState != nil {
-		result["state"] = hostState
+		stateData := make(map[string]any)
+		if hostState.CurrentGeneration > 0 {
+			stateData["generation"] = hostState.CurrentGeneration
+		}
+		if hostState.ManifestHash != "" {
+			stateData["manifest_hash"] = hostState.ManifestHash
+		}
+		if hostState.StorePath != "" {
+			stateData["store_path"] = hostState.StorePath
+		}
+		if !hostState.LastApply.IsZero() {
+			stateData["last_apply"] = hostState.LastApply
+		}
+		if hostState.DriftDetected {
+			stateData["drift_detected"] = true
+			stateData["drift_files"] = hostState.DriftFiles
+		}
+		if !hostState.LastDriftCheck.IsZero() {
+			stateData["last_drift_check"] = hostState.LastDriftCheck
+		}
+		if hostState.RebootRequired {
+			stateData["reboot_required"] = true
+		}
+		if hostState.PendingUpdates > 0 {
+			stateData["pending_updates"] = hostState.PendingUpdates
+		}
+		if hostState.SecurityUpdates > 0 {
+			stateData["security_updates"] = hostState.SecurityUpdates
+		}
+		if len(stateData) > 0 {
+			result["state"] = stateData
+		}
 	}
 
 	s.jsonResponse(w, result, http.StatusOK)
@@ -919,4 +1032,427 @@ func (s *Server) sendWebhook(event string, data map[string]any) {
 		return
 	}
 	resp.Body.Close()
+}
+
+// Pull mode handlers
+
+func (s *Server) handlePullModeStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	hosts := s.inventory.AllHosts()
+
+	installer := pullmode.NewInstaller()
+	results := make([]map[string]any, 0)
+
+	for _, host := range hosts {
+		client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+		if err != nil {
+			results = append(results, map[string]any{
+				"host":   host.Name,
+				"online": false,
+				"error":  err.Error(),
+			})
+			continue
+		}
+
+		status, err := installer.Status(ctx, client)
+		if err != nil {
+			results = append(results, map[string]any{
+				"host":   host.Name,
+				"online": true,
+				"error":  err.Error(),
+			})
+			continue
+		}
+
+		results = append(results, map[string]any{
+			"host":           host.Name,
+			"online":         true,
+			"installed":      status.Installed,
+			"timer_active":   status.TimerActive,
+			"last_run":       strings.TrimSpace(status.LastRun),
+			"last_result":    strings.TrimSpace(status.LastResult),
+			"next_run":       strings.TrimSpace(status.NextRun),
+			"current_commit": strings.TrimSpace(status.CurrentCommit),
+		})
+	}
+
+	s.jsonResponse(w, results, http.StatusOK)
+}
+
+func (s *Server) handlePullModeTrigger(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	installer := pullmode.NewInstaller()
+
+	// Check if pull mode is installed
+	status, err := installer.Status(ctx, client)
+	if err != nil {
+		s.jsonError(w, "failed to get status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !status.Installed {
+		s.jsonError(w, "pull mode is not installed on this host", http.StatusBadRequest)
+		return
+	}
+
+	// Trigger the pull
+	if err := installer.TriggerPull(ctx, client); err != nil {
+		s.jsonError(w, "failed to trigger pull: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]string{
+		"status":  "triggered",
+		"host":    host.Name,
+		"message": "Pull operation started",
+	}, http.StatusAccepted)
+}
+
+// APT package management handlers
+
+func (s *Server) handleGetAptUpdates(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	status, err := s.aptMgr.CheckUpdates(ctx, client)
+	if err != nil {
+		s.jsonError(w, "failed to check updates: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update state with pending updates info
+	hostState, _ := s.stateMgr.ReadState(ctx, client)
+	if hostState != nil {
+		hostState.PendingUpdates = status.PendingUpdates
+		hostState.SecurityUpdates = status.SecurityUpdates
+		hostState.LastUpdateCheck = status.LastCheck
+		hostState.RebootRequired = status.RebootRequired
+		s.stateMgr.WriteState(ctx, client, hostState)
+	}
+
+	s.jsonResponse(w, status, http.StatusOK)
+}
+
+func (s *Server) handleAptUpdate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	// Run apt-get update
+	result, err := client.ExecSudo(ctx, "apt-get update -qq")
+	if err != nil {
+		s.jsonError(w, "apt update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if result.ExitCode != 0 {
+		s.jsonError(w, "apt update failed: "+result.Stderr, http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]string{"status": "updated"}, http.StatusOK)
+}
+
+func (s *Server) handleAptUpgrade(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	// Check for security-only flag
+	securityOnly := r.URL.Query().Get("security") == "true"
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	result, err := s.aptMgr.Upgrade(ctx, client, securityOnly)
+	if err != nil {
+		s.jsonError(w, "upgrade failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update state
+	hostState, _ := s.stateMgr.ReadState(ctx, client)
+	if hostState != nil {
+		hostState.LastOSUpdate = result.EndTime
+		s.stateMgr.WriteState(ctx, client, hostState)
+	}
+
+	s.jsonResponse(w, result, http.StatusOK)
+}
+
+func (s *Server) handleGetAptPackages(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	packages, err := s.aptMgr.GetInstalledPackages(ctx, client)
+	if err != nil {
+		s.jsonError(w, "failed to get packages: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]any{
+		"count":    len(packages),
+		"packages": packages,
+	}, http.StatusOK)
+}
+
+func (s *Server) handleAptInstall(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Package string `json:"package"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Package == "" {
+		s.jsonError(w, "package name required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.aptMgr.InstallPackage(ctx, client, req.Package); err != nil {
+		s.jsonError(w, "install failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]string{
+		"status":  "installed",
+		"package": req.Package,
+	}, http.StatusOK)
+}
+
+func (s *Server) handleAptRemove(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Package string `json:"package"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Package == "" {
+		s.jsonError(w, "package name required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.aptMgr.RemovePackage(ctx, client, req.Package); err != nil {
+		s.jsonError(w, "remove failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]string{
+		"status":  "removed",
+		"package": req.Package,
+	}, http.StatusOK)
+}
+
+func (s *Server) handleAptAutoremove(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	removed, err := s.aptMgr.AutoRemove(ctx, client)
+	if err != nil {
+		s.jsonError(w, "autoremove failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]any{
+		"status":  "completed",
+		"removed": removed,
+		"count":   len(removed),
+	}, http.StatusOK)
+}
+
+func (s *Server) handleAptClean(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	if host.Base != "ubuntu" {
+		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	freedBytes, err := s.aptMgr.CleanCache(ctx, client)
+	if err != nil {
+		s.jsonError(w, "clean failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, map[string]any{
+		"status":      "cleaned",
+		"freed_bytes": freedBytes,
+		"freed_mb":    float64(freedBytes) / 1024 / 1024,
+	}, http.StatusOK)
+}
+
+// OS info handler
+
+func (s *Server) handleGetOSInfo(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	host, ok := s.inventory.GetHost(name)
+	if !ok {
+		s.jsonError(w, "host not found", http.StatusNotFound)
+		return
+	}
+
+	ctx := r.Context()
+	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+	if err != nil {
+		s.jsonError(w, "connection failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	osInfo, err := s.stateMgr.GatherOSInfo(ctx, client)
+	if err != nil {
+		s.jsonError(w, "failed to gather OS info: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update state with OS info
+	hostState, _ := s.stateMgr.ReadState(ctx, client)
+	if hostState != nil {
+		hostState.OSInfo = osInfo
+		s.stateMgr.WriteState(ctx, client, hostState)
+	}
+
+	s.jsonResponse(w, osInfo, http.StatusOK)
 }

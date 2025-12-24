@@ -161,8 +161,8 @@ func (i *Installer) Status(ctx context.Context, client *ssh.Client) (*Status, er
 		status.NextRun = result.Stdout
 	}
 
-	// Get repo info
-	result, err = client.ExecSudo(ctx, "cd /var/lib/nixfleet/repo && git rev-parse --short HEAD 2>/dev/null || echo unknown")
+	// Get repo info (use safe.directory to handle root-owned repo, wrap in bash because cd is a built-in)
+	result, err = client.ExecSudo(ctx, "bash -c 'cd /var/lib/nixfleet/repo && git -c safe.directory=/var/lib/nixfleet/repo rev-parse --short HEAD 2>/dev/null || echo unknown'")
 	if err == nil {
 		status.CurrentCommit = result.Stdout
 	}

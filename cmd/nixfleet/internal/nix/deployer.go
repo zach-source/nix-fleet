@@ -119,29 +119,57 @@ func (d *Deployer) ActivateDarwin(ctx context.Context, client *ssh.Client, closu
 
 // GetCurrentGeneration gets the current generation on a host
 func (d *Deployer) GetCurrentGeneration(ctx context.Context, client *ssh.Client, base string) (int, string, error) {
-	var cmd string
+	var profilePath, storePathCmd string
 	switch base {
 	case "nixos":
-		cmd = "readlink /run/current-system"
+		profilePath = "/nix/var/nix/profiles/system"
+		storePathCmd = "readlink /run/current-system"
 	case "ubuntu":
-		cmd = "readlink /nix/var/nix/profiles/nixfleet/system"
+		profilePath = "/nix/var/nix/profiles/nixfleet/system"
+		storePathCmd = "readlink -f /nix/var/nix/profiles/nixfleet/system"
 	case "darwin":
-		cmd = "readlink /run/current-system"
+		profilePath = "/nix/var/nix/profiles/system"
+		storePathCmd = "readlink /run/current-system"
 	default:
 		return 0, "", fmt.Errorf("unknown base: %s", base)
 	}
 
-	result, err := client.Exec(ctx, cmd)
+	// Get the store path
+	result, err := client.Exec(ctx, storePathCmd)
 	if err != nil {
 		return 0, "", err
 	}
-
 	if result.ExitCode != 0 {
-		return 0, "", fmt.Errorf("failed to get current generation: %s", result.Stderr)
+		return 0, "", fmt.Errorf("failed to get current store path: %s", result.Stderr)
+	}
+	storePath := strings.TrimSpace(result.Stdout)
+
+	// Get generation number by reading the symlink target name
+	result, err = client.Exec(ctx, fmt.Sprintf("readlink %s", profilePath))
+	if err != nil {
+		return 0, storePath, nil
+	}
+	if result.ExitCode != 0 {
+		return 0, storePath, nil
 	}
 
-	storePath := strings.TrimSpace(result.Stdout)
-	return 0, storePath, nil // TODO: parse generation number
+	// Parse generation from link name like "system-42-link"
+	linkName := strings.TrimSpace(result.Stdout)
+	gen := parseGeneration(linkName)
+
+	return gen, storePath, nil
+}
+
+// parseGeneration extracts generation number from profile link name
+func parseGeneration(linkName string) int {
+	// Handle names like "system-42-link" or "system-42"
+	parts := strings.Split(linkName, "-")
+	if len(parts) >= 2 {
+		var gen int
+		fmt.Sscanf(parts[1], "%d", &gen)
+		return gen
+	}
+	return 0
 }
 
 // Rollback rolls back to a previous generation

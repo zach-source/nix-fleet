@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NixFleet Dashboard</title>
+    <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>NixFleet</h1>
+            <span class="subtitle">Fleet Management Dashboard</span>
+        </div>
+        <div class="header-actions">
+            <button onclick="refreshAll()" class="btn btn-secondary">Refresh</button>
+            <button onclick="checkAllDrift()" class="btn btn-primary">Check All Drift</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="stats-bar">
+            <div class="stat">
+                <span class="stat-value" id="total-hosts">-</span>
+                <span class="stat-label">Total Hosts</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="healthy-hosts">-</span>
+                <span class="stat-label">Healthy</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="drifted-hosts">-</span>
+                <span class="stat-label">Drifted</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="pull-mode-hosts">-</span>
+                <span class="stat-label">Pull Mode</span>
+            </div>
+        </section>
+
+        <section class="hosts-section">
+            <h2>Hosts</h2>
+            <div class="hosts-grid" id="hosts-grid">
+                <div class="loading">Loading hosts...</div>
+            </div>
+        </section>
+
+        <section class="activity-section">
+            <h2>Recent Activity</h2>
+            <div class="activity-log" id="activity-log">
+                <div class="activity-item">Waiting for activity...</div>
+            </div>
+        </section>
+    </main>
+
+    <div id="modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Host Details</h3>
+                <button onclick="closeModal()" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+            </div>
+        </div>
+    </div>
+
+    <script src="/ui/app.js"></script>
+</body>
+</html>

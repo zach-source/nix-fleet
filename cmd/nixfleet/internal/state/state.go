@@ -20,11 +20,27 @@ const (
 	StateDir = "/var/lib/nixfleet"
 )
 
+// OSInfo contains operating system information
+type OSInfo struct {
+	Name         string `json:"name"`         // e.g., "Ubuntu"
+	Version      string `json:"version"`      // e.g., "24.04"
+	VersionID    string `json:"version_id"`   // e.g., "24.04"
+	PrettyName   string `json:"pretty_name"`  // e.g., "Ubuntu 24.04.1 LTS"
+	Codename     string `json:"codename"`     // e.g., "noble"
+	Kernel       string `json:"kernel"`       // e.g., "6.8.0-45-generic"
+	Architecture string `json:"architecture"` // e.g., "x86_64"
+	Uptime       string `json:"uptime"`       // e.g., "5 days, 3:22"
+	LastBoot     string `json:"last_boot"`    // e.g., "2024-12-18 10:30:00"
+}
+
 // HostState represents the current state of a managed host
 type HostState struct {
 	// Identity
 	Hostname string `json:"hostname"`
 	Base     string `json:"base"` // ubuntu, nixos, darwin
+
+	// OS Information
+	OSInfo *OSInfo `json:"os_info,omitempty"`
 
 	// Current deployment
 	CurrentGeneration int       `json:"current_generation"`
@@ -297,6 +313,78 @@ func (m *Manager) FixDrift(ctx context.Context, client *ssh.Client, drift DriftR
 	}
 
 	return nil
+}
+
+// GatherOSInfo collects operating system information from a remote host
+func (m *Manager) GatherOSInfo(ctx context.Context, client *ssh.Client) (*OSInfo, error) {
+	info := &OSInfo{}
+
+	// Parse /etc/os-release for distribution info
+	osReleaseCmd := `cat /etc/os-release 2>/dev/null | grep -E '^(NAME|VERSION|VERSION_ID|PRETTY_NAME|VERSION_CODENAME)=' | sed 's/"//g'`
+	result, err := client.Exec(ctx, osReleaseCmd)
+	if err == nil && result.ExitCode == 0 {
+		for _, line := range strings.Split(result.Stdout, "\n") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key, value := parts[0], parts[1]
+			switch key {
+			case "NAME":
+				info.Name = value
+			case "VERSION":
+				info.Version = value
+			case "VERSION_ID":
+				info.VersionID = value
+			case "PRETTY_NAME":
+				info.PrettyName = value
+			case "VERSION_CODENAME":
+				info.Codename = value
+			}
+		}
+	}
+
+	// Get kernel version
+	kernelResult, err := client.Exec(ctx, "uname -r")
+	if err == nil && kernelResult.ExitCode == 0 {
+		info.Kernel = strings.TrimSpace(kernelResult.Stdout)
+	}
+
+	// Get architecture
+	archResult, err := client.Exec(ctx, "uname -m")
+	if err == nil && archResult.ExitCode == 0 {
+		info.Architecture = strings.TrimSpace(archResult.Stdout)
+	}
+
+	// Get uptime in human-readable format
+	uptimeResult, err := client.Exec(ctx, "uptime -p 2>/dev/null || uptime | sed 's/.*up //' | sed 's/,.*load.*//'")
+	if err == nil && uptimeResult.ExitCode == 0 {
+		info.Uptime = strings.TrimSpace(uptimeResult.Stdout)
+	}
+
+	// Get last boot time
+	bootResult, err := client.Exec(ctx, "who -b 2>/dev/null | awk '{print $3, $4}' || uptime -s 2>/dev/null")
+	if err == nil && bootResult.ExitCode == 0 {
+		info.LastBoot = strings.TrimSpace(bootResult.Stdout)
+	}
+
+	return info, nil
+}
+
+// UpdateOSInfo updates the OS information in state
+func (m *Manager) UpdateOSInfo(ctx context.Context, client *ssh.Client) error {
+	state, err := m.ReadState(ctx, client)
+	if err != nil {
+		state = NewHostState("", "")
+	}
+
+	osInfo, err := m.GatherOSInfo(ctx, client)
+	if err != nil {
+		return fmt.Errorf("gathering OS info: %w", err)
+	}
+
+	state.OSInfo = osInfo
+	return m.WriteState(ctx, client, state)
 }
 
 // hashContent returns SHA256 hash of content
