@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -3018,8 +3019,11 @@ Commands:
   init-intermediate - Create an intermediate CA (signed by root)
   issue            - Issue a certificate for a host
   status           - Show certificate status for fleet hosts
+  renew            - Renew expiring certificates
   export           - Export CA certificate for external trust
-  certmanager      - Integration with Kubernetes cert-manager`,
+  certmanager      - Integration with Kubernetes cert-manager
+  install-timer    - Install systemd timer for auto-rotation
+  uninstall-timer  - Remove systemd timer`,
 	}
 
 	cmd.AddCommand(pkiInitCmd())
@@ -3031,6 +3035,8 @@ Commands:
 	cmd.AddCommand(pkiRenewCmd())
 	cmd.AddCommand(pkiRevokeCmd())
 	cmd.AddCommand(pkiCertManagerCmd())
+	cmd.AddCommand(pkiInstallTimerCmd())
+	cmd.AddCommand(pkiUninstallTimerCmd())
 
 	return cmd
 }
@@ -4239,4 +4245,193 @@ func deployFileContent(ctx context.Context, client *ssh.Client, content []byte, 
 
 	_, err := client.Exec(ctx, cmd)
 	return err
+}
+
+func pkiInstallTimerCmd() *cobra.Command {
+	var (
+		configFile string
+		pkiDir     string
+		identities []string
+		schedule   string
+		unitName   string
+		dryRun     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "install-timer",
+		Short: "Install systemd timer for automatic certificate rotation",
+		Long: `Install a systemd timer that automatically renews expiring certificates.
+
+The timer runs the 'nixfleet pki renew' command on the specified schedule.
+Default schedule is daily with a random delay of up to 1 hour.
+
+Schedule examples:
+  daily          - Once per day (default)
+  weekly         - Once per week (Monday)
+  *-*-* 03:00:00 - Every day at 3 AM
+  Mon *-*-* 02:00:00 - Every Monday at 2 AM
+
+Examples:
+  nixfleet pki install-timer --config secrets/pki.yaml
+  nixfleet pki install-timer --schedule weekly
+  nixfleet pki install-timer --dry-run  # Preview without installing`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Get the absolute path to nixfleet binary
+			nixfleetPath, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("getting executable path: %w", err)
+			}
+			nixfleetPath, err = filepath.Abs(nixfleetPath)
+			if err != nil {
+				return fmt.Errorf("getting absolute path: %w", err)
+			}
+
+			// Get absolute path to pki dir
+			absPkiDir, err := filepath.Abs(pkiDir)
+			if err != nil {
+				return fmt.Errorf("getting absolute pki dir: %w", err)
+			}
+
+			// Resolve identity file paths
+			var absIdentities []string
+			for _, id := range identities {
+				absID, err := filepath.Abs(id)
+				if err != nil {
+					return fmt.Errorf("resolving identity path %s: %w", id, err)
+				}
+				absIdentities = append(absIdentities, absID)
+			}
+
+			// Resolve config file path
+			absConfig := ""
+			if configFile != "" {
+				absConfig, err = filepath.Abs(configFile)
+				if err != nil {
+					return fmt.Errorf("resolving config path: %w", err)
+				}
+			}
+
+			// Generate systemd units
+			serviceContent := pki.SystemdService(nixfleetPath, absConfig, absPkiDir, absIdentities)
+			timerContent := pki.SystemdTimer(schedule)
+
+			servicePath, timerPath := pki.SystemdUnitPaths(unitName)
+
+			if dryRun {
+				fmt.Println("=== DRY RUN - Would create the following files ===")
+				fmt.Println()
+				fmt.Printf("=== %s ===\n", servicePath)
+				fmt.Println(serviceContent)
+				fmt.Printf("=== %s ===\n", timerPath)
+				fmt.Println(timerContent)
+				fmt.Println("=== Commands that would be run ===")
+				fmt.Println("  systemctl daemon-reload")
+				fmt.Printf("  systemctl enable --now %s.timer\n", unitName)
+				return nil
+			}
+
+			// Check if running as root
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("must be run as root to install systemd units (try: sudo nixfleet pki install-timer ...)")
+			}
+
+			// Write service file
+			if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+				return fmt.Errorf("writing service file: %w", err)
+			}
+			fmt.Printf("Created %s\n", servicePath)
+
+			// Write timer file
+			if err := os.WriteFile(timerPath, []byte(timerContent), 0644); err != nil {
+				return fmt.Errorf("writing timer file: %w", err)
+			}
+			fmt.Printf("Created %s\n", timerPath)
+
+			// Reload systemd
+			if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+				return fmt.Errorf("systemctl daemon-reload: %w", err)
+			}
+			fmt.Println("Reloaded systemd daemon")
+
+			// Enable and start timer
+			if err := exec.Command("systemctl", "enable", "--now", unitName+".timer").Run(); err != nil {
+				return fmt.Errorf("enabling timer: %w", err)
+			}
+			fmt.Printf("Enabled and started %s.timer\n", unitName)
+
+			fmt.Println()
+			fmt.Println("Certificate rotation timer installed successfully!")
+			fmt.Println()
+			fmt.Println("Useful commands:")
+			fmt.Printf("  systemctl status %s.timer   # Check timer status\n", unitName)
+			fmt.Printf("  systemctl list-timers       # List all timers\n")
+			fmt.Printf("  journalctl -u %s            # View service logs\n", unitName)
+			fmt.Printf("  systemctl start %s          # Run renewal now\n", unitName)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "PKI config file")
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&schedule, "schedule", "daily", "Timer schedule (systemd calendar format)")
+	cmd.Flags().StringVar(&unitName, "unit-name", "nixfleet-pki-renew", "Name for systemd units")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview units without installing")
+
+	return cmd
+}
+
+func pkiUninstallTimerCmd() *cobra.Command {
+	var (
+		unitName string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "uninstall-timer",
+		Short: "Remove systemd timer for certificate rotation",
+		Long: `Remove the systemd timer and service for automatic certificate rotation.
+
+Examples:
+  nixfleet pki uninstall-timer
+  nixfleet pki uninstall-timer --unit-name custom-name`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Check if running as root
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("must be run as root to remove systemd units (try: sudo nixfleet pki uninstall-timer ...)")
+			}
+
+			servicePath, timerPath := pki.SystemdUnitPaths(unitName)
+
+			// Stop and disable timer
+			_ = exec.Command("systemctl", "stop", unitName+".timer").Run()
+			_ = exec.Command("systemctl", "disable", unitName+".timer").Run()
+			fmt.Printf("Stopped and disabled %s.timer\n", unitName)
+
+			// Remove files
+			if err := os.Remove(timerPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing timer file: %w", err)
+			}
+			if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing service file: %w", err)
+			}
+			fmt.Printf("Removed %s\n", servicePath)
+			fmt.Printf("Removed %s\n", timerPath)
+
+			// Reload systemd
+			if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+				return fmt.Errorf("systemctl daemon-reload: %w", err)
+			}
+			fmt.Println("Reloaded systemd daemon")
+
+			fmt.Println()
+			fmt.Println("Certificate rotation timer removed.")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&unitName, "unit-name", "nixfleet-pki-renew", "Name of systemd units to remove")
+
+	return cmd
 }
