@@ -133,6 +133,7 @@ func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
 // CertRequest holds parameters for issuing a host certificate
 type CertRequest struct {
 	Hostname string
+	Name     string        // Certificate name (e.g., "web", "api"). Empty = default "host"
 	SANs     []string      // Additional DNS names and IP addresses
 	Validity time.Duration // Certificate validity period
 }
@@ -142,11 +143,51 @@ type IssuedCert struct {
 	CertPEM    []byte
 	KeyPEM     []byte
 	Hostname   string
+	Name       string // Certificate name within the host
 	Serial     string
 	NotBefore  time.Time
 	NotAfter   time.Time
 	SANs       []string
 	Thumbprint string
+}
+
+// CertInstallSpec defines how/where to install a certificate on a host
+type CertInstallSpec struct {
+	Name        string `json:"name"`                  // Certificate name (matches IssuedCert.Name)
+	InstallPath string `json:"installPath,omitempty"` // Directory to install certs (default: /etc/nixfleet/pki)
+	CertFile    string `json:"certFile,omitempty"`    // Certificate filename (default: {name}.crt)
+	KeyFile     string `json:"keyFile,omitempty"`     // Key filename (default: {name}.key)
+	Owner       string `json:"owner,omitempty"`       // File owner (default: root)
+	Group       string `json:"group,omitempty"`       // File group (default: root)
+	CertMode    string `json:"certMode,omitempty"`    // Cert permissions (default: 0644)
+	KeyMode     string `json:"keyMode,omitempty"`     // Key permissions (default: 0600)
+}
+
+// DefaultCertInstallSpec returns default install spec for a certificate
+func DefaultCertInstallSpec(name string) *CertInstallSpec {
+	if name == "" {
+		name = "host"
+	}
+	return &CertInstallSpec{
+		Name:        name,
+		InstallPath: "/etc/nixfleet/pki",
+		CertFile:    name + ".crt",
+		KeyFile:     name + ".key",
+		Owner:       "root",
+		Group:       "root",
+		CertMode:    "0644",
+		KeyMode:     "0600",
+	}
+}
+
+// FullCertPath returns the full path to the certificate file
+func (s *CertInstallSpec) FullCertPath() string {
+	return s.InstallPath + "/" + s.CertFile
+}
+
+// FullKeyPath returns the full path to the key file
+func (s *CertInstallSpec) FullKeyPath() string {
+	return s.InstallPath + "/" + s.KeyFile
 }
 
 // IssueCert issues a new certificate for a host
@@ -220,10 +261,17 @@ func (ca *CA) IssueCert(req *CertRequest) (*IssuedCert, error) {
 	// Compute thumbprint
 	thumbprint := computeThumbprint(certDER)
 
+	// Determine certificate name
+	certName := req.Name
+	if certName == "" {
+		certName = "host"
+	}
+
 	return &IssuedCert{
 		CertPEM:    certPEM,
 		KeyPEM:     keyPEM,
 		Hostname:   req.Hostname,
+		Name:       certName,
 		Serial:     serialNumber.String(),
 		NotBefore:  now,
 		NotAfter:   now.Add(validity),

@@ -84,20 +84,26 @@ func (s *Store) LoadCA(ctx context.Context) (*CA, error) {
 }
 
 // SaveHostCert saves a host certificate and encrypted private key
+// Supports named certificates: secrets/pki/hosts/{hostname}/{name}.crt
 func (s *Store) SaveHostCert(cert *IssuedCert) error {
-	hostDir := filepath.Join(s.baseDir, "hosts")
+	certName := cert.Name
+	if certName == "" {
+		certName = "host"
+	}
+
+	hostDir := filepath.Join(s.baseDir, "hosts", cert.Hostname)
 	if err := os.MkdirAll(hostDir, 0755); err != nil {
-		return fmt.Errorf("creating hosts directory: %w", err)
+		return fmt.Errorf("creating host directory: %w", err)
 	}
 
 	// Save certificate (public)
-	certPath := filepath.Join(hostDir, cert.Hostname+".crt")
+	certPath := filepath.Join(hostDir, certName+".crt")
 	if err := os.WriteFile(certPath, cert.CertPEM, 0644); err != nil {
 		return fmt.Errorf("writing host certificate: %w", err)
 	}
 
 	// Encrypt and save private key
-	keyPath := filepath.Join(hostDir, cert.Hostname+".key.age")
+	keyPath := filepath.Join(hostDir, certName+".key.age")
 	if err := s.encryptAndSave(cert.KeyPEM, keyPath); err != nil {
 		return fmt.Errorf("encrypting host private key: %w", err)
 	}
@@ -105,22 +111,31 @@ func (s *Store) SaveHostCert(cert *IssuedCert) error {
 	return nil
 }
 
-// LoadHostCert loads a host certificate from disk
+// LoadHostCert loads a host certificate from disk (default "host" name)
 func (s *Store) LoadHostCert(ctx context.Context, hostname string) (*IssuedCert, error) {
-	hostDir := filepath.Join(s.baseDir, "hosts")
+	return s.LoadNamedCert(ctx, hostname, "host")
+}
+
+// LoadNamedCert loads a named certificate for a host
+func (s *Store) LoadNamedCert(ctx context.Context, hostname, certName string) (*IssuedCert, error) {
+	if certName == "" {
+		certName = "host"
+	}
+
+	hostDir := filepath.Join(s.baseDir, "hosts", hostname)
 
 	// Read certificate
-	certPath := filepath.Join(hostDir, hostname+".crt")
+	certPath := filepath.Join(hostDir, certName+".crt")
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("certificate for %s not found", hostname)
+			return nil, fmt.Errorf("certificate %s/%s not found", hostname, certName)
 		}
 		return nil, fmt.Errorf("reading host certificate: %w", err)
 	}
 
 	// Decrypt private key
-	keyPath := filepath.Join(hostDir, hostname+".key.age")
+	keyPath := filepath.Join(hostDir, certName+".key.age")
 	keyPEM, err := s.decryptFile(ctx, keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting host private key: %w", err)
@@ -136,6 +151,7 @@ func (s *Store) LoadHostCert(ctx context.Context, hostname string) (*IssuedCert,
 		CertPEM:    certPEM,
 		KeyPEM:     keyPEM,
 		Hostname:   hostname,
+		Name:       certName,
 		Serial:     info.Serial,
 		NotBefore:  info.NotBefore,
 		NotAfter:   info.NotAfter,
@@ -144,14 +160,22 @@ func (s *Store) LoadHostCert(ctx context.Context, hostname string) (*IssuedCert,
 	}, nil
 }
 
-// HostCertExists checks if a host certificate exists
+// HostCertExists checks if a host certificate exists (default "host" name)
 func (s *Store) HostCertExists(hostname string) bool {
-	certPath := filepath.Join(s.baseDir, "hosts", hostname+".crt")
+	return s.NamedCertExists(hostname, "host")
+}
+
+// NamedCertExists checks if a named certificate exists for a host
+func (s *Store) NamedCertExists(hostname, certName string) bool {
+	if certName == "" {
+		certName = "host"
+	}
+	certPath := filepath.Join(s.baseDir, "hosts", hostname, certName+".crt")
 	_, err := os.Stat(certPath)
 	return err == nil
 }
 
-// ListHostCerts returns a list of all host certificates
+// ListHostCerts returns a list of all hostnames with certificates
 func (s *Store) ListHostCerts() ([]string, error) {
 	hostDir := filepath.Join(s.baseDir, "hosts")
 
@@ -165,13 +189,35 @@ func (s *Store) ListHostCerts() ([]string, error) {
 
 	var hosts []string
 	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".crt") {
-			hostname := strings.TrimSuffix(entry.Name(), ".crt")
-			hosts = append(hosts, hostname)
+		if entry.IsDir() {
+			hosts = append(hosts, entry.Name())
 		}
 	}
 
 	return hosts, nil
+}
+
+// ListHostNamedCerts returns all certificate names for a host
+func (s *Store) ListHostNamedCerts(hostname string) ([]string, error) {
+	hostDir := filepath.Join(s.baseDir, "hosts", hostname)
+
+	entries, err := os.ReadDir(hostDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var certs []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".crt") {
+			certName := strings.TrimSuffix(entry.Name(), ".crt")
+			certs = append(certs, certName)
+		}
+	}
+
+	return certs, nil
 }
 
 // GetCACertPath returns the path to the CA certificate
@@ -179,19 +225,36 @@ func (s *Store) GetCACertPath() string {
 	return filepath.Join(s.baseDir, "ca", "root.crt")
 }
 
-// GetHostCertPath returns the path to a host's certificate
+// GetHostCertPath returns the path to a host's default certificate
 func (s *Store) GetHostCertPath(hostname string) string {
-	return filepath.Join(s.baseDir, "hosts", hostname+".crt")
+	return s.GetNamedCertPath(hostname, "host")
 }
 
-// GetHostKeyPath returns the path to a host's encrypted private key
+// GetNamedCertPath returns the path to a named certificate
+func (s *Store) GetNamedCertPath(hostname, certName string) string {
+	if certName == "" {
+		certName = "host"
+	}
+	return filepath.Join(s.baseDir, "hosts", hostname, certName+".crt")
+}
+
+// GetHostKeyPath returns the path to a host's default encrypted private key
 func (s *Store) GetHostKeyPath(hostname string) string {
-	return filepath.Join(s.baseDir, "hosts", hostname+".key.age")
+	return s.GetNamedKeyPath(hostname, "host")
+}
+
+// GetNamedKeyPath returns the path to a named certificate's encrypted key
+func (s *Store) GetNamedKeyPath(hostname, certName string) string {
+	if certName == "" {
+		certName = "host"
+	}
+	return filepath.Join(s.baseDir, "hosts", hostname, certName+".key.age")
 }
 
 // CertInfo contains parsed certificate information
 type CertInfo struct {
 	Hostname   string
+	Name       string // Certificate name (e.g., "host", "web", "api")
 	Serial     string
 	NotBefore  time.Time
 	NotAfter   time.Time
@@ -246,14 +309,27 @@ func ParseCertInfo(certPEM []byte) (*CertInfo, error) {
 	}, nil
 }
 
-// GetCertInfo reads and parses a host certificate from disk
+// GetCertInfo reads and parses a host's default certificate from disk
 func (s *Store) GetCertInfo(hostname string) (*CertInfo, error) {
-	certPath := filepath.Join(s.baseDir, "hosts", hostname+".crt")
+	return s.GetNamedCertInfo(hostname, "host")
+}
+
+// GetNamedCertInfo reads and parses a named certificate from disk
+func (s *Store) GetNamedCertInfo(hostname, certName string) (*CertInfo, error) {
+	if certName == "" {
+		certName = "host"
+	}
+	certPath := filepath.Join(s.baseDir, "hosts", hostname, certName+".crt")
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCertInfo(certPEM)
+	info, err := ParseCertInfo(certPEM)
+	if err != nil {
+		return nil, err
+	}
+	info.Name = certName
+	return info, nil
 }
 
 // encryption helpers

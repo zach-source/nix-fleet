@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -3013,10 +3014,11 @@ func pkiCmd() *cobra.Command {
 		Long: `Manage the fleet's Public Key Infrastructure.
 
 Commands:
-  init   - Initialize a new Certificate Authority for the fleet
-  issue  - Issue a certificate for a host
-  status - Show certificate status for fleet hosts
-  export - Export CA certificate for external trust`,
+  init        - Initialize a new Certificate Authority for the fleet
+  issue       - Issue a certificate for a host
+  status      - Show certificate status for fleet hosts
+  export      - Export CA certificate for external trust
+  certmanager - Integration with Kubernetes cert-manager`,
 	}
 
 	cmd.AddCommand(pkiInitCmd())
@@ -3026,6 +3028,7 @@ Commands:
 	cmd.AddCommand(pkiDeployCmd())
 	cmd.AddCommand(pkiRenewCmd())
 	cmd.AddCommand(pkiRevokeCmd())
+	cmd.AddCommand(pkiCertManagerCmd())
 
 	return cmd
 }
@@ -3139,6 +3142,7 @@ func pkiIssueCmd() *cobra.Command {
 		sans       []string
 		validity   string
 		all        bool
+		certName   string
 	)
 
 	cmd := &cobra.Command{
@@ -3151,9 +3155,14 @@ The certificate includes:
   - Additional SANs (DNS names and IP addresses)
   - Server and client auth extended key usage (for mTLS)
 
+Multiple named certificates per host are supported using --name:
+  - Default name is "host" if not specified
+  - Stored at: secrets/pki/hosts/{hostname}/{name}.crt
+
 Examples:
   nixfleet pki issue host-a
-  nixfleet pki issue host-a --san host-a.internal --san 192.168.1.10
+  nixfleet pki issue host-a --name web --san host-a.example.com
+  nixfleet pki issue host-a --name api --san api.host-a.internal
   nixfleet pki issue --all`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
@@ -3224,6 +3233,7 @@ Examples:
 			for _, hostname := range hostnames {
 				req := &pki.CertRequest{
 					Hostname: hostname,
+					Name:     certName,
 					SANs:     sans,
 					Validity: validityDuration,
 				}
@@ -3239,7 +3249,11 @@ Examples:
 					continue
 				}
 
-				fmt.Printf("  %s: OK (expires %s)\n", hostname, cert.NotAfter.Format("2006-01-02"))
+				certLabel := hostname
+				if certName != "" && certName != "host" {
+					certLabel = fmt.Sprintf("%s/%s", hostname, certName)
+				}
+				fmt.Printf("  %s: OK (expires %s)\n", certLabel, cert.NotAfter.Format("2006-01-02"))
 			}
 
 			fmt.Println()
@@ -3255,6 +3269,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&sans, "san", nil, "Subject Alternative Names (DNS names or IPs)")
 	cmd.Flags().StringVar(&validity, "validity", "365d", "Certificate validity (e.g., 365d, 1y)")
 	cmd.Flags().BoolVar(&all, "all", false, "Issue certificates for all hosts in inventory")
+	cmd.Flags().StringVar(&certName, "name", "", "Certificate name (default: host). Use for multiple certs per host")
 
 	return cmd
 }
@@ -3271,6 +3286,7 @@ func pkiStatusCmd() *cobra.Command {
 		Long: `Display certificate status for all hosts in the fleet.
 
 Shows:
+  - Certificate names (host, web, api, etc.)
   - Certificate expiration dates
   - Days remaining until expiry
   - Status (valid, expiring, expired)
@@ -3298,39 +3314,59 @@ Shows:
 				return nil
 			}
 
-			fmt.Printf("%-20s %-12s %-10s %-10s %s\n", "HOST", "EXPIRES", "DAYS LEFT", "STATUS", "SANs")
-			fmt.Println(strings.Repeat("-", 80))
+			fmt.Printf("%-25s %-12s %-10s %-12s %s\n", "HOST/CERT", "EXPIRES", "DAYS LEFT", "STATUS", "SANs")
+			fmt.Println(strings.Repeat("-", 90))
 
 			for _, hostname := range hosts {
-				info, err := store.GetCertInfo(hostname)
+				// List all named certs for this host
+				certNames, err := store.ListHostNamedCerts(hostname)
 				if err != nil {
-					fmt.Printf("%-20s %-12s %-10s %-10s %s\n", hostname, "ERROR", "-", "error", err.Error())
+					fmt.Printf("%-25s %-12s %-10s %-12s %s\n", hostname, "ERROR", "-", "error", err.Error())
 					continue
 				}
 
-				// Format status with color indicators
-				var statusIcon string
-				switch info.Status {
-				case "valid":
-					statusIcon = "✓ valid"
-				case "expiring":
-					statusIcon = "⚠ expiring"
-				case "expired":
-					statusIcon = "✗ expired"
-				}
+				for i, certName := range certNames {
+					info, err := store.GetNamedCertInfo(hostname, certName)
+					if err != nil {
+						label := fmt.Sprintf("%s/%s", hostname, certName)
+						fmt.Printf("%-25s %-12s %-10s %-12s %s\n", label, "ERROR", "-", "error", err.Error())
+						continue
+					}
 
-				sansStr := strings.Join(info.SANs, ", ")
-				if len(sansStr) > 30 {
-					sansStr = sansStr[:27] + "..."
-				}
+					// Format status with color indicators
+					var statusIcon string
+					switch info.Status {
+					case "valid":
+						statusIcon = "✓ valid"
+					case "expiring":
+						statusIcon = "⚠ expiring"
+					case "expired":
+						statusIcon = "✗ expired"
+					}
 
-				fmt.Printf("%-20s %-12s %-10d %-10s %s\n",
-					hostname,
-					info.NotAfter.Format("2006-01-02"),
-					info.DaysLeft,
-					statusIcon,
-					sansStr,
-				)
+					sansStr := strings.Join(info.SANs, ", ")
+					if len(sansStr) > 25 {
+						sansStr = sansStr[:22] + "..."
+					}
+
+					// Format host/cert label
+					var label string
+					if len(certNames) == 1 && certName == "host" {
+						label = hostname
+					} else if i == 0 {
+						label = fmt.Sprintf("%s/%s", hostname, certName)
+					} else {
+						label = fmt.Sprintf("  └─ %s", certName)
+					}
+
+					fmt.Printf("%-25s %-12s %-10d %-12s %s\n",
+						label,
+						info.NotAfter.Format("2006-01-02"),
+						info.DaysLeft,
+						statusIcon,
+						sansStr,
+					)
+				}
 			}
 
 			return nil
@@ -3682,6 +3718,255 @@ Examples:
 
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+
+	return cmd
+}
+
+// cert-manager integration commands
+
+func pkiCertManagerCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "certmanager",
+		Short: "Kubernetes cert-manager integration",
+		Long: `Integration with Kubernetes cert-manager for automatic certificate management.
+
+Commands:
+  serve  - Start webhook server for CSR signing
+  export - Export CA or host certificates as Kubernetes secrets
+  issuer - Generate cert-manager ClusterIssuer configuration`,
+	}
+
+	cmd.AddCommand(pkiCertManagerServeCmd())
+	cmd.AddCommand(pkiCertManagerExportCmd())
+	cmd.AddCommand(pkiCertManagerIssuerCmd())
+
+	return cmd
+}
+
+func pkiCertManagerServeCmd() *cobra.Command {
+	var (
+		pkiDir     string
+		identities []string
+		listenAddr string
+		tlsCert    string
+		tlsKey     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start cert-manager webhook server",
+		Long: `Start an HTTP(S) webhook server that signs CSRs from cert-manager.
+
+This allows cert-manager to request certificates from the NixFleet CA
+without exposing the CA private key to the Kubernetes cluster.
+
+The webhook listens for signing requests and returns signed certificates.
+
+Examples:
+  nixfleet pki certmanager serve
+  nixfleet pki certmanager serve --listen :8443 --tls-cert server.crt --tls-key server.key`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			store := pki.NewStore(pkiDir, nil, identities)
+
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			ca, err := store.LoadCA(ctx)
+			if err != nil {
+				return fmt.Errorf("loading CA: %w", err)
+			}
+
+			config := pki.DefaultCertManagerConfig()
+			config.ListenAddr = listenAddr
+			config.TLSCertFile = tlsCert
+			config.TLSKeyFile = tlsKey
+
+			webhook := pki.NewCertManagerWebhook(ca, config)
+
+			fmt.Printf("Starting cert-manager webhook server on %s\n", listenAddr)
+			if tlsCert != "" {
+				fmt.Println("TLS enabled")
+			}
+			fmt.Println("Endpoints:")
+			fmt.Println("  POST /sign   - Sign CSR")
+			fmt.Println("  GET  /health - Health check")
+
+			return webhook.StartServer(ctx)
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&listenAddr, "listen", ":8443", "Address to listen on")
+	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS")
+	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS key file for HTTPS")
+
+	return cmd
+}
+
+func pkiCertManagerExportCmd() *cobra.Command {
+	var (
+		pkiDir     string
+		identities []string
+		namespace  string
+		secretName string
+		exportCA   bool
+		hostname   string
+		certName   string
+		output     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export certificates as Kubernetes secrets",
+		Long: `Export CA or host certificates as Kubernetes TLS secrets.
+
+The generated secret can be applied directly to a Kubernetes cluster
+using kubectl apply, or saved to a file for later use.
+
+Examples:
+  # Export CA as a secret for cert-manager
+  nixfleet pki certmanager export --ca -n cert-manager
+
+  # Export a host certificate
+  nixfleet pki certmanager export --hostname myhost
+
+  # Export a named certificate for a host
+  nixfleet pki certmanager export --hostname myhost --cert-name web
+
+  # Save to file
+  nixfleet pki certmanager export --ca -o ca-secret.yaml`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			store := pki.NewStore(pkiDir, nil, identities)
+
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			var secretJSON []byte
+
+			if exportCA {
+				ca, err := store.LoadCA(ctx)
+				if err != nil {
+					return fmt.Errorf("loading CA: %w", err)
+				}
+
+				secret, err := pki.ExportCAToK8sSecret(ca, namespace, secretName)
+				if err != nil {
+					return fmt.Errorf("exporting CA secret: %w", err)
+				}
+
+				data, err := json.MarshalIndent(secret, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling secret: %w", err)
+				}
+				secretJSON = data
+			} else if hostname != "" {
+				cert, err := store.LoadNamedCert(ctx, hostname, certName)
+				if err != nil {
+					return fmt.Errorf("loading certificate: %w", err)
+				}
+
+				// Get CA cert for chain
+				caCertPEM, err := os.ReadFile(store.GetCACertPath())
+				if err != nil {
+					return fmt.Errorf("reading CA certificate: %w", err)
+				}
+
+				secret, err := pki.ExportToK8sSecret(cert, caCertPEM, namespace, secretName)
+				if err != nil {
+					return fmt.Errorf("exporting certificate secret: %w", err)
+				}
+
+				data, err := json.MarshalIndent(secret, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling secret: %w", err)
+				}
+				secretJSON = data
+			} else {
+				return fmt.Errorf("either --ca or --hostname must be specified")
+			}
+
+			if output != "" {
+				if err := os.WriteFile(output, secretJSON, 0644); err != nil {
+					return fmt.Errorf("writing output file: %w", err)
+				}
+				fmt.Printf("Secret written to %s\n", output)
+			} else {
+				fmt.Println(string(secretJSON))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Kubernetes namespace (default: cert-manager for CA, default for certs)")
+	cmd.Flags().StringVar(&secretName, "secret-name", "", "Secret name (auto-generated if not specified)")
+	cmd.Flags().BoolVar(&exportCA, "ca", false, "Export CA certificate (for cert-manager CA issuer)")
+	cmd.Flags().StringVar(&hostname, "hostname", "", "Export certificate for this host")
+	cmd.Flags().StringVar(&certName, "cert-name", "", "Certificate name (default: host)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (prints to stdout if not specified)")
+
+	return cmd
+}
+
+func pkiCertManagerIssuerCmd() *cobra.Command {
+	var (
+		secretName      string
+		secretNamespace string
+		issuerName      string
+		output          string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "issuer",
+		Short: "Generate cert-manager ClusterIssuer configuration",
+		Long: `Generate a cert-manager ClusterIssuer that uses the NixFleet CA.
+
+The issuer references a Kubernetes secret containing the CA certificate
+and key. Use 'nixfleet pki certmanager export --ca' to create the secret.
+
+Examples:
+  # Generate issuer config
+  nixfleet pki certmanager issuer
+
+  # Custom names
+  nixfleet pki certmanager issuer --issuer-name my-issuer --secret-name my-ca
+
+  # Save to file
+  nixfleet pki certmanager issuer -o issuer.yaml`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issuer := pki.GenerateCertManagerIssuer(secretName, secretNamespace, issuerName)
+
+			issuerJSON, err := json.MarshalIndent(issuer, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling issuer: %w", err)
+			}
+
+			if output != "" {
+				if err := os.WriteFile(output, issuerJSON, 0644); err != nil {
+					return fmt.Errorf("writing output file: %w", err)
+				}
+				fmt.Printf("ClusterIssuer config written to %s\n", output)
+			} else {
+				fmt.Println(string(issuerJSON))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&secretName, "secret-name", "nixfleet-ca", "Name of the CA secret")
+	cmd.Flags().StringVar(&secretNamespace, "secret-namespace", "cert-manager", "Namespace containing the CA secret")
+	cmd.Flags().StringVar(&issuerName, "issuer-name", "nixfleet-ca-issuer", "Name for the ClusterIssuer")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (prints to stdout if not specified)")
 
 	return cmd
 }
