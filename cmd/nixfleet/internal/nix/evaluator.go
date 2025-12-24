@@ -98,8 +98,10 @@ func (e *Evaluator) BuildHost(ctx context.Context, hostName string, base string)
 	flakeRef := fmt.Sprintf("%s#%s", e.flakePath, attr)
 
 	// Build the configuration
-	cmd := exec.CommandContext(ctx, e.nixBin, "build", "--no-link", "--print-out-paths", flakeRef)
+	// Use --impure and NIXPKGS_ALLOW_UNFREE=1 to allow unfree packages in user configs
+	cmd := exec.CommandContext(ctx, e.nixBin, "build", "--no-link", "--print-out-paths", "--impure", flakeRef)
 	cmd.Dir = e.flakePath
+	cmd.Env = append(os.Environ(), "NIXPKGS_ALLOW_UNFREE=1")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

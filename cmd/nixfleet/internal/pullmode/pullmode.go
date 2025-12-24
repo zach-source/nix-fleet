@@ -412,19 +412,19 @@ git reset --hard "origin/$BRANCH" 2>&1 | tee -a "$LOG_FILE"
 
 # Build and apply configuration
 log "Building configuration for $HOST_NAME..."
-if ! nix build ".#nixfleetConfigurations.$HOST_NAME.system" --no-link 2>&1 | tee -a "$LOG_FILE"; then
+if ! NIXPKGS_ALLOW_UNFREE=1 nix build ".#nixfleetConfigurations.$HOST_NAME.system" --no-link --impure 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: Build failed"
     notify "failed" "Build failed for commit $NEW_COMMIT"
     git reset --hard "$OLD_COMMIT"
     exit 1
 fi
 
-SYSTEM_PATH=$(nix path-info ".#nixfleetConfigurations.$HOST_NAME.system")
+SYSTEM_PATH=$(NIXPKGS_ALLOW_UNFREE=1 nix path-info ".#nixfleetConfigurations.$HOST_NAME.system" --impure)
 log "System path: $SYSTEM_PATH"
 
 # Activate the configuration
 log "Activating configuration..."
-if ! "$SYSTEM_PATH/bin/nixfleet-activate" 2>&1 | tee -a "$LOG_FILE"; then
+if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: Activation failed"
     notify "failed" "Activation failed for commit $NEW_COMMIT"
     exit 1
