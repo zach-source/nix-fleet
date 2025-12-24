@@ -241,8 +241,8 @@ func (i *Installer) setupRepository(ctx context.Context, client *ssh.Client, con
 			return fmt.Errorf("git clone failed: %s", result.Stderr)
 		}
 	} else {
-		// Update repository
-		updateCmd := fmt.Sprintf("cd %s && git fetch origin && git reset --hard origin/%s", config.RepoPath, config.Branch)
+		// Update repository (wrap in bash because cd is a shell builtin)
+		updateCmd := fmt.Sprintf("bash -c 'cd %s && git fetch origin && git reset --hard origin/%s'", config.RepoPath, config.Branch)
 		result, err := client.ExecSudo(ctx, updateCmd)
 		if err != nil {
 			return err
