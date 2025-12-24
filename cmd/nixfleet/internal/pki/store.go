@@ -29,7 +29,10 @@ func NewStore(baseDir string, recipients, identities []string) *Store {
 	}
 }
 
-// CAExists checks if a CA has been initialized
+// CAExists checks if a CA has been initialized.
+// Returns true if:
+// 1. Both root.crt and root.key.age exist (full root CA), OR
+// 2. root.crt exists AND intermediate CA exists (root key offline, using intermediate for signing)
 func (s *Store) CAExists() bool {
 	caCertPath := filepath.Join(s.baseDir, "ca", "root.crt")
 	caKeyPath := filepath.Join(s.baseDir, "ca", "root.key.age")
@@ -37,7 +40,17 @@ func (s *Store) CAExists() bool {
 	_, certErr := os.Stat(caCertPath)
 	_, keyErr := os.Stat(caKeyPath)
 
-	return certErr == nil && keyErr == nil
+	// Full root CA available
+	if certErr == nil && keyErr == nil {
+		return true
+	}
+
+	// Root cert exists but key is offline - check if intermediate CA is available
+	if certErr == nil && s.IntermediateCAExists() {
+		return true
+	}
+
+	return false
 }
 
 // SaveCA saves the CA certificate and encrypted private key
