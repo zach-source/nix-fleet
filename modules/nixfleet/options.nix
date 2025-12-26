@@ -276,8 +276,49 @@ let
     }
   );
 
+  # Assertion type (like NixOS)
+  assertionType = types.submodule {
+    options = {
+      assertion = mkOption {
+        type = types.bool;
+        description = "If false, the assertion fails and the build aborts";
+      };
+      message = mkOption {
+        type = types.str;
+        description = "Error message shown when the assertion fails";
+      };
+    };
+  };
+
 in
 {
+  # Top-level assertions (NixOS-compatible)
+  options.assertions = mkOption {
+    type = types.listOf assertionType;
+    default = [ ];
+    description = ''
+      List of assertions that must pass for the build to succeed.
+      Each assertion has an `assertion` boolean and a `message` string.
+    '';
+    example = [
+      {
+        assertion = true;
+        message = "Example assertion that always passes";
+      }
+    ];
+  };
+
+  # Top-level warnings (NixOS-compatible)
+  options.warnings = mkOption {
+    type = types.listOf types.str;
+    default = [ ];
+    description = ''
+      List of warning messages to display during evaluation.
+      Warnings do not fail the build but alert the user to potential issues.
+    '';
+    example = [ "This feature is deprecated" ];
+  };
+
   options.nixfleet = {
     # Host identification
     host = {

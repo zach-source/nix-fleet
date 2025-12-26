@@ -12,6 +12,40 @@ with lib;
 let
   cfg = config.nixfleet;
 
+  # Collect failed assertions
+  failedAssertions = filter (a: !a.assertion) config.assertions;
+
+  # Build assertion error message
+  assertionMessage = concatMapStringsSep "\n" (a: "- ${a.message}") failedAssertions;
+
+  # Check assertions - this will fail evaluation if any assertions fail
+  assertionsCheck =
+    if failedAssertions != [ ] then
+      throw ''
+
+        NixFleet configuration failed with ${toString (length failedAssertions)} assertion(s):
+
+        ${assertionMessage}
+
+        Fix the above issues and try again.
+      ''
+    else
+      true;
+
+  # Emit warnings during evaluation
+  warningsCheck =
+    if config.warnings != [ ] then
+      builtins.trace ''
+
+        NixFleet configuration warnings:
+        ${concatMapStringsSep "\n" (w: "- ${w}") config.warnings}
+      '' true
+    else
+      true;
+
+  # Force evaluation of assertions and warnings
+  checksPass = assertionsCheck && warningsCheck;
+
   # Build the packages profile
   packagesProfile = pkgs.buildEnv {
     name = "nixfleet-packages";
@@ -468,7 +502,9 @@ in
   # The compiled Ubuntu system
   config.nixfleet.ubuntu = {
     # Main system derivation
+    # Note: checksPass is evaluated to ensure assertions pass before building
     system =
+      assert checksPass;
       pkgs.runCommand "nixfleet-ubuntu-system-${cfg.host.name}"
         {
           passthru = {
