@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -3022,6 +3023,7 @@ Commands:
   status           - Show certificate status for fleet hosts
   renew            - Renew expiring certificates
   export           - Export CA certificate for external trust
+  trust            - Add CA to local machine's trust store
   certmanager      - Integration with Kubernetes cert-manager
   install-timer    - Install systemd timer for auto-rotation
   uninstall-timer  - Remove systemd timer`,
@@ -3032,6 +3034,7 @@ Commands:
 	cmd.AddCommand(pkiIssueCmd())
 	cmd.AddCommand(pkiStatusCmd())
 	cmd.AddCommand(pkiExportCmd())
+	cmd.AddCommand(pkiTrustCmd())
 	cmd.AddCommand(pkiDeployCmd())
 	cmd.AddCommand(pkiRenewCmd())
 	cmd.AddCommand(pkiRevokeCmd())
@@ -3647,6 +3650,119 @@ Example:
 			}
 
 			fmt.Print(string(certPEM))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+
+	return cmd
+}
+
+func pkiTrustCmd() *cobra.Command {
+	var pkiDir string
+
+	cmd := &cobra.Command{
+		Use:   "trust",
+		Short: "Add CA certificate to local trust store",
+		Long: `Add the fleet CA certificate to your local machine's trust store.
+
+This command detects your operating system and installs the CA certificate
+to the appropriate system trust store:
+
+  macOS:  System Keychain via 'security' command
+  Linux:  /usr/local/share/ca-certificates/ + update-ca-certificates (Debian/Ubuntu)
+          /etc/pki/ca-trust/source/anchors/ + update-ca-trust (RHEL/Fedora)
+
+After running this command, applications on your machine will trust
+certificates signed by the fleet CA.
+
+Examples:
+  nixfleet pki trust
+  nixfleet pki trust --pki-dir /path/to/pki`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := pki.NewStore(pkiDir, nil, nil)
+
+			if !store.CAExists() {
+				return fmt.Errorf("CA not initialized. Run 'nixfleet pki init' first")
+			}
+
+			caCertPath := store.GetCACertPath()
+			certPEM, err := os.ReadFile(caCertPath)
+			if err != nil {
+				return fmt.Errorf("reading CA certificate: %w", err)
+			}
+
+			// Create temp file for the certificate
+			tmpFile, err := os.CreateTemp("", "fleet-ca-*.crt")
+			if err != nil {
+				return fmt.Errorf("creating temp file: %w", err)
+			}
+			defer os.Remove(tmpFile.Name())
+
+			if _, err := tmpFile.Write(certPEM); err != nil {
+				return fmt.Errorf("writing temp file: %w", err)
+			}
+			tmpFile.Close()
+
+			// Detect OS and install appropriately
+			switch runtime.GOOS {
+			case "darwin":
+				fmt.Println("Installing CA certificate to macOS System Keychain...")
+				installCmd := exec.Command("sudo", "security", "add-trusted-cert",
+					"-d", "-r", "trustRoot",
+					"-k", "/Library/Keychains/System.keychain",
+					tmpFile.Name())
+				installCmd.Stdout = os.Stdout
+				installCmd.Stderr = os.Stderr
+				installCmd.Stdin = os.Stdin
+				if err := installCmd.Run(); err != nil {
+					return fmt.Errorf("adding certificate to keychain: %w", err)
+				}
+				fmt.Println("CA certificate installed to System Keychain")
+
+			case "linux":
+				// Try Debian/Ubuntu style first
+				debianPath := "/usr/local/share/ca-certificates/fleet-ca.crt"
+				if _, err := os.Stat("/usr/local/share/ca-certificates"); err == nil {
+					fmt.Println("Installing CA certificate (Debian/Ubuntu style)...")
+					copyCmd := exec.Command("sudo", "cp", tmpFile.Name(), debianPath)
+					if err := copyCmd.Run(); err != nil {
+						return fmt.Errorf("copying certificate: %w", err)
+					}
+					updateCmd := exec.Command("sudo", "update-ca-certificates")
+					updateCmd.Stdout = os.Stdout
+					updateCmd.Stderr = os.Stderr
+					if err := updateCmd.Run(); err != nil {
+						return fmt.Errorf("updating CA certificates: %w", err)
+					}
+					fmt.Printf("CA certificate installed to %s\n", debianPath)
+				} else {
+					// Try RHEL/Fedora style
+					rhelPath := "/etc/pki/ca-trust/source/anchors/fleet-ca.crt"
+					if _, err := os.Stat("/etc/pki/ca-trust/source/anchors"); err == nil {
+						fmt.Println("Installing CA certificate (RHEL/Fedora style)...")
+						copyCmd := exec.Command("sudo", "cp", tmpFile.Name(), rhelPath)
+						if err := copyCmd.Run(); err != nil {
+							return fmt.Errorf("copying certificate: %w", err)
+						}
+						updateCmd := exec.Command("sudo", "update-ca-trust")
+						updateCmd.Stdout = os.Stdout
+						updateCmd.Stderr = os.Stderr
+						if err := updateCmd.Run(); err != nil {
+							return fmt.Errorf("updating CA trust: %w", err)
+						}
+						fmt.Printf("CA certificate installed to %s\n", rhelPath)
+					} else {
+						return fmt.Errorf("could not detect Linux CA trust store location")
+					}
+				}
+
+			default:
+				return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+			}
+
+			fmt.Println("\nFleet CA is now trusted by your system.")
 			return nil
 		},
 	}
@@ -4468,6 +4584,124 @@ The init command:
 	cmd.AddCommand(k0sStatusCmd())
 	cmd.AddCommand(k0sRekeyCmd())
 	cmd.AddCommand(k0sTokenCmd())
+	cmd.AddCommand(k0sKubeconfigCmd())
+
+	return cmd
+}
+
+func k0sKubeconfigCmd() *cobra.Command {
+	var (
+		hostName   string
+		outputFile string
+		context    string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "kubeconfig",
+		Short: "Fetch admin kubeconfig from controller",
+		Long: `Fetch the admin kubeconfig from a k0s controller.
+
+This command SSHes to the controller and retrieves the admin kubeconfig,
+which can be used to manage the cluster with kubectl.
+
+Examples:
+  # Print kubeconfig to stdout
+  nixfleet k0s kubeconfig -H controller
+
+  # Save to file
+  nixfleet k0s kubeconfig -H controller -o ~/.kube/fleet.yaml
+
+  # Save with custom context name
+  nixfleet k0s kubeconfig -H controller -o ~/.kube/fleet.yaml --context fleet`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			// Load inventory
+			inv, err := inventory.LoadFromDir(inventoryPath)
+			if err != nil {
+				inv, err = inventory.LoadFromFile(inventoryPath)
+			}
+			if err != nil {
+				return fmt.Errorf("loading inventory: %w", err)
+			}
+
+			// Find target host
+			host, ok := inv.GetHost(hostName)
+			if !ok {
+				return fmt.Errorf("host %q not found in inventory", hostName)
+			}
+
+			// Connect via SSH
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+			if err != nil {
+				return fmt.Errorf("connecting to host: %w", err)
+			}
+
+			// Fetch kubeconfig
+			result, err := client.Exec(ctx, "sudo k0s kubeconfig admin")
+			if err != nil {
+				return fmt.Errorf("fetching kubeconfig: %w", err)
+			}
+			if result.ExitCode != 0 {
+				errMsg := strings.TrimSpace(result.Stderr)
+				if errMsg == "" {
+					errMsg = strings.TrimSpace(result.Stdout)
+				}
+				return fmt.Errorf("fetching kubeconfig: %s", errMsg)
+			}
+
+			kubeconfig := result.Stdout
+
+			// If custom context name provided, replace the default
+			if context != "" {
+				kubeconfig = strings.ReplaceAll(kubeconfig, "name: default", "name: "+context)
+				kubeconfig = strings.ReplaceAll(kubeconfig, "cluster: default", "cluster: "+context)
+				kubeconfig = strings.ReplaceAll(kubeconfig, "user: default", "user: "+context)
+				kubeconfig = strings.ReplaceAll(kubeconfig, "context: default", "context: "+context)
+				kubeconfig = strings.ReplaceAll(kubeconfig, "current-context: default", "current-context: "+context)
+			}
+
+			// Output to file or stdout
+			if outputFile != "" {
+				// Expand ~ to home directory
+				if strings.HasPrefix(outputFile, "~/") {
+					home, err := os.UserHomeDir()
+					if err != nil {
+						return fmt.Errorf("getting home directory: %w", err)
+					}
+					outputFile = filepath.Join(home, outputFile[2:])
+				}
+
+				// Create directory if needed
+				dir := filepath.Dir(outputFile)
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return fmt.Errorf("creating directory: %w", err)
+				}
+
+				// Write file with restricted permissions
+				if err := os.WriteFile(outputFile, []byte(kubeconfig), 0600); err != nil {
+					return fmt.Errorf("writing kubeconfig: %w", err)
+				}
+				fmt.Printf("Kubeconfig saved to %s\n", outputFile)
+				fmt.Println()
+				fmt.Println("To use this kubeconfig:")
+				fmt.Printf("  export KUBECONFIG=%s\n", outputFile)
+				fmt.Println("  kubectl get nodes")
+			} else {
+				fmt.Print(kubeconfig)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&hostName, "host", "H", "", "Controller host name (required)")
+	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (default: stdout)")
+	cmd.Flags().StringVar(&context, "context", "", "Custom context name (default: k0s default)")
+	cmd.MarkFlagRequired("host")
 
 	return cmd
 }
