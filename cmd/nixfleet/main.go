@@ -4569,15 +4569,17 @@ The k0s integration works in two modes:
 
 Workflow:
   1. nixfleet k0s init -H controller-host    # Bootstrap controller
-  2. Add worker hosts to config with role=worker
-  3. Workers auto-join on next pull
+  2. nixfleet k0s certmanager -H controller  # Deploy Fleet CA for TLS
+  3. Add worker hosts to config with role=worker
+  4. Workers auto-join on next pull
 
-The init command:
-  - Bootstraps k0s on the controller
-  - Generates join tokens for workers and controllers
-  - Encrypts tokens with age for all inventory hosts
-  - Updates host config to mark as controller
-  - Commits changes to git`,
+Commands:
+  init         - Bootstrap k0s controller and generate join tokens
+  status       - Show cluster status
+  kubeconfig   - Fetch admin kubeconfig from controller
+  certmanager  - Deploy Fleet CA to cert-manager for TLS certificates
+  token        - Generate new join tokens
+  rekey        - Re-encrypt tokens with new recipients`,
 	}
 
 	cmd.AddCommand(k0sInitCmd())
@@ -4585,6 +4587,7 @@ The init command:
 	cmd.AddCommand(k0sRekeyCmd())
 	cmd.AddCommand(k0sTokenCmd())
 	cmd.AddCommand(k0sKubeconfigCmd())
+	cmd.AddCommand(k0sCertManagerCmd())
 
 	return cmd
 }
@@ -5376,6 +5379,166 @@ Use this to rotate tokens or generate tokens with different expiry.`,
 	cmd.Flags().StringVar(&role, "role", "worker", "Token role (worker or controller)")
 	cmd.Flags().StringVar(&expiry, "expiry", "8760h", "Token expiry")
 	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients (if set, encrypts and saves token)")
+
+	return cmd
+}
+
+func k0sCertManagerCmd() *cobra.Command {
+	var (
+		hostName   string
+		pkiDir     string
+		identities []string
+		secretName string
+		namespace  string
+		issuerName string
+		verify     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "certmanager",
+		Short: "Deploy Fleet CA to cert-manager",
+		Long: `Deploy the Fleet PKI intermediate CA to Kubernetes for cert-manager.
+
+This command:
+  1. Loads the Fleet intermediate CA from the PKI store
+  2. Creates a Kubernetes TLS secret in the cert-manager namespace
+  3. Optionally verifies the ClusterIssuer becomes ready
+
+The ClusterIssuer manifest should be deployed via k0s Helm extensions
+(configured in the k0s.nix module). This command only deploys the CA secret.
+
+Prerequisites:
+  - k0s controller running with cert-manager installed
+  - Fleet PKI initialized (nixfleet pki init)
+  - Age identity for decrypting the CA private key
+
+Examples:
+  # Deploy Fleet CA to cert-manager
+  nixfleet k0s certmanager -H controller
+
+  # Deploy with custom secret name
+  nixfleet k0s certmanager -H controller --secret-name my-ca
+
+  # Deploy and verify issuer is ready
+  nixfleet k0s certmanager -H controller --verify`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			// Load inventory
+			inv, err := inventory.LoadFromDir(inventoryPath)
+			if err != nil {
+				inv, err = inventory.LoadFromFile(inventoryPath)
+			}
+			if err != nil {
+				return fmt.Errorf("loading inventory: %w", err)
+			}
+
+			// Find target host
+			host, ok := inv.GetHost(hostName)
+			if !ok {
+				return fmt.Errorf("host %q not found in inventory", hostName)
+			}
+
+			// Load age identities
+			var ageIdentities []string
+			if len(identities) > 0 {
+				ageIdentities = identities
+			} else {
+				// Try default identity location
+				home, _ := os.UserHomeDir()
+				defaultIdentity := filepath.Join(home, ".config", "age", "admin-key.txt")
+				if _, err := os.Stat(defaultIdentity); err == nil {
+					ageIdentities = []string{defaultIdentity}
+				}
+			}
+
+			if len(ageIdentities) == 0 {
+				return fmt.Errorf("no age identity specified and default not found at ~/.config/age/admin-key.txt")
+			}
+
+			// Load the intermediate CA
+			store := pki.NewStore(pkiDir, nil, ageIdentities)
+			ica, err := store.LoadIntermediateCA(ctx)
+			if err != nil {
+				return fmt.Errorf("loading intermediate CA: %w", err)
+			}
+
+			// Generate the Kubernetes secret
+			secret, err := pki.ExportIntermediateCAToK8sSecret(ica, namespace, secretName)
+			if err != nil {
+				return fmt.Errorf("generating secret: %w", err)
+			}
+
+			secretJSON, err := json.Marshal(secret)
+			if err != nil {
+				return fmt.Errorf("marshaling secret: %w", err)
+			}
+
+			// Connect via SSH
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+			if err != nil {
+				return fmt.Errorf("connecting to host: %w", err)
+			}
+
+			fmt.Printf("Deploying Fleet CA secret to %s...\n", hostName)
+
+			// Apply the secret via k0s kubectl
+			applyCmd := fmt.Sprintf("echo '%s' | sudo k0s kubectl apply -f -", string(secretJSON))
+			result, err := client.Exec(ctx, applyCmd)
+			if err != nil {
+				return fmt.Errorf("applying secret: %w", err)
+			}
+			if result.ExitCode != 0 {
+				return fmt.Errorf("applying secret: %s", strings.TrimSpace(result.Stderr))
+			}
+
+			fmt.Printf("✓ Secret %s/%s created\n", namespace, secretName)
+
+			// Verify ClusterIssuer if requested
+			if verify {
+				fmt.Printf("Verifying ClusterIssuer %s...\n", issuerName)
+
+				// Wait for issuer to be ready (up to 30 seconds)
+				for i := 0; i < 15; i++ {
+					checkCmd := fmt.Sprintf("sudo k0s kubectl get clusterissuer %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}'", issuerName)
+					result, err := client.Exec(ctx, checkCmd)
+					if err == nil && result.ExitCode == 0 {
+						status := strings.Trim(result.Stdout, "'")
+						if status == "True" {
+							fmt.Printf("✓ ClusterIssuer %s is ready\n", issuerName)
+							return nil
+						}
+					}
+					time.Sleep(2 * time.Second)
+				}
+
+				// Get more details on failure
+				describeCmd := fmt.Sprintf("sudo k0s kubectl describe clusterissuer %s", issuerName)
+				result, _ := client.Exec(ctx, describeCmd)
+				return fmt.Errorf("ClusterIssuer not ready after 30s:\n%s", result.Stdout)
+			}
+
+			fmt.Println()
+			fmt.Println("Next steps:")
+			fmt.Printf("  1. Ensure ClusterIssuer '%s' is configured in k0s.nix\n", issuerName)
+			fmt.Println("  2. Deploy the host configuration: nixfleet apply -H", hostName)
+			fmt.Printf("  3. Verify: kubectl get clusterissuer %s\n", issuerName)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&hostName, "host", "H", "", "Controller host name (required)")
+	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&secretName, "secret-name", "fleet-ca", "Name for the CA secret")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "cert-manager", "Namespace for the secret")
+	cmd.Flags().StringVar(&issuerName, "issuer-name", "fleet-ca", "ClusterIssuer name to verify")
+	cmd.Flags().BoolVar(&verify, "verify", false, "Verify ClusterIssuer becomes ready")
+	cmd.MarkFlagRequired("host")
 
 	return cmd
 }
