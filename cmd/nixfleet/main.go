@@ -4516,6 +4516,13 @@ Example:
 				return fmt.Errorf("--host is required")
 			}
 
+			// Check required tools are available
+			for _, tool := range []string{"age", "ssh-to-age"} {
+				if _, err := exec.LookPath(tool); err != nil {
+					return fmt.Errorf("%s is required but not found in PATH. Install with: nix-shell -p %s", tool, tool)
+				}
+			}
+
 			// Load inventory
 			inv, hosts, err := loadInventoryAndHosts(ctx)
 			if err != nil {
@@ -4590,22 +4597,32 @@ Example:
 				}
 			}
 
-			// Build SANs list
-			allSANs := append([]string{host.Addr, host.Name}, apiSANs...)
+			// Get the host's actual IP address (k0s doesn't accept 0.0.0.0)
+			fmt.Println("Getting host IP address...")
+			ipResult, err := client.Exec(ctx, "ip -4 addr show | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1")
+			if err != nil || ipResult.ExitCode != 0 || strings.TrimSpace(ipResult.Stdout) == "" {
+				return fmt.Errorf("failed to get host IP address: %v", err)
+			}
+			hostIP := strings.TrimSpace(ipResult.Stdout)
+			fmt.Printf("  Host IP: %s\n", hostIP)
+
+			// Build SANs list (include both hostname and IP)
+			allSANs := append([]string{host.Addr, host.Name, hostIP}, apiSANs...)
 
 			// Generate k0s.yaml
+			// Note: k0s requires actual IP, not 0.0.0.0; provider is "kuberouter" not "kube-router"
 			k0sConfig := fmt.Sprintf(`apiVersion: k0s.k0sproject.io/v1beta1
 kind: ClusterConfig
 metadata:
   name: %s
 spec:
   api:
-    address: 0.0.0.0
+    address: %s
     port: 6443
     sans:
 %s
   network:
-    provider: kube-router
+    provider: kuberouter
     podCIDR: %s
     serviceCIDR: %s
     clusterDomain: cluster.local
@@ -4613,19 +4630,25 @@ spec:
     type: etcd
   telemetry:
     enabled: false
-`, clusterName, formatYAMLList(allSANs, 6), podCIDR, serviceCIDR)
+`, clusterName, hostIP, formatYAMLList(allSANs, 6), podCIDR, serviceCIDR)
 
 			fmt.Println("Writing k0s configuration...")
 			mkdirResult, err := client.Exec(ctx, "sudo mkdir -p /etc/k0s")
-			if err != nil || mkdirResult.ExitCode != 0 {
+			if err != nil {
 				return fmt.Errorf("creating /etc/k0s: %w", err)
+			}
+			if mkdirResult.ExitCode != 0 {
+				return fmt.Errorf("creating /etc/k0s: %s", strings.TrimSpace(mkdirResult.Stderr))
 			}
 
 			// Write config via heredoc
 			writeCmd := fmt.Sprintf("sudo tee /etc/k0s/k0s.yaml > /dev/null << 'ENDCONFIG'\n%sENDCONFIG", k0sConfig)
 			writeResult, err := client.Exec(ctx, writeCmd)
-			if err != nil || writeResult.ExitCode != 0 {
+			if err != nil {
 				return fmt.Errorf("writing k0s.yaml: %w", err)
+			}
+			if writeResult.ExitCode != 0 {
+				return fmt.Errorf("writing k0s.yaml: %s", strings.TrimSpace(writeResult.Stderr))
 			}
 
 			// Check if already bootstrapped
@@ -4642,8 +4665,15 @@ spec:
 				}
 				initCmd := fmt.Sprintf("sudo k0s install controller --config /etc/k0s/k0s.yaml %s && sudo k0s start", workerFlag)
 				initResult, err := client.Exec(ctx, initCmd)
-				if err != nil || initResult.ExitCode != 0 {
+				if err != nil {
 					return fmt.Errorf("bootstrapping k0s: %w", err)
+				}
+				if initResult.ExitCode != 0 {
+					errMsg := strings.TrimSpace(initResult.Stderr)
+					if errMsg == "" {
+						errMsg = strings.TrimSpace(initResult.Stdout)
+					}
+					return fmt.Errorf("bootstrapping k0s: %s", errMsg)
 				}
 
 				// Wait for API to be ready
@@ -4666,16 +4696,22 @@ spec:
 			// Generate worker token
 			workerTokenCmd := fmt.Sprintf("sudo k0s token create --role=worker --expiry=%s", tokenExpiry)
 			workerTokenResult, err := client.Exec(ctx, workerTokenCmd)
-			if err != nil || workerTokenResult.ExitCode != 0 {
+			if err != nil {
 				return fmt.Errorf("generating worker token: %w", err)
+			}
+			if workerTokenResult.ExitCode != 0 {
+				return fmt.Errorf("generating worker token: %s", strings.TrimSpace(workerTokenResult.Stderr))
 			}
 			workerToken := strings.TrimSpace(workerTokenResult.Stdout)
 
 			// Generate controller token
 			controllerTokenCmd := fmt.Sprintf("sudo k0s token create --role=controller --expiry=%s", tokenExpiry)
 			controllerTokenResult, err := client.Exec(ctx, controllerTokenCmd)
-			if err != nil || controllerTokenResult.ExitCode != 0 {
+			if err != nil {
 				return fmt.Errorf("generating controller token: %w", err)
+			}
+			if controllerTokenResult.ExitCode != 0 {
+				return fmt.Errorf("generating controller token: %s", strings.TrimSpace(controllerTokenResult.Stderr))
 			}
 			controllerToken := strings.TrimSpace(controllerTokenResult.Stdout)
 
@@ -4711,8 +4747,8 @@ spec:
 			}
 			fmt.Printf("  Saved: %s\n", controllerTokenPath)
 
-			// Get controller endpoint for worker configs
-			controllerEndpoint := fmt.Sprintf("https://%s:6443", host.Addr)
+			// Get controller endpoint for worker configs (use actual IP for reliability)
+			controllerEndpoint := fmt.Sprintf("https://%s:6443", hostIP)
 
 			// Save cluster info
 			clusterInfo := fmt.Sprintf(`# k0s Cluster: %s
