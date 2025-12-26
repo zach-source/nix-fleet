@@ -97,6 +97,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(pullModeCmd())
 	cmd.AddCommand(hostCmd())
 	cmd.AddCommand(pkiCmd())
+	cmd.AddCommand(k0sCmd())
 
 	return cmd
 }
@@ -4434,4 +4435,685 @@ Examples:
 	cmd.Flags().StringVar(&unitName, "unit-name", "nixfleet-pki-renew", "Name of systemd units to remove")
 
 	return cmd
+}
+
+// =============================================================================
+// k0s Commands - Kubernetes cluster management
+// =============================================================================
+
+func k0sCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "k0s",
+		Short: "Kubernetes cluster management with k0s",
+		Long: `Manage k0s Kubernetes clusters across your fleet.
+
+The k0s integration works in two modes:
+  1. Controller init (manual): Bootstrap cluster and generate join tokens
+  2. Worker join (pull-mode): Workers auto-join using encrypted tokens
+
+Workflow:
+  1. nixfleet k0s init -H controller-host    # Bootstrap controller
+  2. Add worker hosts to config with role=worker
+  3. Workers auto-join on next pull
+
+The init command:
+  - Bootstraps k0s on the controller
+  - Generates join tokens for workers and controllers
+  - Encrypts tokens with age for all inventory hosts
+  - Updates host config to mark as controller
+  - Commits changes to git`,
+	}
+
+	cmd.AddCommand(k0sInitCmd())
+	cmd.AddCommand(k0sStatusCmd())
+	cmd.AddCommand(k0sRekeyCmd())
+	cmd.AddCommand(k0sTokenCmd())
+
+	return cmd
+}
+
+func k0sInitCmd() *cobra.Command {
+	var (
+		clusterName   string
+		configFile    string
+		apiSANs       []string
+		podCIDR       string
+		serviceCIDR   string
+		recipients    []string
+		identities    []string
+		enableWorker  bool
+		tokenExpiry   string
+		commitChanges bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize k0s controller and generate join tokens",
+		Long: `Bootstrap a k0s controller on the specified host and generate join tokens.
+
+This command:
+  1. SSHs to the target host
+  2. Installs k0s if not present
+  3. Generates k0s.yaml configuration
+  4. Bootstraps the controller
+  5. Generates worker and controller join tokens
+  6. Encrypts tokens with age for all inventory hosts
+  7. Saves tokens to secrets/k0s/
+  8. Updates host config to set role=controller (or controller+worker)
+  9. Optionally commits changes to git
+
+Prerequisites:
+  - Target host must be in inventory
+  - SSH access to target host
+  - Age recipients configured (admin key + host keys)
+
+Example:
+  nixfleet k0s init -H gtr --cluster stigen-fleet --san k8s.stigen.ai`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if targetHost == "" {
+				return fmt.Errorf("--host is required")
+			}
+
+			// Load inventory
+			inv, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) != 1 {
+				return fmt.Errorf("exactly one host must be specified with -H")
+			}
+			host := hosts[0]
+
+			// Collect age recipients: admin keys + all host SSH keys
+			allRecipients := make([]string, 0)
+			allRecipients = append(allRecipients, recipients...)
+
+			// Get SSH host keys from all hosts and convert to age keys
+			fmt.Println("Collecting age recipients from inventory hosts...")
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			for _, h := range inv.Hosts {
+				client, err := pool.GetWithUser(ctx, h.Addr, h.SSHPort, h.SSHUser)
+				if err != nil {
+					fmt.Printf("  Warning: Cannot connect to %s, skipping: %v\n", h.Name, err)
+					continue
+				}
+
+				// Get SSH host key
+				result, err := client.Exec(ctx, "cat /etc/ssh/ssh_host_ed25519_key.pub")
+				if err != nil || result.ExitCode != 0 {
+					fmt.Printf("  Warning: Cannot get SSH key from %s: %v\n", h.Name, err)
+					continue
+				}
+
+				// Convert to age key using ssh-to-age
+				sshKey := strings.TrimSpace(result.Stdout)
+				ageCmd := exec.CommandContext(ctx, "ssh-to-age")
+				ageCmd.Stdin = strings.NewReader(sshKey)
+				ageOutput, err := ageCmd.Output()
+				if err != nil {
+					fmt.Printf("  Warning: Cannot convert key for %s: %v\n", h.Name, err)
+					continue
+				}
+
+				ageKey := strings.TrimSpace(string(ageOutput))
+				if ageKey != "" {
+					allRecipients = append(allRecipients, ageKey)
+					fmt.Printf("  Added %s: %s\n", h.Name, ageKey[:20]+"...")
+				}
+			}
+
+			if len(allRecipients) == 0 {
+				return fmt.Errorf("no age recipients available. Specify --recipient or ensure hosts are reachable")
+			}
+
+			fmt.Printf("\nInitializing k0s controller on %s...\n\n", host.Name)
+
+			// Get SSH client for controller
+			client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+			if err != nil {
+				return fmt.Errorf("connecting to %s: %w", host.Name, err)
+			}
+
+			// Check if k0s is installed
+			checkResult, err := client.Exec(ctx, "which k0s")
+			if err != nil || checkResult.ExitCode != 0 {
+				fmt.Println("Installing k0s...")
+				installCmd := "curl -sSLf https://get.k0s.sh | sudo sh"
+				installResult, err := client.Exec(ctx, installCmd)
+				if err != nil || installResult.ExitCode != 0 {
+					return fmt.Errorf("installing k0s: %w", err)
+				}
+			}
+
+			// Build SANs list
+			allSANs := append([]string{host.Addr, host.Name}, apiSANs...)
+
+			// Generate k0s.yaml
+			k0sConfig := fmt.Sprintf(`apiVersion: k0s.k0sproject.io/v1beta1
+kind: ClusterConfig
+metadata:
+  name: %s
+spec:
+  api:
+    address: 0.0.0.0
+    port: 6443
+    sans:
+%s
+  network:
+    provider: kube-router
+    podCIDR: %s
+    serviceCIDR: %s
+    clusterDomain: cluster.local
+  storage:
+    type: etcd
+  telemetry:
+    enabled: false
+`, clusterName, formatYAMLList(allSANs, 6), podCIDR, serviceCIDR)
+
+			fmt.Println("Writing k0s configuration...")
+			mkdirResult, err := client.Exec(ctx, "sudo mkdir -p /etc/k0s")
+			if err != nil || mkdirResult.ExitCode != 0 {
+				return fmt.Errorf("creating /etc/k0s: %w", err)
+			}
+
+			// Write config via heredoc
+			writeCmd := fmt.Sprintf("sudo tee /etc/k0s/k0s.yaml > /dev/null << 'ENDCONFIG'\n%sENDCONFIG", k0sConfig)
+			writeResult, err := client.Exec(ctx, writeCmd)
+			if err != nil || writeResult.ExitCode != 0 {
+				return fmt.Errorf("writing k0s.yaml: %w", err)
+			}
+
+			// Check if already bootstrapped
+			testResult, _ := client.Exec(ctx, "test -f /var/lib/k0s/pki/ca.crt")
+			alreadyBootstrapped := testResult != nil && testResult.ExitCode == 0
+
+			if alreadyBootstrapped {
+				fmt.Println("Cluster already bootstrapped, skipping init...")
+			} else {
+				fmt.Println("Bootstrapping k0s controller...")
+				workerFlag := ""
+				if enableWorker {
+					workerFlag = "--enable-worker"
+				}
+				initCmd := fmt.Sprintf("sudo k0s install controller --config /etc/k0s/k0s.yaml %s && sudo k0s start", workerFlag)
+				initResult, err := client.Exec(ctx, initCmd)
+				if err != nil || initResult.ExitCode != 0 {
+					return fmt.Errorf("bootstrapping k0s: %w", err)
+				}
+
+				// Wait for API to be ready
+				fmt.Println("Waiting for API server to be ready...")
+				for i := 0; i < 60; i++ {
+					time.Sleep(5 * time.Second)
+					apiResult, err := client.Exec(ctx, "sudo k0s kubectl get nodes")
+					if err == nil && apiResult.ExitCode == 0 {
+						break
+					}
+					if i == 59 {
+						return fmt.Errorf("timeout waiting for API server")
+					}
+					fmt.Printf("  Waiting... (%d/60)\n", i+1)
+				}
+			}
+
+			fmt.Println("\nGenerating join tokens...")
+
+			// Generate worker token
+			workerTokenCmd := fmt.Sprintf("sudo k0s token create --role=worker --expiry=%s", tokenExpiry)
+			workerTokenResult, err := client.Exec(ctx, workerTokenCmd)
+			if err != nil || workerTokenResult.ExitCode != 0 {
+				return fmt.Errorf("generating worker token: %w", err)
+			}
+			workerToken := strings.TrimSpace(workerTokenResult.Stdout)
+
+			// Generate controller token
+			controllerTokenCmd := fmt.Sprintf("sudo k0s token create --role=controller --expiry=%s", tokenExpiry)
+			controllerTokenResult, err := client.Exec(ctx, controllerTokenCmd)
+			if err != nil || controllerTokenResult.ExitCode != 0 {
+				return fmt.Errorf("generating controller token: %w", err)
+			}
+			controllerToken := strings.TrimSpace(controllerTokenResult.Stdout)
+
+			fmt.Println("Encrypting tokens with age...")
+
+			// Create secrets directory
+			secretsDir := filepath.Join(flakePath, "secrets", "k0s")
+			if err := os.MkdirAll(secretsDir, 0755); err != nil {
+				return fmt.Errorf("creating secrets directory: %w", err)
+			}
+
+			// Build age recipients args
+			recipientArgs := make([]string, 0)
+			for _, r := range allRecipients {
+				recipientArgs = append(recipientArgs, "-r", r)
+			}
+
+			// Encrypt worker token
+			workerTokenPath := filepath.Join(secretsDir, "worker-token.age")
+			ageEncrypt := exec.CommandContext(ctx, "age", append(recipientArgs, "-o", workerTokenPath)...)
+			ageEncrypt.Stdin = strings.NewReader(workerToken)
+			if err := ageEncrypt.Run(); err != nil {
+				return fmt.Errorf("encrypting worker token: %w", err)
+			}
+			fmt.Printf("  Saved: %s\n", workerTokenPath)
+
+			// Encrypt controller token
+			controllerTokenPath := filepath.Join(secretsDir, "controller-token.age")
+			ageEncrypt = exec.CommandContext(ctx, "age", append(recipientArgs, "-o", controllerTokenPath)...)
+			ageEncrypt.Stdin = strings.NewReader(controllerToken)
+			if err := ageEncrypt.Run(); err != nil {
+				return fmt.Errorf("encrypting controller token: %w", err)
+			}
+			fmt.Printf("  Saved: %s\n", controllerTokenPath)
+
+			// Get controller endpoint for worker configs
+			controllerEndpoint := fmt.Sprintf("https://%s:6443", host.Addr)
+
+			// Save cluster info
+			clusterInfo := fmt.Sprintf(`# k0s Cluster: %s
+# Controller: %s
+# Endpoint: %s
+# Initialized: %s
+#
+# Workers can join by setting in their config:
+#   nixfleet.k0s = {
+#     enable = true;
+#     role = "worker";
+#     cluster.controllerEndpoint = "%s";
+#     joinToken = ../secrets/k0s/worker-token.age;
+#   };
+`, clusterName, host.Name, controllerEndpoint, time.Now().Format(time.RFC3339), controllerEndpoint)
+
+			clusterInfoPath := filepath.Join(secretsDir, "cluster-info.txt")
+			if err := os.WriteFile(clusterInfoPath, []byte(clusterInfo), 0644); err != nil {
+				return fmt.Errorf("writing cluster info: %w", err)
+			}
+
+			fmt.Println("\nUpdating host configuration...")
+
+			// Find and update host config file
+			hostConfigPath := filepath.Join(flakePath, "hosts", host.Name+".nix")
+			if _, err := os.Stat(hostConfigPath); err != nil {
+				fmt.Printf("  Warning: Host config not found at %s, skipping config update\n", hostConfigPath)
+			} else {
+				// Read current config
+				configBytes, err := os.ReadFile(hostConfigPath)
+				if err != nil {
+					return fmt.Errorf("reading host config: %w", err)
+				}
+				configContent := string(configBytes)
+
+				// Check if k0s config already exists
+				if strings.Contains(configContent, "nixfleet.k0s") {
+					fmt.Println("  k0s configuration already exists in host config")
+				} else {
+					// Add k0s configuration before the closing brace
+					role := "controller"
+					if enableWorker {
+						role = "controller+worker"
+					}
+
+					k0sConfig := fmt.Sprintf(`
+    #=========================================================================
+    # k0s Kubernetes - Controller Node
+    #=========================================================================
+
+    k0s = {
+      enable = true;
+      role = "%s";
+
+      cluster = {
+        name = "%s";
+        controllerEndpoint = "%s";
+      };
+
+      api.sans = [
+%s
+      ];
+
+      pki.useFleetCA = true;
+    };
+`, role, clusterName, controllerEndpoint, formatNixList(allSANs, 8))
+
+					// Find position to insert (before final closing braces)
+					insertPos := strings.LastIndex(configContent, "  };\n}")
+					if insertPos > 0 {
+						configContent = configContent[:insertPos] + k0sConfig + configContent[insertPos:]
+						if err := os.WriteFile(hostConfigPath, []byte(configContent), 0644); err != nil {
+							return fmt.Errorf("writing host config: %w", err)
+						}
+						fmt.Printf("  Updated: %s\n", hostConfigPath)
+					} else {
+						fmt.Println("  Warning: Could not find insertion point in host config")
+					}
+				}
+			}
+
+			if commitChanges {
+				fmt.Println("\nCommitting changes to git...")
+				gitAdd := exec.CommandContext(ctx, "git", "add", secretsDir, hostConfigPath)
+				gitAdd.Dir = flakePath
+				if err := gitAdd.Run(); err != nil {
+					return fmt.Errorf("git add: %w", err)
+				}
+
+				commitMsg := fmt.Sprintf("k0s: Initialize cluster '%s' on %s", clusterName, host.Name)
+				gitCommit := exec.CommandContext(ctx, "git", "commit", "-m", commitMsg)
+				gitCommit.Dir = flakePath
+				if err := gitCommit.Run(); err != nil {
+					fmt.Println("  Warning: git commit failed (maybe no changes?)")
+				} else {
+					fmt.Println("  Committed changes")
+				}
+			}
+
+			fmt.Println("\n" + strings.Repeat("=", 60))
+			fmt.Printf("k0s cluster '%s' initialized successfully!\n", clusterName)
+			fmt.Println(strings.Repeat("=", 60))
+			fmt.Printf("\nController: %s (%s)\n", host.Name, controllerEndpoint)
+			fmt.Printf("Role: %s\n", func() string {
+				if enableWorker {
+					return "controller+worker"
+				}
+				return "controller"
+			}())
+			fmt.Println("\nTo add workers, create a host config with:")
+			fmt.Printf(`
+  nixfleet.k0s = {
+    enable = true;
+    role = "worker";
+    cluster.controllerEndpoint = "%s";
+    joinToken = ../secrets/k0s/worker-token.age;
+  };
+`, controllerEndpoint)
+			fmt.Println("\nWorkers will auto-join on next pull-mode sync.")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&clusterName, "cluster", "nixfleet", "Cluster name")
+	cmd.Flags().StringVar(&configFile, "config", "", "k0s config file (optional)")
+	cmd.Flags().StringSliceVar(&apiSANs, "san", nil, "Additional API server SANs")
+	cmd.Flags().StringVar(&podCIDR, "pod-cidr", "10.244.0.0/16", "Pod CIDR")
+	cmd.Flags().StringVar(&serviceCIDR, "service-cidr", "10.96.0.0/12", "Service CIDR")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients for token encryption")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().BoolVar(&enableWorker, "enable-worker", true, "Also run as worker (controller+worker mode)")
+	cmd.Flags().StringVar(&tokenExpiry, "token-expiry", "8760h", "Token expiry (default 1 year)")
+	cmd.Flags().BoolVar(&commitChanges, "commit", true, "Commit changes to git")
+
+	return cmd
+}
+
+func k0sStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show k0s cluster status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			fmt.Println("k0s Cluster Status")
+			fmt.Println(strings.Repeat("=", 60))
+
+			for _, host := range hosts {
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("\n%s: Connection failed: %v\n", host.Name, err)
+					continue
+				}
+
+				// Check if k0s is running
+				statusResult, err := client.Exec(ctx, "sudo k0s status 2>/dev/null || echo 'not running'")
+				if err != nil || strings.Contains(statusResult.Stdout, "not running") {
+					fmt.Printf("\n%s: k0s not running\n", host.Name)
+					continue
+				}
+
+				fmt.Printf("\n%s:\n", host.Name)
+				fmt.Println(statusResult.Stdout)
+
+				// Get nodes if controller
+				if strings.Contains(statusResult.Stdout, "controller") {
+					nodesResult, _ := client.Exec(ctx, "sudo k0s kubectl get nodes -o wide 2>/dev/null")
+					if nodesResult != nil && nodesResult.Stdout != "" {
+						fmt.Println("\nNodes:")
+						fmt.Println(nodesResult.Stdout)
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func k0sRekeyCmd() *cobra.Command {
+	var (
+		recipients []string
+		identities []string
+		addHost    string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "rekey",
+		Short: "Re-encrypt k0s tokens for additional hosts",
+		Long: `Re-encrypt k0s join tokens to add new recipients.
+
+Use this when adding new worker hosts to allow them to decrypt the join token.
+
+Example:
+  nixfleet k0s rekey --add-host new-worker
+  nixfleet k0s rekey -r age1newkey...`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			secretsDir := filepath.Join(flakePath, "secrets", "k0s")
+
+			// Collect all recipients
+			allRecipients := append([]string{}, recipients...)
+
+			// If adding a specific host, get its key
+			if addHost != "" {
+				inv, err := inventory.LoadFromDir(inventoryPath)
+				if err != nil {
+					inv, err = inventory.LoadFromFile(inventoryPath)
+					if err != nil {
+						return fmt.Errorf("loading inventory: %w", err)
+					}
+				}
+
+				host, ok := inv.GetHost(addHost)
+				if !ok {
+					return fmt.Errorf("host %s not found in inventory", addHost)
+				}
+
+				pool := ssh.NewPool(nil)
+				defer pool.Close()
+
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					return fmt.Errorf("connecting to %s: %w", addHost, err)
+				}
+
+				sshKeyResult, err := client.Exec(ctx, "cat /etc/ssh/ssh_host_ed25519_key.pub")
+				if err != nil || sshKeyResult.ExitCode != 0 {
+					return fmt.Errorf("getting SSH key: %w", err)
+				}
+				sshKey := sshKeyResult.Stdout
+
+				ageCmd := exec.CommandContext(ctx, "ssh-to-age")
+				ageCmd.Stdin = strings.NewReader(strings.TrimSpace(sshKey))
+				ageOutput, err := ageCmd.Output()
+				if err != nil {
+					return fmt.Errorf("converting key: %w", err)
+				}
+
+				allRecipients = append(allRecipients, strings.TrimSpace(string(ageOutput)))
+				fmt.Printf("Added recipient for %s\n", addHost)
+			}
+
+			if len(allRecipients) == 0 {
+				return fmt.Errorf("no recipients specified. Use --recipient or --add-host")
+			}
+
+			// Re-encrypt each token file
+			tokenFiles := []string{"worker-token.age", "controller-token.age"}
+			for _, tokenFile := range tokenFiles {
+				tokenPath := filepath.Join(secretsDir, tokenFile)
+				if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+					continue
+				}
+
+				fmt.Printf("Re-encrypting %s...\n", tokenFile)
+
+				// Decrypt
+				decryptArgs := []string{"-d"}
+				for _, id := range identities {
+					decryptArgs = append(decryptArgs, "-i", id)
+				}
+				decryptArgs = append(decryptArgs, tokenPath)
+
+				decryptCmd := exec.CommandContext(ctx, "age", decryptArgs...)
+				plaintext, err := decryptCmd.Output()
+				if err != nil {
+					return fmt.Errorf("decrypting %s: %w", tokenFile, err)
+				}
+
+				// Re-encrypt with all recipients
+				encryptArgs := []string{}
+				for _, r := range allRecipients {
+					encryptArgs = append(encryptArgs, "-r", r)
+				}
+				encryptArgs = append(encryptArgs, "-o", tokenPath)
+
+				encryptCmd := exec.CommandContext(ctx, "age", encryptArgs...)
+				encryptCmd.Stdin = strings.NewReader(string(plaintext))
+				if err := encryptCmd.Run(); err != nil {
+					return fmt.Errorf("encrypting %s: %w", tokenFile, err)
+				}
+			}
+
+			fmt.Println("Tokens re-encrypted successfully")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients to add")
+	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
+	cmd.Flags().StringVar(&addHost, "add-host", "", "Add a host from inventory as recipient")
+
+	return cmd
+}
+
+func k0sTokenCmd() *cobra.Command {
+	var (
+		role       string
+		expiry     string
+		recipients []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "token",
+		Short: "Generate new k0s join token",
+		Long: `Generate a new join token from an existing controller.
+
+Use this to rotate tokens or generate tokens with different expiry.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if targetHost == "" {
+				return fmt.Errorf("--host is required (specify the controller)")
+			}
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(hosts) != 1 {
+				return fmt.Errorf("exactly one host must be specified")
+			}
+			host := hosts[0]
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+			if err != nil {
+				return fmt.Errorf("connecting to %s: %w", host.Name, err)
+			}
+
+			tokenCmd := fmt.Sprintf("sudo k0s token create --role=%s --expiry=%s", role, expiry)
+			tokenResult, err := client.Exec(ctx, tokenCmd)
+			if err != nil || tokenResult.ExitCode != 0 {
+				return fmt.Errorf("generating token: %w", err)
+			}
+			token := strings.TrimSpace(tokenResult.Stdout)
+
+			if len(recipients) > 0 {
+				// Encrypt and save
+				secretsDir := filepath.Join(flakePath, "secrets", "k0s")
+				tokenPath := filepath.Join(secretsDir, role+"-token.age")
+
+				recipientArgs := []string{}
+				for _, r := range recipients {
+					recipientArgs = append(recipientArgs, "-r", r)
+				}
+				recipientArgs = append(recipientArgs, "-o", tokenPath)
+
+				encryptCmd := exec.CommandContext(ctx, "age", recipientArgs...)
+				encryptCmd.Stdin = strings.NewReader(token)
+				if err := encryptCmd.Run(); err != nil {
+					return fmt.Errorf("encrypting token: %w", err)
+				}
+
+				fmt.Printf("Token saved to %s\n", tokenPath)
+			} else {
+				fmt.Println(token)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&role, "role", "worker", "Token role (worker or controller)")
+	cmd.Flags().StringVar(&expiry, "expiry", "8760h", "Token expiry")
+	cmd.Flags().StringSliceVarP(&recipients, "recipient", "r", nil, "Age recipients (if set, encrypts and saves token)")
+
+	return cmd
+}
+
+// Helper functions for k0s
+func formatYAMLList(items []string, indent int) string {
+	var sb strings.Builder
+	prefix := strings.Repeat(" ", indent)
+	for _, item := range items {
+		sb.WriteString(fmt.Sprintf("%s- %s\n", prefix, item))
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+func formatNixList(items []string, indent int) string {
+	var sb strings.Builder
+	prefix := strings.Repeat(" ", indent)
+	for _, item := range items {
+		sb.WriteString(fmt.Sprintf("%s\"%s\"\n", prefix, item))
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
 }
