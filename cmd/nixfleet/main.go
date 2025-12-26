@@ -4689,6 +4689,17 @@ spec:
 					}
 					fmt.Printf("  Waiting... (%d/60)\n", i+1)
 				}
+
+				// Remove control-plane NoSchedule taint for single-node/controller+worker clusters
+				// This allows pods to be scheduled on the control-plane node
+				fmt.Println("Removing control-plane NoSchedule taint for workloads...")
+				taintResult, err := client.Exec(ctx, "sudo k0s kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true")
+				if err != nil {
+					// Non-fatal: taint might not exist or node not ready yet
+					fmt.Printf("  Warning: could not remove taint: %v\n", err)
+				} else if strings.Contains(taintResult.Stdout, "untainted") || strings.Contains(taintResult.Stderr, "not found") {
+					fmt.Println("  Control-plane taint removed - pods can now schedule on this node")
+				}
 			}
 
 			fmt.Println("\nGenerating join tokens...")
