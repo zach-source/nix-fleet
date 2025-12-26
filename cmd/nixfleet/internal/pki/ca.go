@@ -3,7 +3,8 @@ package pki
 
 import (
 	"crypto"
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -17,7 +18,7 @@ import (
 // CA represents a Certificate Authority for the fleet
 type CA struct {
 	Certificate *x509.Certificate
-	PrivateKey  ed25519.PrivateKey
+	PrivateKey  *ecdsa.PrivateKey
 	CertPEM     []byte
 	KeyPEM      []byte
 }
@@ -26,7 +27,7 @@ type CA struct {
 // It includes the chain back to the root CA for certificate validation
 type IntermediateCA struct {
 	Certificate *x509.Certificate
-	PrivateKey  ed25519.PrivateKey
+	PrivateKey  *ecdsa.PrivateKey
 	CertPEM     []byte
 	KeyPEM      []byte
 	ChainPEM    []byte // Full chain: intermediate + root
@@ -67,11 +68,12 @@ func DefaultCAConfig() *CAConfig {
 
 // InitCA creates a new Certificate Authority
 func InitCA(cfg *CAConfig) (*CA, error) {
-	// Generate Ed25519 key pair
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 key pair (compatible with macOS Keychain)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating CA key pair: %w", err)
 	}
+	pubKey := &privKey.PublicKey
 
 	// Generate serial number
 	serialNumber, err := generateSerialNumber()
@@ -112,7 +114,7 @@ func InitCA(cfg *CAConfig) (*CA, error) {
 		Bytes: certDER,
 	})
 
-	keyPEM, err := marshalEd25519PrivateKey(privKey)
+	keyPEM, err := marshalECPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("encoding CA private key: %w", err)
 	}
@@ -144,7 +146,7 @@ func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
 		return nil, fmt.Errorf("failed to decode CA private key PEM")
 	}
 
-	privKey, err := parseEd25519PrivateKey(keyBlock.Bytes)
+	privKey, err := parseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parsing CA private key: %w", err)
 	}
@@ -163,11 +165,12 @@ func (ca *CA) InitIntermediateCA(cfg *IntermediateCAConfig) (*IntermediateCA, er
 		cfg = DefaultIntermediateCAConfig()
 	}
 
-	// Generate Ed25519 key pair for the intermediate
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 key pair for the intermediate
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating intermediate CA key pair: %w", err)
 	}
+	pubKey := &privKey.PublicKey
 
 	// Generate serial number
 	serialNumber, err := generateSerialNumber()
@@ -218,7 +221,7 @@ func (ca *CA) InitIntermediateCA(cfg *IntermediateCAConfig) (*IntermediateCA, er
 		Bytes: certDER,
 	})
 
-	keyPEM, err := marshalEd25519PrivateKey(privKey)
+	keyPEM, err := marshalECPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("encoding intermediate CA private key: %w", err)
 	}
@@ -260,7 +263,7 @@ func LoadIntermediateCA(certPEM, keyPEM, rootCertPEM []byte) (*IntermediateCA, e
 		return nil, fmt.Errorf("failed to decode intermediate CA private key PEM")
 	}
 
-	privKey, err := parseEd25519PrivateKey(keyBlock.Bytes)
+	privKey, err := parseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parsing intermediate CA private key: %w", err)
 	}
@@ -341,11 +344,12 @@ func (s *CertInstallSpec) FullKeyPath() string {
 
 // IssueCert issues a new certificate for a host
 func (ca *CA) IssueCert(req *CertRequest) (*IssuedCert, error) {
-	// Generate Ed25519 key pair for the host
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 key pair for the host
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating host key pair: %w", err)
 	}
+	pubKey := &privKey.PublicKey
 
 	// Generate serial number
 	serialNumber, err := generateSerialNumber()
@@ -402,7 +406,7 @@ func (ca *CA) IssueCert(req *CertRequest) (*IssuedCert, error) {
 		Bytes: certDER,
 	})
 
-	keyPEM, err := marshalEd25519PrivateKey(privKey)
+	keyPEM, err := marshalECPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("encoding host private key: %w", err)
 	}
@@ -460,11 +464,12 @@ func (ca *CA) Verify(certPEM []byte) error {
 // IssueCert issues a new certificate for a host, signed by the intermediate CA
 // The returned certificate includes the full chain (cert + intermediate + root)
 func (ica *IntermediateCA) IssueCert(req *CertRequest) (*IssuedCert, error) {
-	// Generate Ed25519 key pair for the host
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 key pair for the host
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating host key pair: %w", err)
 	}
+	pubKey := &privKey.PublicKey
 
 	// Generate serial number
 	serialNumber, err := generateSerialNumber()
@@ -529,7 +534,7 @@ func (ica *IntermediateCA) IssueCert(req *CertRequest) (*IssuedCert, error) {
 		Bytes: certDER,
 	})
 
-	keyPEM, err := marshalEd25519PrivateKey(privKey)
+	keyPEM, err := marshalECPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("encoding host private key: %w", err)
 	}
@@ -619,7 +624,7 @@ func generateSerialNumber() (*big.Int, error) {
 	return rand.Int(rand.Reader, serialNumberLimit)
 }
 
-func marshalEd25519PrivateKey(key ed25519.PrivateKey) ([]byte, error) {
+func marshalECPrivateKey(key *ecdsa.PrivateKey) ([]byte, error) {
 	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, err
@@ -630,16 +635,16 @@ func marshalEd25519PrivateKey(key ed25519.PrivateKey) ([]byte, error) {
 	}), nil
 }
 
-func parseEd25519PrivateKey(der []byte) (ed25519.PrivateKey, error) {
+func parseECPrivateKey(der []byte) (*ecdsa.PrivateKey, error) {
 	key, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
 		return nil, err
 	}
-	edKey, ok := key.(ed25519.PrivateKey)
+	ecKey, ok := key.(*ecdsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("key is not Ed25519")
+		return nil, fmt.Errorf("key is not ECDSA")
 	}
-	return edKey, nil
+	return ecKey, nil
 }
 
 func computeThumbprint(certDER []byte) string {
