@@ -458,5 +458,91 @@ in
         description = "Script to run after activation";
       };
     };
+
+    # Pull Mode - GitOps-style self-updating deployments
+    pullMode = {
+      enable = mkEnableOption "pull-based deployment mode";
+
+      repoURL = mkOption {
+        type = types.str;
+        description = "Git repository URL (SSH format: git@github.com:org/repo.git)";
+        example = "git@github.com:myorg/nix-fleet-hosts.git";
+      };
+
+      branch = mkOption {
+        type = types.str;
+        default = "main";
+        description = "Git branch to track";
+      };
+
+      sshKeyPath = mkOption {
+        type = types.str;
+        default = "/run/nixfleet-secrets/github-deploy-key";
+        description = "Path to SSH key for Git access";
+      };
+
+      interval = mkOption {
+        type = types.str;
+        default = "15min";
+        description = "Pull interval (systemd timer format)";
+      };
+
+      applyOnBoot = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Apply configuration on boot";
+      };
+
+      repoPath = mkOption {
+        type = types.str;
+        default = "/var/lib/nixfleet/repo";
+        description = "Local path to clone repository";
+      };
+
+      webhook = {
+        url = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Webhook URL for status notifications";
+        };
+
+        secret = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Webhook secret for signing (set via secrets, not here)";
+        };
+      };
+
+      homeManager = {
+        enable = mkEnableOption "home-manager integration in pull mode";
+
+        user = mkOption {
+          type = types.str;
+          description = "Username to run home-manager as";
+        };
+
+        dotfilesPath = mkOption {
+          type = types.str;
+          description = "Path to dotfiles repository on the host";
+        };
+
+        branch = mkOption {
+          type = types.str;
+          default = "main";
+          description = "Branch to track for dotfiles";
+        };
+
+        sshKeyPath = mkOption {
+          type = types.str;
+          default = "";
+          description = "Path to SSH key for dotfiles Git access";
+        };
+
+        configName = mkOption {
+          type = types.str;
+          description = "Flake configuration name (e.g., 'user@x86_64-linux')";
+        };
+      };
+    };
   };
 }
