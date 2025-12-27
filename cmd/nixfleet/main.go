@@ -16,6 +16,7 @@ import (
 
 	"github.com/nixfleet/nixfleet/internal/cache"
 	"github.com/nixfleet/nixfleet/internal/inventory"
+	"github.com/nixfleet/nixfleet/internal/k0s"
 	"github.com/nixfleet/nixfleet/internal/nix"
 	"github.com/nixfleet/nixfleet/internal/osupdate"
 	"github.com/nixfleet/nixfleet/internal/pki"
@@ -5136,9 +5137,16 @@ spec:
 }
 
 func k0sStatusCmd() *cobra.Command {
+	var showState bool
+
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show k0s cluster status",
+		Long: `Show comprehensive k0s cluster status including nodes, Helm releases, IP pools, and tracked state.
+
+Examples:
+  nixfleet k0s status -H gtr           # Status for specific host
+  nixfleet k0s status -H gtr --state   # Include tracked k0s state`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -5149,6 +5157,9 @@ func k0sStatusCmd() *cobra.Command {
 
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
+
+			reconciler := k0s.NewReconciler()
+			stateMgr := state.NewManager()
 
 			fmt.Println("k0s Cluster Status")
 			fmt.Println(strings.Repeat("=", 60))
@@ -5170,12 +5181,64 @@ func k0sStatusCmd() *cobra.Command {
 				fmt.Printf("\n%s:\n", host.Name)
 				fmt.Println(statusResult.Stdout)
 
-				// Get nodes if controller
-				if strings.Contains(statusResult.Stdout, "controller") {
-					nodesResult, _ := client.Exec(ctx, "sudo k0s kubectl get nodes -o wide 2>/dev/null")
-					if nodesResult != nil && nodesResult.Stdout != "" {
+				// Get detailed status from reconciler
+				k0sStatus, err := reconciler.GetStatus(ctx, client)
+				if err == nil && k0sStatus.Enabled {
+					// Show nodes
+					if len(k0sStatus.Nodes) > 0 {
 						fmt.Println("\nNodes:")
-						fmt.Println(nodesResult.Stdout)
+						for _, node := range k0sStatus.Nodes {
+							readyStr := "Ready"
+							if !node.Ready {
+								readyStr = "NotReady"
+							}
+							fmt.Printf("  - %s: %s\n", node.Name, readyStr)
+						}
+					}
+
+					// Show Helm releases
+					if len(k0sStatus.HelmReleases) > 0 {
+						fmt.Println("\nHelm Releases:")
+						for _, rel := range k0sStatus.HelmReleases {
+							fmt.Printf("  - %s: %s (%s)\n", rel.Name, rel.Version, rel.Status)
+						}
+					}
+
+					// Show IP pools
+					if len(k0sStatus.IPPools) > 0 {
+						fmt.Println("\nLoadBalancer IP Pools:")
+						for _, p := range k0sStatus.IPPools {
+							fmt.Printf("  - %s: %s\n", p.Name, p.CIDR)
+						}
+					}
+				}
+
+				// Show tracked state if requested
+				if showState {
+					hostState, err := stateMgr.ReadState(ctx, client)
+					if err == nil && hostState.K0s != nil && hostState.K0s.Enabled {
+						k0sState := hostState.K0s
+						fmt.Println("\nTracked State:")
+						if len(k0sState.ConfigHash) > 16 {
+							fmt.Printf("  Config Hash: %s...\n", k0sState.ConfigHash[:16])
+						}
+						if !k0sState.LastReconcile.IsZero() {
+							fmt.Printf("  Last Reconcile: %s\n", k0sState.LastReconcile.Format("2006-01-02 15:04:05"))
+						}
+
+						if len(k0sState.HelmCharts) > 0 {
+							fmt.Printf("  Tracked Charts: %d\n", len(k0sState.HelmCharts))
+							for _, c := range k0sState.HelmCharts {
+								fmt.Printf("    - %s (%s)\n", c.Name, c.Namespace)
+							}
+						}
+
+						if len(k0sState.Manifests) > 0 {
+							fmt.Printf("  Tracked Manifests: %d\n", len(k0sState.Manifests))
+							for _, m := range k0sState.Manifests {
+								fmt.Printf("    - %s/%s (%s)\n", m.Kind, m.Name, m.LogicalName)
+							}
+						}
 					}
 				}
 			}
@@ -5183,6 +5246,8 @@ func k0sStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&showState, "state", false, "Show tracked k0s state for reconciliation")
 
 	return cmd
 }

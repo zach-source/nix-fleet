@@ -10,10 +10,12 @@ import (
 
 	"github.com/nixfleet/nixfleet/internal/health"
 	"github.com/nixfleet/nixfleet/internal/inventory"
+	"github.com/nixfleet/nixfleet/internal/k0s"
 	"github.com/nixfleet/nixfleet/internal/nix"
 	"github.com/nixfleet/nixfleet/internal/pki"
 	"github.com/nixfleet/nixfleet/internal/preflight"
 	"github.com/nixfleet/nixfleet/internal/ssh"
+	"github.com/nixfleet/nixfleet/internal/state"
 )
 
 // FailurePolicy defines what to do when health checks fail
@@ -64,6 +66,7 @@ type HostResult struct {
 	PreflightResults  *preflight.PreflightResults `json:"preflight,omitempty"`
 	DeployResult      *DeployResult               `json:"deploy,omitempty"`
 	PKIResult         *pki.DeployResult           `json:"pki,omitempty"`
+	K0sResult         *k0s.ReconcileResult        `json:"k0s,omitempty"`
 	HealthResults     *health.HealthResults       `json:"health,omitempty"`
 	RollbackPerformed bool                        `json:"rollbackPerformed,omitempty"`
 	Error             string                      `json:"error,omitempty"`
@@ -89,24 +92,28 @@ type PipelineResults struct {
 
 // Pipeline orchestrates the apply process
 type Pipeline struct {
-	config      PipelineConfig
-	sshPool     *ssh.Pool
-	evaluator   *nix.Evaluator
-	deployer    *nix.Deployer
-	preflight   *preflight.Checker
-	health      *health.Checker
-	pkiDeployer *pki.Deployer
+	config        PipelineConfig
+	sshPool       *ssh.Pool
+	evaluator     *nix.Evaluator
+	deployer      *nix.Deployer
+	preflight     *preflight.Checker
+	health        *health.Checker
+	pkiDeployer   *pki.Deployer
+	k0sReconciler *k0s.Reconciler
+	stateMgr      *state.Manager
 }
 
 // NewPipeline creates a new apply pipeline
 func NewPipeline(config PipelineConfig, sshPool *ssh.Pool, evaluator *nix.Evaluator, deployer *nix.Deployer) *Pipeline {
 	p := &Pipeline{
-		config:    config,
-		sshPool:   sshPool,
-		evaluator: evaluator,
-		deployer:  deployer,
-		preflight: preflight.NewChecker(),
-		health:    health.NewChecker(),
+		config:        config,
+		sshPool:       sshPool,
+		evaluator:     evaluator,
+		deployer:      deployer,
+		preflight:     preflight.NewChecker(),
+		health:        health.NewChecker(),
+		k0sReconciler: k0s.NewReconciler(),
+		stateMgr:      state.NewManager(),
 	}
 
 	// Initialize PKI deployer if enabled
@@ -276,6 +283,45 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 					host.Name, pkiResult.CertInfo.DaysLeft)
 			} else if pkiResult.CADeployed {
 				log.Printf("[%s] PKI: deployed CA certificate only", host.Name)
+			}
+		}
+	}
+
+	// Phase 4.6: k0s reconciliation (if k0s is enabled)
+	if p.k0sReconciler.IsK0sEnabled(ctx, client) {
+		log.Printf("[%s] Reconciling k0s resources...", host.Name)
+
+		// Read previous k0s state
+		hostState, _ := p.stateMgr.ReadState(ctx, client)
+		var previousK0sState *state.K0sState
+		if hostState != nil {
+			previousK0sState = hostState.K0s
+		}
+
+		// Reconcile - cleanup orphaned resources
+		k0sResult, err := p.k0sReconciler.Reconcile(ctx, client, previousK0sState, p.config.DryRun)
+		if err != nil {
+			log.Printf("[%s] k0s reconciliation warning: %v", host.Name, err)
+		} else {
+			result.K0sResult = k0sResult
+
+			if len(k0sResult.DeletedCharts) > 0 {
+				log.Printf("[%s] k0s: deleted %d orphaned Helm chart(s): %v",
+					host.Name, len(k0sResult.DeletedCharts), k0sResult.DeletedCharts)
+			}
+			if len(k0sResult.DeletedResources) > 0 {
+				log.Printf("[%s] k0s: deleted %d orphaned resource(s): %v",
+					host.Name, len(k0sResult.DeletedResources), k0sResult.DeletedResources)
+			}
+			if len(k0sResult.Errors) > 0 {
+				log.Printf("[%s] k0s: reconciliation errors: %v", host.Name, k0sResult.Errors)
+			}
+		}
+
+		// Update k0s state (unless dry run)
+		if !p.config.DryRun {
+			if err := p.k0sReconciler.UpdateState(ctx, client); err != nil {
+				log.Printf("[%s] Warning: failed to update k0s state: %v", host.Name, err)
 			}
 		}
 	}

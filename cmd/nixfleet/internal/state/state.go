@@ -72,10 +72,68 @@ type HostState struct {
 	DriftFiles     []string  `json:"drift_files,omitempty"`
 	LastDriftCheck time.Time `json:"last_drift_check,omitempty"`
 
+	// k0s Kubernetes state (for reconciliation)
+	K0s *K0sState `json:"k0s,omitempty"`
+
 	// Metadata
 	NixFleetVersion string    `json:"nixfleet_version"`
 	StateVersion    int       `json:"state_version"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// K0sState tracks deployed k0s resources for reconciliation
+// This enables automatic cleanup of orphaned resources when config changes
+type K0sState struct {
+	// Enabled indicates if k0s is configured on this host
+	Enabled bool `json:"enabled"`
+
+	// ConfigHash is the hash of k0s.yaml for change detection
+	ConfigHash string `json:"config_hash,omitempty"`
+
+	// HelmCharts tracks Helm releases deployed via k0s extensions
+	HelmCharts []K0sHelmChartState `json:"helm_charts,omitempty"`
+
+	// Manifests tracks resources deployed via /var/lib/k0s/manifests/
+	Manifests []K0sManifestState `json:"manifests,omitempty"`
+
+	// LastReconcile is when resources were last reconciled
+	LastReconcile time.Time `json:"last_reconcile,omitempty"`
+}
+
+// K0sHelmChartState tracks a Helm chart deployed via k0s
+type K0sHelmChartState struct {
+	// Name is the release name (e.g., "cilium", "cert-manager")
+	Name string `json:"name"`
+
+	// Namespace where the chart is deployed
+	Namespace string `json:"namespace"`
+
+	// ChartName is the chart reference (e.g., "cilium/cilium")
+	ChartName string `json:"chart_name"`
+
+	// Version of the chart
+	Version string `json:"version"`
+}
+
+// K0sManifestState tracks a resource deployed via k0s manifests
+type K0sManifestState struct {
+	// LogicalName is the stable identifier from nix config (e.g., "lb-pool", "fleet-ca-issuer")
+	LogicalName string `json:"logical_name"`
+
+	// Kind is the Kubernetes resource kind (e.g., "CiliumLoadBalancerIPPool")
+	Kind string `json:"kind"`
+
+	// APIVersion is the API version (e.g., "cilium.io/v2alpha1")
+	APIVersion string `json:"api_version"`
+
+	// Name is the Kubernetes resource name
+	Name string `json:"name"`
+
+	// Namespace is empty for cluster-scoped resources
+	Namespace string `json:"namespace,omitempty"`
+
+	// ManifestFile is the source manifest file (e.g., "cilium-lb-pool.yaml")
+	ManifestFile string `json:"manifest_file"`
 }
 
 // PackageDiff represents a package version change
