@@ -543,6 +543,22 @@ in
           description = "Flake configuration name (e.g., 'user@x86_64-linux')";
         };
       };
+
+      statusServer = {
+        enable = mkEnableOption "HTTP status server for node monitoring";
+
+        port = mkOption {
+          type = types.port;
+          default = 9100;
+          description = "Port for the status server";
+        };
+
+        bindAddress = mkOption {
+          type = types.str;
+          default = "0.0.0.0";
+          description = "Address to bind the status server to";
+        };
+      };
     };
   };
 }

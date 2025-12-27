@@ -18,6 +18,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/k0s"
 	"github.com/nixfleet/nixfleet/internal/nix"
+	"github.com/nixfleet/nixfleet/internal/nodestatus"
 	"github.com/nixfleet/nixfleet/internal/osupdate"
 	"github.com/nixfleet/nixfleet/internal/pki"
 	"github.com/nixfleet/nixfleet/internal/pullmode"
@@ -100,6 +101,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(hostCmd())
 	cmd.AddCommand(pkiCmd())
 	cmd.AddCommand(k0sCmd())
+	cmd.AddCommand(nodeStatusCmd())
 
 	return cmd
 }
@@ -5669,4 +5671,62 @@ func formatNixList(items []string, indent int) string {
 		sb.WriteString(fmt.Sprintf("%s\"%s\"\n", prefix, item))
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+// nodeStatusCmd returns the node-status command for running a status server on nodes
+func nodeStatusCmd() *cobra.Command {
+	var port int
+	var bindAddress string
+	var stateDir string
+	var logFile string
+
+	cmd := &cobra.Command{
+		Use:   "node-status",
+		Short: "Run a node status HTTP server (for pull-mode nodes)",
+		Long: `Start a lightweight HTTP server that reports node status.
+
+This is designed to run on nodes in pull-mode to provide status information
+to monitoring systems, load balancers, or the central nixfleet server.
+
+Endpoints:
+  GET /         - Human-readable status page
+  GET /status   - Full status JSON
+  GET /health   - Simple health check (returns 200 if healthy, 503 if not)
+  GET /pull     - Pull mode status and recent log entries
+  GET /state    - Current state.json information
+
+The server reads status from:
+  - /var/lib/nixfleet/state.json - Last deployment info
+  - /var/log/nixfleet/pull.log   - Pull operation logs
+
+Example:
+  # Run on default port 9100
+  nixfleet node-status
+
+  # Run on custom port with specific bind address
+  nixfleet node-status --port 8080 --bind 127.0.0.1`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			cfg := nodestatus.DefaultConfig()
+			cfg.Port = port
+			cfg.BindAddress = bindAddress
+			if stateDir != "" {
+				cfg.StateDir = stateDir
+			}
+			if logFile != "" {
+				cfg.LogFile = logFile
+			}
+
+			srv := nodestatus.NewServer(cfg)
+			return srv.Start(ctx)
+		},
+	}
+
+	cmd.Flags().IntVar(&port, "port", 9100, "Port to listen on")
+	cmd.Flags().StringVar(&bindAddress, "bind", "0.0.0.0", "Address to bind to")
+	cmd.Flags().StringVar(&stateDir, "state-dir", "", "State directory (default: /var/lib/nixfleet)")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "Pull log file (default: /var/log/nixfleet/pull.log)")
+
+	return cmd
 }

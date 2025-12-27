@@ -172,6 +172,7 @@ let
   # Pull mode configuration
   pullCfg = cfg.pullMode;
   pullModeEnabled = pullCfg.enable;
+  statusServerEnabled = pullModeEnabled && pullCfg.statusServer.enable;
 
   # Generate pull script (only when pull mode is enabled)
   pullScript = pkgs.writeShellScript "nixfleet-pull" ''
@@ -431,6 +432,27 @@ let
     WantedBy=timers.target
   '';
 
+  # Generate status server systemd service
+  statusServerService = ''
+    [Unit]
+    Description=NixFleet Node Status Server
+    After=network-online.target
+    Wants=network-online.target
+    Documentation=https://github.com/zach-source/nix-fleet
+
+    [Service]
+    Type=simple
+    Environment=PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin
+    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}
+    Restart=always
+    RestartSec=10
+    StandardOutput=journal
+    StandardError=journal
+
+    [Install]
+    WantedBy=multi-user.target
+  '';
+
   # Pull mode artifacts directory
   pullModeDir = pkgs.runCommand "nixfleet-pull-mode" { } ''
     mkdir -p $out
@@ -444,6 +466,12 @@ let
     cat > $out/nixfleet-pull.timer << 'EOF'
     ${pullModeTimer}
     EOF
+
+    ${optionalString statusServerEnabled ''
+      cat > $out/nixfleet-status.service << 'EOF'
+      ${statusServerService}
+      EOF
+    ''}
   '';
 
   # Calculate manifest hash for change detection
@@ -797,6 +825,25 @@ let
       systemctl start nixfleet-pull.timer 2>/dev/null || true
 
       log "  Pull mode installed (timer: ${pullCfg.interval})"
+
+      ${optionalString statusServerEnabled ''
+        # Install status server service
+        STATUS_SVC_SRC="${pullModeDir}/nixfleet-status.service"
+        STATUS_SVC_DST="/etc/systemd/system/nixfleet-status.service"
+        if [ -f "$STATUS_SVC_SRC" ]; then
+          if ! cmp -s "$STATUS_SVC_SRC" "$STATUS_SVC_DST" 2>/dev/null; then
+            log "  Installing nixfleet-status.service"
+            cp "$STATUS_SVC_SRC" "$STATUS_SVC_DST"
+            chmod 0644 "$STATUS_SVC_DST"
+            systemctl daemon-reload
+          fi
+        fi
+
+        # Enable and start status server
+        systemctl enable nixfleet-status.service 2>/dev/null || true
+        systemctl restart nixfleet-status.service 2>/dev/null || true
+        log "  Status server installed (port: ${toString pullCfg.statusServer.port})"
+      ''}
     ''}
 
     # Step 11: Run post-activate hook
