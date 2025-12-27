@@ -22,6 +22,9 @@ type Config struct {
 	LogFile      string
 	HostName     string
 	ManifestHash string
+	Version      string
+	GitCommit    string
+	GitTag       string
 }
 
 // DefaultConfig returns a Config with sensible defaults
@@ -38,14 +41,22 @@ func DefaultConfig() Config {
 
 // Status represents the overall node status
 type Status struct {
-	Hostname     string      `json:"hostname"`
-	Status       string      `json:"status"` // healthy, degraded, unhealthy, unknown
-	Timestamp    time.Time   `json:"timestamp"`
-	ManifestHash string      `json:"manifestHash,omitempty"`
-	PullMode     *PullStatus `json:"pullMode,omitempty"`
-	State        *StateInfo  `json:"state,omitempty"`
-	Health       *HealthInfo `json:"health,omitempty"`
-	Uptime       string      `json:"uptime,omitempty"`
+	Hostname     string       `json:"hostname"`
+	Status       string       `json:"status"` // healthy, degraded, unhealthy, unknown
+	Timestamp    time.Time    `json:"timestamp"`
+	Version      *VersionInfo `json:"version,omitempty"`
+	ManifestHash string       `json:"manifestHash,omitempty"`
+	PullMode     *PullStatus  `json:"pullMode,omitempty"`
+	State        *StateInfo   `json:"state,omitempty"`
+	Health       *HealthInfo  `json:"health,omitempty"`
+	Uptime       string       `json:"uptime,omitempty"`
+}
+
+// VersionInfo represents the nixfleet version information
+type VersionInfo struct {
+	Version   string `json:"version"`
+	GitCommit string `json:"gitCommit,omitempty"`
+	GitTag    string `json:"gitTag,omitempty"`
 }
 
 // PullStatus represents the pull mode status
@@ -165,13 +176,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	response := struct {
-		Status   string    `json:"status"`
-		Hostname string    `json:"hostname"`
-		Time     time.Time `json:"time"`
+		Status   string       `json:"status"`
+		Hostname string       `json:"hostname"`
+		Time     time.Time    `json:"time"`
+		Version  *VersionInfo `json:"version,omitempty"`
 	}{
 		Status:   status.Status,
 		Hostname: s.config.HostName,
 		Time:     time.Now(),
+		Version:  status.Version,
 	}
 
 	if status.Status == "unhealthy" {
@@ -199,6 +212,15 @@ func (s *Server) gatherStatus() Status {
 		Hostname:  s.config.HostName,
 		Timestamp: time.Now(),
 		Status:    "healthy",
+	}
+
+	// Add version info
+	if s.config.Version != "" {
+		status.Version = &VersionInfo{
+			Version:   s.config.Version,
+			GitCommit: s.config.GitCommit,
+			GitTag:    s.config.GitTag,
+		}
 	}
 
 	// Gather state info

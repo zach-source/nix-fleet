@@ -3,6 +3,8 @@
   lib,
   buildGoModule,
   installShellFiles,
+  gitCommit ? "",
+  gitTag ? "",
 }:
 
 buildGoModule rec {
@@ -19,6 +21,8 @@ buildGoModule rec {
     "-s"
     "-w"
     "-X main.version=${version}"
+    "-X main.gitCommit=${gitCommit}"
+    "-X main.gitTag=${gitTag}"
   ];
 
   postInstall = ''

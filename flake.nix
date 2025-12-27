@@ -119,7 +119,10 @@
     {
       # Overlay for NixFleet packages
       overlays.default = final: prev: {
-        nixfleet = final.callPackage ./pkgs/nixfleet { };
+        nixfleet = final.callPackage ./pkgs/nixfleet {
+          gitCommit = self.rev or self.dirtyRev or "";
+          gitTag = if self ? rev then "v0.1.0" else "dev";
+        };
       };
 
       # CLI package for each system

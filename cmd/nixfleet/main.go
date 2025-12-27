@@ -30,7 +30,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	gitCommit = ""
+	gitTag    = ""
+)
 
 // Global config
 var (
@@ -5711,6 +5715,9 @@ Example:
 			cfg := nodestatus.DefaultConfig()
 			cfg.Port = port
 			cfg.BindAddress = bindAddress
+			cfg.Version = version
+			cfg.GitCommit = gitCommit
+			cfg.GitTag = gitTag
 			if stateDir != "" {
 				cfg.StateDir = stateDir
 			}
