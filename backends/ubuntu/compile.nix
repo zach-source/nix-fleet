@@ -856,11 +856,13 @@ let
     # Step 12: Update state file
     log "Updating state..."
     mkdir -p "$NIXFLEET_STATE"
-    cat > "$NIXFLEET_STATE/state.json" << 'STATE_EOF'
+    GENERATION=$(readlink "$SYSTEM_LINK" | grep -oE '[0-9]+' | tail -1 || echo 0)
+    APPLY_TIME=$(date -Iseconds)
+    cat > "$NIXFLEET_STATE/state.json" << STATE_EOF
     {
-      "generation": $(readlink "$SYSTEM_LINK" | grep -oE '[0-9]+' | tail -1 || echo 0),
+      "generation": $GENERATION,
       "manifestHash": "${manifestHash}",
-      "lastApply": "$(date -Iseconds)",
+      "lastApply": "$APPLY_TIME",
       "activatedUnits": [${concatStringsSep "," (map (u: "\"${u}\"") (attrNames cfg.systemd.units))}],
       "managedFiles": [${concatStringsSep "," (map (f: "\"${f}\"") (attrNames cfg.files))}]
     }
