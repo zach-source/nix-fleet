@@ -390,7 +390,8 @@ func getRepoStatus(repoPath string) *RepoStatus {
 	status := &RepoStatus{}
 
 	// Get commit hash
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	// Use -c safe.directory=* to allow reading repos owned by other users (needed when running as root)
+	cmd := exec.Command("git", "-c", "safe.directory=*", "-C", repoPath, "rev-parse", "HEAD")
 	if out, err := cmd.Output(); err == nil {
 		status.Commit = strings.TrimSpace(string(out))
 	} else {
@@ -398,13 +399,13 @@ func getRepoStatus(repoPath string) *RepoStatus {
 	}
 
 	// Get commit subject
-	cmd = exec.Command("git", "-C", repoPath, "log", "-1", "--format=%s")
+	cmd = exec.Command("git", "-c", "safe.directory=*", "-C", repoPath, "log", "-1", "--format=%s")
 	if out, err := cmd.Output(); err == nil {
 		status.Subject = strings.TrimSpace(string(out))
 	}
 
 	// Get current branch
-	cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd = exec.Command("git", "-c", "safe.directory=*", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if out, err := cmd.Output(); err == nil {
 		status.Branch = strings.TrimSpace(string(out))
 	}
