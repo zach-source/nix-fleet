@@ -468,6 +468,9 @@ Description=NixFleet Pull Mode - Fetch and apply configuration
 After=network-online.target nss-lookup.target
 Wants=network-online.target
 Documentation=https://github.com/zach-source/nix-fleet
+# Rate limit retries: max 3 attempts per 5 minutes
+StartLimitBurst=3
+StartLimitIntervalSec=300
 
 [Service]
 Type=oneshot
@@ -480,8 +483,6 @@ TimeoutStartSec=600
 # Retry on failure
 Restart=on-failure
 RestartSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -499,7 +500,8 @@ Description=NixFleet Pull Mode Timer
 Documentation=https://github.com/zach-source/nix-fleet
 
 [Timer]
-OnUnitActiveSec=%s
+# Use OnUnitInactiveSec to fire after service completes (success or failure)
+OnUnitInactiveSec=%s
 %s
 RandomizedDelaySec=30
 Persistent=true
