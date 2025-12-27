@@ -433,6 +433,7 @@ let
   '';
 
   # Generate status server systemd service
+  homeManagerFlag = lib.optionalString pullCfg.homeManager.enable " --home-manager-path ${pullCfg.homeManager.dotfilesPath}";
   statusServerService = ''
     [Unit]
     Description=NixFleet Node Status Server
@@ -443,7 +444,7 @@ let
     [Service]
     Type=simple
     Environment=PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin
-    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}
+    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}${homeManagerFlag}
     Restart=always
     RestartSec=10
     StandardOutput=journal

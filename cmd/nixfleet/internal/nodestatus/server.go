@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,26 +17,29 @@ import (
 
 // Config holds the server configuration
 type Config struct {
-	Port         int
-	BindAddress  string
-	StateDir     string
-	LogFile      string
-	HostName     string
-	ManifestHash string
-	Version      string
-	GitCommit    string
-	GitTag       string
+	Port            int
+	BindAddress     string
+	StateDir        string
+	LogFile         string
+	HostName        string
+	ManifestHash    string
+	Version         string
+	GitCommit       string
+	GitTag          string
+	HostRepoPath    string
+	HomeManagerPath string
 }
 
 // DefaultConfig returns a Config with sensible defaults
 func DefaultConfig() Config {
 	hostname, _ := os.Hostname()
 	return Config{
-		Port:        9100,
-		BindAddress: "0.0.0.0",
-		StateDir:    "/var/lib/nixfleet",
-		LogFile:     "/var/log/nixfleet/pull.log",
-		HostName:    hostname,
+		Port:         9100,
+		BindAddress:  "0.0.0.0",
+		StateDir:     "/var/lib/nixfleet",
+		LogFile:      "/var/log/nixfleet/pull.log",
+		HostName:     hostname,
+		HostRepoPath: "/var/lib/nixfleet/repo",
 	}
 }
 
@@ -61,11 +65,20 @@ type VersionInfo struct {
 
 // PullStatus represents the pull mode status
 type PullStatus struct {
-	LastRun       *time.Time `json:"lastRun,omitempty"`
-	LastSuccess   *time.Time `json:"lastSuccess,omitempty"`
-	LastFailure   *time.Time `json:"lastFailure,omitempty"`
-	LastCommit    string     `json:"lastCommit,omitempty"`
-	RecentEntries []string   `json:"recentEntries,omitempty"`
+	LastRun       *time.Time  `json:"lastRun,omitempty"`
+	LastSuccess   *time.Time  `json:"lastSuccess,omitempty"`
+	LastFailure   *time.Time  `json:"lastFailure,omitempty"`
+	LastCommit    string      `json:"lastCommit,omitempty"`
+	HostRepo      *RepoStatus `json:"hostRepo,omitempty"`
+	HomeManager   *RepoStatus `json:"homeManager,omitempty"`
+	RecentEntries []string    `json:"recentEntries,omitempty"`
+}
+
+// RepoStatus represents git repository status
+type RepoStatus struct {
+	Commit  string `json:"commit"`
+	Subject string `json:"subject,omitempty"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 // StateInfo represents the state.json contents
@@ -294,17 +307,28 @@ func (s *Server) gatherStateInfo() *StateInfo {
 }
 
 func (s *Server) gatherPullStatus() *PullStatus {
+	status := &PullStatus{}
+
+	// Gather git repo status for host repo
+	if s.config.HostRepoPath != "" {
+		status.HostRepo = getRepoStatus(s.config.HostRepoPath)
+	}
+
+	// Gather git repo status for home-manager
+	if s.config.HomeManagerPath != "" {
+		status.HomeManager = getRepoStatus(s.config.HomeManagerPath)
+	}
+
+	// Parse log file if configured
 	if s.config.LogFile == "" {
-		return nil
+		return status
 	}
 
 	file, err := os.Open(s.config.LogFile)
 	if err != nil {
-		return nil
+		return status
 	}
 	defer file.Close()
-
-	status := &PullStatus{}
 
 	// Read last N lines of log file
 	var lines []string
@@ -352,6 +376,37 @@ func (s *Server) gatherPullStatus() *PullStatus {
 		status.RecentEntries = lines[len(lines)-10:]
 	} else {
 		status.RecentEntries = lines
+	}
+
+	return status
+}
+
+// getRepoStatus reads git info from a repository path
+func getRepoStatus(repoPath string) *RepoStatus {
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
+		return nil
+	}
+
+	status := &RepoStatus{}
+
+	// Get commit hash
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	if out, err := cmd.Output(); err == nil {
+		status.Commit = strings.TrimSpace(string(out))
+	} else {
+		return nil
+	}
+
+	// Get commit subject
+	cmd = exec.Command("git", "-C", repoPath, "log", "-1", "--format=%s")
+	if out, err := cmd.Output(); err == nil {
+		status.Subject = strings.TrimSpace(string(out))
+	}
+
+	// Get current branch
+	cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if out, err := cmd.Output(); err == nil {
+		status.Branch = strings.TrimSpace(string(out))
 	}
 
 	return status

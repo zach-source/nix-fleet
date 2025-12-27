@@ -5683,6 +5683,8 @@ func nodeStatusCmd() *cobra.Command {
 	var bindAddress string
 	var stateDir string
 	var logFile string
+	var hostRepoPath string
+	var homeManagerPath string
 
 	cmd := &cobra.Command{
 		Use:   "node-status",
@@ -5702,6 +5704,7 @@ Endpoints:
 The server reads status from:
   - /var/lib/nixfleet/state.json - Last deployment info
   - /var/log/nixfleet/pull.log   - Pull operation logs
+  - Git repositories for commit info
 
 Example:
   # Run on default port 9100
@@ -5724,6 +5727,12 @@ Example:
 			if logFile != "" {
 				cfg.LogFile = logFile
 			}
+			if hostRepoPath != "" {
+				cfg.HostRepoPath = hostRepoPath
+			}
+			if homeManagerPath != "" {
+				cfg.HomeManagerPath = homeManagerPath
+			}
 
 			srv := nodestatus.NewServer(cfg)
 			return srv.Start(ctx)
@@ -5734,6 +5743,8 @@ Example:
 	cmd.Flags().StringVar(&bindAddress, "bind", "0.0.0.0", "Address to bind to")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "State directory (default: /var/lib/nixfleet)")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "Pull log file (default: /var/log/nixfleet/pull.log)")
+	cmd.Flags().StringVar(&hostRepoPath, "host-repo", "", "Host config repository path (default: /var/lib/nixfleet/repo)")
+	cmd.Flags().StringVar(&homeManagerPath, "home-manager-path", "", "Home-manager dotfiles path")
 
 	return cmd
 }
