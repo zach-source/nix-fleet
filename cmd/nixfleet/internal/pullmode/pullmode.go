@@ -44,6 +44,27 @@ type Config struct {
 
 	// Webhook secret for signing (optional)
 	WebhookSecret string
+
+	// Home-manager integration (optional)
+	HomeManager *HomeManagerConfig
+}
+
+// HomeManagerConfig holds home-manager pull configuration
+type HomeManagerConfig struct {
+	// Username to run home-manager as
+	User string
+
+	// Path to dotfiles repository on the host
+	DotfilesPath string
+
+	// Branch to track for dotfiles
+	Branch string
+
+	// Path to SSH key for dotfiles Git access
+	SSHKeyPath string
+
+	// Flake configuration name (e.g., "ztaylor@x86_64-linux")
+	ConfigName string
 }
 
 // DefaultConfig returns a Config with sensible defaults
@@ -353,6 +374,17 @@ LOG_FILE="/var/log/nixfleet/pull.log"
 LOCK_FILE="/var/run/nixfleet-pull.lock"
 {{if .WebhookURL}}WEBHOOK_URL="{{.WebhookURL}}"{{end}}
 {{if .WebhookSecret}}WEBHOOK_SECRET="{{.WebhookSecret}}"{{end}}
+{{if .HomeManager}}
+# Home-manager configuration
+HM_ENABLED=true
+HM_USER="{{.HomeManager.User}}"
+HM_DOTFILES_PATH="{{.HomeManager.DotfilesPath}}"
+HM_BRANCH="{{.HomeManager.Branch}}"
+HM_SSH_KEY="{{.HomeManager.SSHKeyPath}}"
+HM_CONFIG_NAME="{{.HomeManager.ConfigName}}"
+{{else}}
+HM_ENABLED=false
+{{end}}
 
 log() {
     echo "$(date -Iseconds) $*" | tee -a "$LOG_FILE"
@@ -392,56 +424,129 @@ fi
 log "Starting NixFleet pull for $HOST_NAME"
 notify "started" "Pull operation started"
 
-cd "$REPO_PATH"
+# Track what changed
+NIXFLEET_CHANGED=false
+DOTFILES_CHANGED=false
 
-# Fetch and check for changes
+# Check NixFleet repo for changes
+cd "$REPO_PATH"
 OLD_COMMIT=$(git rev-parse HEAD)
-log "Current commit: $OLD_COMMIT"
+log "NixFleet current commit: $OLD_COMMIT"
 
 git fetch origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
 NEW_COMMIT=$(git rev-parse "origin/$BRANCH")
 
-if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
-    log "No changes detected, skipping apply"
+if [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
+    log "NixFleet: new commit available: $NEW_COMMIT"
+    NIXFLEET_CHANGED=true
+fi
+
+# Check dotfiles repo for changes (if home-manager enabled)
+if [ "$HM_ENABLED" = "true" ] && [ -d "$HM_DOTFILES_PATH/.git" ]; then
+    log "Checking dotfiles for changes..."
+    OLD_DOTFILES=$(cd "$HM_DOTFILES_PATH" && git rev-parse HEAD)
+    log "Dotfiles current commit: $OLD_DOTFILES"
+
+    # Fetch as root with deploy key, then compare
+    # Note: -o ControlPath=none prevents SSH multiplexing which can cause key conflicts
+    if [ -n "$HM_SSH_KEY" ] && [ -f "$HM_SSH_KEY" ]; then
+        GIT_SSH_COMMAND="ssh -i $HM_SSH_KEY -o IdentitiesOnly=yes -o ControlPath=none -o StrictHostKeyChecking=accept-new" \
+            git -C "$HM_DOTFILES_PATH" fetch origin "$HM_BRANCH" 2>&1 | tee -a "$LOG_FILE"
+    else
+        sudo -u "$HM_USER" git -C "$HM_DOTFILES_PATH" fetch origin "$HM_BRANCH" 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    NEW_DOTFILES=$(cd "$HM_DOTFILES_PATH" && git rev-parse "origin/$HM_BRANCH")
+
+    if [ "$OLD_DOTFILES" != "$NEW_DOTFILES" ]; then
+        log "Dotfiles: new commit available: $NEW_DOTFILES"
+        DOTFILES_CHANGED=true
+    fi
+fi
+
+# Exit early if nothing changed
+if [ "$NIXFLEET_CHANGED" = "false" ] && [ "$DOTFILES_CHANGED" = "false" ]; then
+    log "No changes detected in any repo, skipping apply"
     notify "success" "No changes detected"
     exit 0
 fi
 
-log "New commit available: $NEW_COMMIT"
-git reset --hard "origin/$BRANCH" 2>&1 | tee -a "$LOG_FILE"
+# Apply NixFleet changes if needed
+if [ "$NIXFLEET_CHANGED" = "true" ]; then
+    log "Updating NixFleet repo..."
+    git reset --hard "origin/$BRANCH" 2>&1 | tee -a "$LOG_FILE"
 
-# Build and apply configuration
-log "Building configuration for $HOST_NAME..."
-if ! NIXPKGS_ALLOW_UNFREE=1 nix build ".#nixfleetConfigurations.$HOST_NAME.system" --no-link --impure 2>&1 | tee -a "$LOG_FILE"; then
-    log "ERROR: Build failed"
-    notify "failed" "Build failed for commit $NEW_COMMIT"
-    git reset --hard "$OLD_COMMIT"
-    exit 1
+    # Build and apply configuration
+    log "Building configuration for $HOST_NAME..."
+    if ! NIXPKGS_ALLOW_UNFREE=1 nix build ".#nixfleetConfigurations.$HOST_NAME.system" --no-link --impure 2>&1 | tee -a "$LOG_FILE"; then
+        log "ERROR: Build failed"
+        notify "failed" "Build failed for commit $NEW_COMMIT"
+        git reset --hard "$OLD_COMMIT"
+        exit 1
+    fi
+
+    SYSTEM_PATH=$(NIXPKGS_ALLOW_UNFREE=1 nix path-info ".#nixfleetConfigurations.$HOST_NAME.system" --impure)
+    log "System path: $SYSTEM_PATH"
+
+    # Activate the configuration
+    log "Activating configuration..."
+    if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
+        log "ERROR: Activation failed"
+        notify "failed" "Activation failed for commit $NEW_COMMIT"
+        exit 1
+    fi
+
+    # Update profile
+    nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
+
+    log "Successfully applied NixFleet commit $NEW_COMMIT"
 fi
 
-SYSTEM_PATH=$(NIXPKGS_ALLOW_UNFREE=1 nix path-info ".#nixfleetConfigurations.$HOST_NAME.system" --impure)
-log "System path: $SYSTEM_PATH"
+# Apply dotfiles changes if needed (home-manager)
+if [ "$HM_ENABLED" = "true" ] && [ "$DOTFILES_CHANGED" = "true" ]; then
+    log "Updating dotfiles for $HM_USER..."
 
-# Activate the configuration
-log "Activating configuration..."
-if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
-    log "ERROR: Activation failed"
-    notify "failed" "Activation failed for commit $NEW_COMMIT"
-    exit 1
+    # Reset dotfiles repo (as root with deploy key if needed)
+    if [ -n "$HM_SSH_KEY" ] && [ -f "$HM_SSH_KEY" ]; then
+        git -C "$HM_DOTFILES_PATH" reset --hard "origin/$HM_BRANCH" 2>&1 | tee -a "$LOG_FILE"
+    else
+        sudo -u "$HM_USER" git -C "$HM_DOTFILES_PATH" reset --hard "origin/$HM_BRANCH" 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    # Fix ownership after root git operations
+    chown -R "$HM_USER:$HM_USER" "$HM_DOTFILES_PATH"
+
+    log "Running home-manager switch for $HM_USER..."
+    if sudo -u "$HM_USER" bash -c "
+        export PATH=/nix/var/nix/profiles/default/bin:\$PATH
+        export HOME=/home/$HM_USER
+        export NIX_PATH=nixpkgs=flake:nixpkgs
+        cd '$HM_DOTFILES_PATH'
+        nix run home-manager -- switch --flake '.#$HM_CONFIG_NAME' 2>&1
+    " | tee -a "$LOG_FILE"; then
+        log "Successfully applied dotfiles for $HM_USER"
+    else
+        log "WARNING: home-manager switch failed for $HM_USER"
+        notify "warning" "home-manager switch failed for $HM_USER"
+    fi
 fi
 
-# Update profile
-nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
-
-log "Successfully applied commit $NEW_COMMIT"
-notify "success" "Applied commit $NEW_COMMIT (was $OLD_COMMIT)"
+# Summary
+if [ "$NIXFLEET_CHANGED" = "true" ] && [ "$DOTFILES_CHANGED" = "true" ]; then
+    notify "success" "Applied NixFleet ($NEW_COMMIT) and dotfiles changes"
+elif [ "$NIXFLEET_CHANGED" = "true" ]; then
+    notify "success" "Applied NixFleet commit $NEW_COMMIT"
+elif [ "$DOTFILES_CHANGED" = "true" ]; then
+    notify "success" "Applied dotfiles changes for $HM_USER"
+fi
 
 # Run health checks if available
-if [ -x "$SYSTEM_PATH/bin/nixfleet-health-check" ]; then
+SYSTEM_PATH=$(nix-env --profile /nix/var/nix/profiles/nixfleet/system -q --out-path 2>/dev/null | awk '{print $2}' || echo "")
+if [ -n "$SYSTEM_PATH" ] && [ -x "$SYSTEM_PATH/bin/nixfleet-health-check" ]; then
     log "Running health checks..."
     if ! "$SYSTEM_PATH/bin/nixfleet-health-check" 2>&1 | tee -a "$LOG_FILE"; then
         log "WARNING: Health checks failed"
-        notify "warning" "Health checks failed after applying $NEW_COMMIT"
+        notify "warning" "Health checks failed"
     fi
 fi
 

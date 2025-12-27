@@ -2481,6 +2481,13 @@ func pullModeInstallCmd() *cobra.Command {
 	var webhookURL string
 	var webhookSecret string
 
+	// Home-manager options
+	var hmUser string
+	var hmDotfilesPath string
+	var hmBranch string
+	var hmSSHKey string
+	var hmConfigName string
+
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install pull mode on hosts",
@@ -2491,9 +2498,15 @@ This will:
   2. Clone the configuration repository
   3. Install the nixfleet-pull script
   4. Create and enable systemd timer for periodic pulls
+  5. Optionally sync home-manager dotfiles (use --hm-* flags)
 
 Example:
-  nixfleet pull-mode install -H gtr --repo git@github.com:org/fleet-config.git`,
+  nixfleet pull-mode install -H gtr --repo git@github.com:org/fleet-config.git
+
+With home-manager:
+  nixfleet pull-mode install -H gtr --repo git@github.com:org/fleet-config.git \
+    --hm-user ztaylor --hm-dotfiles-path /home/ztaylor/dotfiles/nix \
+    --hm-branch main --hm-config-name "ztaylor@x86_64-linux"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -2534,6 +2547,27 @@ Example:
 			}
 			if config.Interval == "" {
 				config.Interval = defaults.Interval
+			}
+
+			// Configure home-manager if user is specified
+			if hmUser != "" {
+				config.HomeManager = &pullmode.HomeManagerConfig{
+					User:         hmUser,
+					DotfilesPath: hmDotfilesPath,
+					Branch:       hmBranch,
+					SSHKeyPath:   hmSSHKey,
+					ConfigName:   hmConfigName,
+				}
+				// Set defaults for home-manager
+				if config.HomeManager.Branch == "" {
+					config.HomeManager.Branch = "main"
+				}
+				if config.HomeManager.DotfilesPath == "" {
+					config.HomeManager.DotfilesPath = "/home/" + hmUser + "/dotfiles/nix"
+				}
+				if config.HomeManager.ConfigName == "" {
+					config.HomeManager.ConfigName = hmUser + "@x86_64-linux"
+				}
 			}
 
 			pool := ssh.NewPool(nil)
@@ -2577,6 +2611,9 @@ Example:
 			}
 
 			fmt.Printf("\nPull mode installed successfully. Hosts will pull every %s.\n", interval)
+			if hmUser != "" {
+				fmt.Printf("Home-manager sync enabled for user '%s' (dotfiles: %s)\n", hmUser, config.HomeManager.DotfilesPath)
+			}
 			return nil
 		},
 	}
@@ -2589,6 +2626,13 @@ Example:
 	cmd.Flags().BoolVar(&applyOnBoot, "apply-on-boot", true, "Apply configuration on boot")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for status notifications")
 	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Webhook secret for signing")
+
+	// Home-manager flags
+	cmd.Flags().StringVar(&hmUser, "hm-user", "", "Username to run home-manager as (enables home-manager sync)")
+	cmd.Flags().StringVar(&hmDotfilesPath, "hm-dotfiles-path", "", "Path to dotfiles repository (default: /home/<user>/dotfiles/nix)")
+	cmd.Flags().StringVar(&hmBranch, "hm-branch", "main", "Branch to track for dotfiles")
+	cmd.Flags().StringVar(&hmSSHKey, "hm-ssh-key", "", "Path to SSH key for dotfiles repo access")
+	cmd.Flags().StringVar(&hmConfigName, "hm-config-name", "", "Home-manager flake config name (default: <user>@x86_64-linux)")
 
 	cmd.MarkFlagRequired("repo")
 
