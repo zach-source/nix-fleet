@@ -43,19 +43,21 @@ nixfleet/
 │   ├── main.go             # Entry point with Cobra commands
 │   └── internal/           # Internal packages
 │       ├── apt/            # APT package management for Ubuntu
-│       ├── apply/          # Deployment pipeline
+│       ├── apply/          # Deployment pipeline with reconciliation
 │       ├── cache/          # Build cache management
 │       ├── health/         # Health check execution
 │       ├── inventory/      # Host inventory loading
+│       ├── k0s/            # k0s reconciliation and status
 │       ├── nix/            # Nix evaluation and deployment
 │       ├── osupdate/       # OS update management
+│       ├── pki/            # Fleet PKI (CA, certificates)
 │       ├── preflight/      # Pre-deployment checks
 │       ├── pullmode/       # GitOps pull-based deployment
 │       ├── reboot/         # Reboot orchestration
 │       ├── secrets/        # Age-encrypted secrets
 │       ├── server/         # HTTP API server + web UI
 │       ├── ssh/            # SSH client, pool, executor
-│       └── state/          # Host state tracking
+│       └── state/          # Host state tracking (includes K0sState)
 ├── flake.nix               # Nix flake for building
 ├── backends/               # Backend-specific code
 ├── hosts/                  # Example host configurations
@@ -83,8 +85,11 @@ go fmt ./...
 
 ### Key Packages
 
+- **apply/**: Deployment pipeline with preflight, deploy, PKI, k0s reconciliation, health checks
+- **k0s/**: k0s cluster management - status, reconciliation, orphan cleanup
+- **pki/**: Fleet PKI with ECDSA P-256 - CA init, cert issuance, age-encrypted storage
+- **state/**: Host state tracking including `K0sState` for resource tracking
 - **server/**: HTTP API at `/api/*` with embedded web UI
-- **state/**: `HostState` struct with health, packages, OS info
 - **apt/**: APT operations via SSH (CheckUpdates, Install, Remove, etc.)
 - **nix/deployer.go**: Core deployment logic via SSH
 - **pullmode/**: GitOps-style pull deployments
@@ -150,7 +155,15 @@ NixFleet uses [Semantic Versioning](https://semver.org/):
 - **PATCH**: Bug fixes, backward compatible
 
 ### Current Version
-- **v0.1.0** - Initial release (2024-12-24)
+- **v0.1.5** - k0s & PKI release (2025-12-26)
+
+### Changelog
+- **v0.1.5**: k0s Kubernetes support, Fleet PKI, Gateway API, resource reconciliation
+- **v0.1.4**: NixOS support, Darwin improvements
+- **v0.1.3**: Pull mode enhancements
+- **v0.1.2**: Web UI improvements
+- **v0.1.1**: Bug fixes
+- **v0.1.0**: Initial release (2024-12-24)
 
 ### Creating a Release
 

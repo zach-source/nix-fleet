@@ -4,11 +4,15 @@ Fleet management CLI for deploying Nix configurations to non-NixOS hosts (Ubuntu
 
 ## Features
 
-- **Multi-platform support**: Deploy to Ubuntu and macOS hosts
+- **Multi-platform support**: Deploy to Ubuntu, NixOS, and macOS hosts
+- **k0s Kubernetes**: Bootstrap and manage k0s clusters with Cilium CNI
+- **Fleet PKI**: Built-in CA for TLS certificates across your fleet
+- **Gateway API**: Shared ingress gateway with auto-generated certificates
 - **GitOps pull mode**: Hosts automatically pull and apply configurations
 - **Age-encrypted secrets**: SSH host key integration for zero-config decryption
 - **Declarative configuration**: Define packages, files, users, systemd units via Nix
 - **Health checks**: Monitor host health with configurable checks
+- **Resource reconciliation**: Automatic cleanup of orphaned k0s resources
 - **Web UI**: Dashboard for fleet visibility and management
 
 ## Installation
@@ -114,6 +118,24 @@ nixfleet apply -H myhost
 | `nixfleet pull-mode trigger` | Trigger immediate pull |
 | `nixfleet pull-mode uninstall` | Remove pull mode from hosts |
 
+### k0s Kubernetes
+
+| Command | Description |
+|---------|-------------|
+| `nixfleet k0s init` | Bootstrap k0s controller |
+| `nixfleet k0s status` | Show cluster status, nodes, Helm releases |
+| `nixfleet k0s kubeconfig` | Get kubeconfig for cluster access |
+| `nixfleet k0s certmanager` | Deploy Fleet CA to cert-manager |
+
+### PKI Management
+
+| Command | Description |
+|---------|-------------|
+| `nixfleet pki init` | Initialize Fleet PKI (root + intermediate CA) |
+| `nixfleet pki issue` | Issue host certificates |
+| `nixfleet pki trust` | Export CA for trust distribution |
+| `nixfleet pki status` | Show PKI status and certificate info |
+
 ### Other Commands
 
 | Command | Description |
@@ -168,6 +190,81 @@ nixfleet pull-mode install -H myhost --repo git@github.com:org/fleet-config.git
 # 2. Build the Nix configuration
 # 3. Apply changes
 # 4. Report status via webhook (optional)
+```
+
+## k0s Kubernetes
+
+NixFleet can bootstrap and manage k0s Kubernetes clusters with Cilium CNI:
+
+```nix
+# hosts/k8s-controller.nix
+{
+  nixfleet.k0s = {
+    enable = true;
+    role = "controller+worker";
+
+    network.cilium = {
+      loadBalancer = {
+        enabled = true;
+        ipPool = "192.168.1.100/32";  # Your LoadBalancer IP
+      };
+      gatewayAPI = {
+        enabled = true;
+        ingressGateway = {
+          enabled = true;
+          hostname = "*.example.com";
+          # Auto-generates TLS cert via Fleet CA
+        };
+      };
+    };
+
+    network.certManager = {
+      enabled = true;
+      fleetCAIssuer.enabled = true;  # Use Fleet PKI for certs
+    };
+  };
+}
+```
+
+### Bootstrap k0s
+
+```bash
+# Initialize PKI (once per fleet)
+nixfleet pki init
+
+# Deploy to controller
+nixfleet apply -H k8s-controller
+
+# Bootstrap k0s
+nixfleet k0s init -H k8s-controller
+
+# Deploy Fleet CA to cert-manager
+nixfleet k0s certmanager -H k8s-controller
+
+# Get kubeconfig
+nixfleet k0s kubeconfig -H k8s-controller > ~/.kube/config
+```
+
+### Deploy Applications
+
+Applications attach HTTPRoutes to the shared gateway:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app
+  namespace: my-namespace
+spec:
+  parentRefs:
+  - name: default-ingress-gateway
+    namespace: cilium-gateway
+  hostnames:
+  - myapp.example.com
+  rules:
+  - backendRefs:
+    - name: my-service
+      port: 80
 ```
 
 ## Configuration Reference
