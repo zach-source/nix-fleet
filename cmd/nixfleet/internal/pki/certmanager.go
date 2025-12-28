@@ -421,7 +421,7 @@ func (w *CertManagerWebhook) StartServer(ctx context.Context) error {
 	mux.Handle("/sign", w)
 	mux.HandleFunc("/health", func(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusOK)
-		rw.Write([]byte("ok"))
+		_, _ = rw.Write([]byte("ok"))
 	})
 
 	server := &http.Server{
@@ -434,7 +434,7 @@ func (w *CertManagerWebhook) StartServer(ctx context.Context) error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(shutdownCtx)
+		_ = server.Shutdown(shutdownCtx)
 	}()
 
 	if w.config.TLSCertFile != "" && w.config.TLSKeyFile != "" {

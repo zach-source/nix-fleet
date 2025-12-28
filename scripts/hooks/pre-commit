@@ -1,0 +1,20 @@
+#!/bin/bash
+# Pre-commit hook for nixfleet - runs golangci-lint
+#
+# Install with: ./scripts/install-hooks.sh
+
+set -e
+
+# Find repo root (works with both git and jj)
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || jj workspace root 2>/dev/null)"
+cd "$REPO_ROOT/cmd/nixfleet"
+
+echo "Running golangci-lint..."
+if command -v golangci-lint &> /dev/null; then
+    golangci-lint run ./...
+    echo "Lint passed!"
+else
+    echo "Warning: golangci-lint not found, skipping lint check"
+    echo "Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+    exit 0
+fi

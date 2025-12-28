@@ -256,7 +256,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, client *ssh.Client, previous
 // deleteHelmChart deletes a Helm chart and its k0s Chart CR
 func (r *Reconciler) deleteHelmChart(ctx context.Context, client *ssh.Client, chartName string) error {
 	// Find the namespace from helm releases
-	nsResult, err := client.ExecSudo(ctx, fmt.Sprintf(
+	nsResult, _ := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl get chart k0s-addon-chart-%s -n kube-system -o jsonpath='{.spec.namespace}' 2>/dev/null || echo ''",
 		K0sPath, chartName))
 
@@ -271,7 +271,7 @@ func (r *Reconciler) deleteHelmChart(ctx context.Context, client *ssh.Client, ch
 		K0sPath, namespace, chartName))
 
 	// Delete the k0s Chart CR
-	_, err = client.ExecSudo(ctx, fmt.Sprintf(
+	_, err := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl delete chart k0s-addon-chart-%s -n kube-system --ignore-not-found",
 		K0sPath, chartName))
 	if err != nil {
