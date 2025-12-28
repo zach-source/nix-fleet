@@ -367,6 +367,9 @@ var pullScriptTemplate = `#!/bin/bash
 
 set -euo pipefail
 
+# Ensure nix is in PATH (for manual runs outside systemd)
+export PATH="/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/nixfleet/system/bin:$PATH"
+
 REPO_PATH="{{.RepoPath}}"
 HOST_NAME="{{.HostName}}"
 BRANCH="{{.Branch}}"
