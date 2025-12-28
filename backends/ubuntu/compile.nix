@@ -183,6 +183,9 @@ let
 
     set -euo pipefail
 
+    # Ensure nix is in PATH (for manual runs outside systemd)
+    export PATH="/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/nixfleet/system/bin:$PATH"
+
     REPO_PATH="${pullCfg.repoPath}"
     HOST_NAME="${cfg.host.name}"
     BRANCH="${pullCfg.branch}"
