@@ -525,12 +525,44 @@ if [ "$HM_ENABLED" = "true" ] && [ "$DOTFILES_CHANGED" = "true" ]; then
         export HOME=/home/$HM_USER
         export NIX_PATH=nixpkgs=flake:nixpkgs
         cd '$HM_DOTFILES_PATH'
-        nix run home-manager -- switch --flake '.#$HM_CONFIG_NAME' 2>&1
+        nix run home-manager -- switch --flake '.#$HM_CONFIG_NAME' -b backup 2>&1
     " | tee -a "$LOG_FILE"; then
         log "Successfully applied dotfiles for $HM_USER"
     else
         log "WARNING: home-manager switch failed for $HM_USER"
         notify "warning" "home-manager switch failed for $HM_USER"
+    fi
+
+    # Ensure all home-manager symlinks are created
+    # home-manager sometimes skips creating symlinks if files "are the same"
+    log "Ensuring home-manager symlinks are created..."
+    HM_FILES="/home/$HM_USER/.local/state/nix/profiles/home-manager/home-files"
+    if [ -d "$HM_FILES" ]; then
+        sudo -u "$HM_USER" bash -c '
+            HM_FILES="'"$HM_FILES"'"
+            cd "$HM_FILES"
+            for f in .* *; do
+                case "$f" in .|..) continue;; esac
+                target="$HOME/$f"
+                if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+                    ln -sf "$PWD/$f" "$target"
+                    echo "Created symlink: $f"
+                fi
+            done
+            # Also handle .config directory
+            if [ -d .config ]; then
+                mkdir -p "$HOME/.config"
+                cd .config
+                for f in *; do
+                    target="$HOME/.config/$f"
+                    if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+                        ln -sf "$PWD/$f" "$target"
+                        echo "Created symlink: .config/$f"
+                    fi
+                done
+            fi
+        ' 2>&1 | tee -a "$LOG_FILE"
+        log "Symlink check completed"
     fi
 fi
 
