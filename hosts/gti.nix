@@ -46,7 +46,16 @@
         gti = "192.168.3.131";
         netboot = "192.168.3.131";
       };
+      insecureDomains = [
+        "cluster.local"
+      ];
       adblock.enable = true;
+      extraConfig = ''
+        # k0s CoreDNS — Kubernetes service discovery
+        forward-zone:
+            name: "cluster.local"
+            forward-addr: 10.96.0.10
+      '';
     };
 
     # ============================================================================
