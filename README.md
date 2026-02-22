@@ -206,7 +206,7 @@ NixFleet can bootstrap and manage k0s Kubernetes clusters with Cilium CNI:
     network.cilium = {
       loadBalancer = {
         enabled = true;
-        ipPool = "192.168.1.100/32";  # Your LoadBalancer IP
+        ipPool = "192.168.3.100/32";  # Your LoadBalancer IP
       };
       gatewayAPI = {
         enabled = true;

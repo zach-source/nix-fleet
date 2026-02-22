@@ -125,11 +125,43 @@
         };
       };
 
-      # CLI package for each system
-      packages = forAllSystems (system: {
-        default = nixpkgsFor.${system}.nixfleet;
-        nixfleet = nixpkgsFor.${system}.nixfleet;
-      });
+      # CLI package for each system + netboot images for x86_64-linux
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgsFor.${system};
+
+          # Helper to build a netboot image package from NixOS modules
+          mkNetboot =
+            name: modules:
+            let
+              sys = nixpkgs.lib.nixosSystem {
+                system = "x86_64-linux";
+                inherit modules;
+              };
+            in
+            pkgs.runCommand "netboot-${name}" { } ''
+              mkdir -p $out
+              ln -s ${sys.config.system.build.kernel}/bzImage $out/bzImage
+              ln -s ${sys.config.system.build.netbootRamdisk}/initrd $out/initrd
+              ln -s ${sys.config.system.build.squashfsStore} $out/nix-store.squashfs
+              echo "init=${sys.config.system.build.toplevel}/init loglevel=4" > $out/cmdline
+            '';
+        in
+        {
+          default = pkgs.nixfleet;
+          nixfleet = pkgs.nixfleet;
+        }
+        // (
+          if system == "x86_64-linux" then
+            {
+              netboot-gtr = mkNetboot "gtr" [ ./netboot/gtr.nix ];
+              netboot-gtr-diskless = mkNetboot "gtr-diskless" [ ./netboot/gtr-diskless.nix ];
+            }
+          else
+            { }
+        )
+      );
 
       # Development shell
       devShells = forAllSystems (
@@ -166,6 +198,10 @@
             shellHook = ''
               echo "NixFleet development shell"
               echo "Go version: $(go version)"
+              echo ""
+              echo "Netboot images (x86_64-linux only):"
+              echo "  nix build .#netboot-gtr           # GTR install/recovery image"
+              echo "  nix build .#netboot-gtr-diskless  # GTR diskless (NFS persistent)"
             '';
           };
         }

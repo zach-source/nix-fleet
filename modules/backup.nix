@@ -1,10 +1,9 @@
 # NixFleet Backup Module
 # Configures SMB personal drive mounts, NFS backup mounts, and ZFS snapshot backups
-{
-  config,
-  pkgs,
-  lib,
-  ...
+{ config
+, pkgs
+, lib
+, ...
 }:
 {
   # ============================================================================
@@ -173,7 +172,7 @@
         # Mount SMB personal drive
         mount_smb() {
           local mount_point="/mnt/personal"
-          local smb_server="192.168.1.95"
+          local smb_server="192.168.3.95"
           local smb_share="Personal-Drive"
           local creds_file="/etc/nixfleet/smb-credentials"
 
@@ -196,7 +195,7 @@
         # Mount SMB backup drive
         mount_backup() {
           local mount_point="/mnt/backup"
-          local smb_server="192.168.1.95"
+          local smb_server="192.168.3.95"
           local smb_share="NFS_Drive"
           local creds_file="/etc/nixfleet/smb-credentials"
 
@@ -264,7 +263,7 @@
         Wants=network-online.target
 
         [Mount]
-        What=//192.168.1.95/Personal-Drive
+        What=//192.168.3.95/Personal-Drive
         Where=/mnt/personal
         Type=cifs
         Options=credentials=/etc/nixfleet/smb-credentials,uid=1000,gid=1000,file_mode=0644,dir_mode=0755,_netdev,nofail
@@ -284,7 +283,7 @@
         Wants=network-online.target
 
         [Mount]
-        What=//192.168.1.95/NFS_Drive
+        What=//192.168.3.95/NFS_Drive
         Where=/mnt/backup
         Type=cifs
         Options=credentials=/etc/nixfleet/smb-credentials,uid=1000,gid=1000,file_mode=0644,dir_mode=0755,_netdev,nofail
