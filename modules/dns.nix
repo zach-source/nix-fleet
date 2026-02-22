@@ -39,6 +39,7 @@ let
   adblockUpdateScript = ''
     #!/bin/bash
     set -euo pipefail
+    export PATH="/nix/var/nix/profiles/nixfleet/system/bin:$PATH"
 
     CONF="/etc/unbound/adblock.conf"
     TMP=$(mktemp)
