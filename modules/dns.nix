@@ -421,7 +421,7 @@ in
           [Service]
           Type=simple
           ExecStartPre=/bin/bash -c 'id unbound &>/dev/null || useradd -r -s /usr/sbin/nologin -d /var/lib/unbound unbound'
-          ${lib.optionalString cfg.enableDnssec ''ExecStartPre=/usr/sbin/unbound-anchor -a /var/lib/unbound/root.key || true''}
+          ${lib.optionalString cfg.enableDnssec ''ExecStartPre=-/usr/sbin/unbound-anchor -a /var/lib/unbound/root.key''}
           ExecStart=/usr/sbin/unbound -d -c /etc/unbound/unbound.conf
           Restart=on-failure
           RestartSec=10
