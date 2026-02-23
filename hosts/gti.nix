@@ -51,10 +51,10 @@
       ];
       adblock.enable = true;
       extraConfig = ''
-        # k0s CoreDNS — Kubernetes service discovery
+        # k0s CoreDNS — Kubernetes service discovery (via NodePort 30053)
         forward-zone:
             name: "cluster.local"
-            forward-addr: 10.96.0.10
+            forward-addr: 127.0.0.1@30053
       '';
     };
 
