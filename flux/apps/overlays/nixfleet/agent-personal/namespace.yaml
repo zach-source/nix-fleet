@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-personal
+  labels:
+    nixfleet.io/component: agent
+    nixfleet.io/tenant: personal

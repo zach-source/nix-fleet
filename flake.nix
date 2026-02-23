@@ -8,6 +8,10 @@
       url = "github:LnL7/nix-darwin";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix2container = {
+      url = "github:nlewo/nix2container";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -16,6 +20,7 @@
       nixpkgs,
       flake-utils,
       nix-darwin,
+      nix2container,
     }:
     let
       # Supported systems for the CLI/tooling
@@ -154,9 +159,21 @@
         }
         // (
           if system == "x86_64-linux" then
+            let
+              n2c = nix2container.packages.${system}.nix2container;
+            in
             {
               netboot-gtr = mkNetboot "gtr" [ ./netboot/gtr.nix ];
               netboot-gtr-diskless = mkNetboot "gtr-diskless" [ ./netboot/gtr-diskless.nix ];
+
+              # Agent OCI images (Linux only — container targets)
+              agent-code-review = import ./agents/code-review { inherit n2c pkgs; };
+              agent-pm = import ./agents/pm { inherit n2c pkgs; };
+              agent-marketing = import ./agents/marketing { inherit n2c pkgs; };
+              agent-personal = import ./agents/personal { inherit n2c pkgs; };
+              agent-devops = import ./agents/devops { inherit n2c pkgs; };
+              agent-research = import ./agents/research { inherit n2c pkgs; };
+              agent-security = import ./agents/security { inherit n2c pkgs; };
             }
           else
             { }

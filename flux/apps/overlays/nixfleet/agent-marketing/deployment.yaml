@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-marketing
+  namespace: agent-marketing
+  labels:
+    app: agent-marketing
+    nixfleet.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-marketing
+  template:
+    metadata:
+      labels:
+        app: agent-marketing
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/zach-source/agent-marketing:latest
+          envFrom:
+            - secretRef:
+                name: agent-marketing-secrets
+          env:
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: npm-cache
+              mountPath: /app
+            - name: openclaw-workspace
+              mountPath: /home/openclaw/.openclaw/workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: npm-cache
+          emptyDir: {}
+        - name: openclaw-workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

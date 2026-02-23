@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nfs-storage-cap
+  namespace: nfs-storage
+  annotations:
+    nixfleet.io/description: "Caps total NFS-backed PVC storage at 2TB cluster-wide"
+spec:
+  hard:
+    # Cap total provisioned NFS storage at 2TB
+    requests.storage: "2Ti"
+    persistentvolumeclaims: "100"
+---
+# ClusterResourceQuota is not a standard K8s resource.
+# To enforce the 2TB cap cluster-wide, apply per-namespace quotas
+# to namespaces that use NFS storage, or enforce at the NFS export level.
+#
+# Recommended: Set the NFS export on the unas to 2TB max.
+# Each namespace consuming NFS should have its own ResourceQuota.
+#
+# Example for a namespace:
+# apiVersion: v1
+# kind: ResourceQuota
+# metadata:
+#   name: nfs-quota
+#   namespace: <your-namespace>
+# spec:
+#   hard:
+#     nfs.storageclass.storage.k8s.io/requests.storage: "500Gi"

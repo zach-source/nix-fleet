@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - onepassword-item.yaml
+  - neo4j-pvc.yaml
+  - neo4j-statefulset.yaml
+  - neo4j-service.yaml
+  - graphiti-mcp-deployment.yaml
+  - graphiti-mcp-service.yaml
+  - networkpolicy.yaml

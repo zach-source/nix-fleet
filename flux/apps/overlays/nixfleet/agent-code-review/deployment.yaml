@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-code-review
+  namespace: agent-code-review
+  labels:
+    app: agent-code-review
+    nixfleet.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-code-review
+  template:
+    metadata:
+      labels:
+        app: agent-code-review
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/zach-source/agent-code-review:latest
+          envFrom:
+            - secretRef:
+                name: agent-code-review-secrets
+          env:
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: npm-cache
+              mountPath: /app
+            - name: openclaw-workspace
+              mountPath: /home/openclaw/.openclaw/workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: npm-cache
+          emptyDir: {}
+        - name: openclaw-workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

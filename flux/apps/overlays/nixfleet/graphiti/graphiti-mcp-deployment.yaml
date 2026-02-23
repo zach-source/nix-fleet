@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphiti-mcp
+  namespace: graphiti
+  labels:
+    app: graphiti-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: graphiti-mcp
+  template:
+    metadata:
+      labels:
+        app: graphiti-mcp
+    spec:
+      containers:
+        - name: graphiti-mcp
+          image: zepai/knowledge-graph-mcp:latest
+          env:
+            - name: NEO4J_URI
+              value: "bolt://neo4j.graphiti:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphiti-secrets
+                  key: NEO4J_PASSWORD
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: graphiti-secrets
+                  key: OPENAI_API_KEY
+            - name: MODEL_NAME
+              value: "gpt-4.1-mini"
+            - name: EMBEDDER_MODEL_NAME
+              value: "text-embedding-3-small"
+            - name: SEMAPHORE_LIMIT
+              value: "10"
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /mcp/
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /mcp/
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
