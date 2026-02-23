@@ -101,6 +101,9 @@ let
           auto-trust-anchor-file: /var/lib/unbound/root.key
         ''}
 
+        # Allow forwarding to localhost (e.g. CoreDNS on NodePort)
+        do-not-query-localhost: no
+
         # Privacy
         qname-minimisation: yes
         hide-identity: yes

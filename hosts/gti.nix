@@ -54,6 +54,7 @@
         # k0s CoreDNS — Kubernetes service discovery (via NodePort 30053)
         forward-zone:
             name: "cluster.local"
+            forward-tls-upstream: no
             forward-addr: 127.0.0.1@30053
       '';
     };
