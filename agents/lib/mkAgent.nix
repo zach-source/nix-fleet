@@ -1,9 +1,8 @@
 # mkAgent — builds an OCI image for an OpenClaw agent using nix2container
 #
-# The image contains Node.js 22, gh CLI, git, and CA certificates from
-# nixpkgs (fully reproducible layers). OpenClaw is installed via npm on
-# first container start so the image stays lean and the install can be
-# cached in a Kubernetes emptyDir volume.
+# The image contains Node.js 22, gh CLI, git, CA certificates, and OpenClaw
+# pre-installed from npm. Config files are baked in at /etc/openclaw and
+# copied to the writable HOME at startup.
 #
 # Usage:
 #   mkAgent {
@@ -26,33 +25,72 @@ in
 }:
 
 let
-  # Files copied into the container root filesystem
-  appRoot = pkgs.runCommand "agent-${name}-root" { } ''
-    mkdir -p $out/home/openclaw/.openclaw/workspace
-    mkdir -p $out/tmp
+  # Install OpenClaw via npm at build time (FOD — fixed-output derivation)
+  openclawApp = pkgs.stdenv.mkDerivation {
+    pname = "openclaw-app";
+    version = "latest";
 
-    cp ${configFile} $out/home/openclaw/.openclaw/openclaw.json
-    cp ${soulFile}   $out/home/openclaw/.openclaw/workspace/SOUL.md
+    # No source — we just run npm install
+    dontUnpack = true;
+
+    nativeBuildInputs = [
+      base.nodejs
+      pkgs.cacert
+      pkgs.git
+    ];
+
+    buildPhase = ''
+      export HOME=$TMPDIR
+      export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+      mkdir -p $TMPDIR/app
+      cd $TMPDIR/app
+      ${base.nodejs}/bin/npm init -y > /dev/null 2>&1
+      ${base.nodejs}/bin/npm install openclaw@latest --omit=dev --ignore-scripts 2>&1
+      mkdir -p $out
+      cp -a $TMPDIR/app/. $out/
+    '';
+
+    dontInstall = true;
+    dontPatchShebangs = true;
+    dontFixup = true;
+
+    # npm needs network access
+    outputHashAlgo = "sha256";
+    outputHashMode = "recursive";
+    outputHash = "sha256-HmsQSi/u4R+SRWuviZe+lAuaQMskq+PE3o4GANlCCFw=";
+  };
+
+  # Config files baked into the image at /etc/openclaw (read-only)
+  appRoot = pkgs.runCommand "agent-${name}-root" { } ''
+    mkdir -p $out/etc/openclaw/workspace
+    mkdir -p $out/tmp
+    mkdir -p $out/usr/bin
+
+    cp ${configFile} $out/etc/openclaw/openclaw.json
+    cp ${soulFile}   $out/etc/openclaw/workspace/SOUL.md
+
+    # Many npm packages use #!/usr/bin/env in shebangs
+    ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
   '';
 
   entrypoint = pkgs.writeShellScript "agent-${name}-entrypoint" ''
     set -euo pipefail
 
-    export HOME=/home/openclaw
-    export PATH="/app/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:$PATH"
+    export HOME=/home/agent
+    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:$PATH"
 
-    # First-run: install openclaw (cached in emptyDir volume at /app)
-    if [ ! -f /app/node_modules/.bin/openclaw ]; then
-      ${base.nodejs}/bin/npm install --prefix /app openclaw@latest 2>&1
-    fi
+    # Copy read-only configs to writable HOME
+    ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
+    ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
+    ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
 
     # Authenticate gh CLI with the GitHub token from 1Password
     if [ -n "''${GITHUB_TOKEN:-}" ]; then
       echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
     fi
 
-    # Start OpenClaw daemon
-    exec /app/node_modules/.bin/openclaw start
+    # Start OpenClaw gateway
+    exec ${openclawApp}/node_modules/.bin/openclaw gateway
   '';
 
 in
@@ -65,9 +103,9 @@ n2c.buildImage {
     Env = [
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       "NODE_ENV=production"
-      "HOME=/home/openclaw"
+      "HOME=/home/agent"
     ];
-    WorkingDir = "/home/openclaw";
+    WorkingDir = "/home/agent";
     User = "65534:65534";
   };
 
@@ -78,5 +116,7 @@ n2c.buildImage {
     (n2c.buildLayer { deps = [ base.nodejs ]; })
     # Layer 2: gh CLI, git, certs, shell utilities
     (n2c.buildLayer { deps = base.systemDeps; })
+    # Layer 3: OpenClaw application (npm install output)
+    (n2c.buildLayer { deps = [ openclawApp ]; })
   ];
 }

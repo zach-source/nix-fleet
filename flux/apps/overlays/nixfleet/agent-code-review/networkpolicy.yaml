@@ -10,9 +10,16 @@ spec:
         - matchName: "api.openai.com"
         - matchName: "api.github.com"
         - matchName: "api.telegram.org"
-        - matchName: "wss-primary.slack.com"
-        - matchName: "wss-backup.slack.com"
+        - matchPattern: "*.slack.com"
         - matchName: "slack.com"
+        - matchName: "registry.npmjs.org"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Allow all HTTPS egress for npm install (CDN endpoints)
+    - toCIDR:
+        - 0.0.0.0/0
       toPorts:
         - ports:
             - port: "443"

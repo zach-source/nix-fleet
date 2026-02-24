@@ -16,6 +16,8 @@ spec:
       labels:
         app: agent-pm
     spec:
+      imagePullSecrets:
+        - name: dockerhub-pull
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -26,37 +28,35 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/zach-source/agent-pm:latest
+          image: stigenai/agent-pm:latest
+          imagePullPolicy: Always
           envFrom:
             - secretRef:
                 name: agent-pm-secrets
           env:
             - name: NODE_ENV
               value: "production"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536"
           resources:
             requests:
               cpu: 250m
-              memory: 256Mi
-            limits:
-              cpu: 500m
               memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
           volumeMounts:
-            - name: npm-cache
-              mountPath: /app
-            - name: openclaw-workspace
-              mountPath: /home/openclaw/.openclaw/workspace
+            - name: home
+              mountPath: /home/agent
             - name: tmp
               mountPath: /tmp
       volumes:
-        - name: npm-cache
-          emptyDir: {}
-        - name: openclaw-workspace
+        - name: home
           emptyDir: {}
         - name: tmp
           emptyDir: {}
