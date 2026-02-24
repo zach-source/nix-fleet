@@ -4,7 +4,7 @@ metadata:
   name: nfs
   annotations:
     nixfleet.io/storage-cap: "2Ti"
-    nixfleet.io/nfs-server: "192.168.3.95"
+    nixfleet.io/nfs-server: "192.168.1.95"
 provisioner: nixfleet.io/nfs
 parameters:
   archiveOnDelete: "true"

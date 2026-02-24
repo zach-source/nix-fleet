@@ -25,9 +25,9 @@ spec:
             - name: PROVISIONER_NAME
               value: nixfleet.io/nfs
             - name: NFS_SERVER
-              value: "192.168.3.95"
+              value: "192.168.1.95"
             - name: NFS_PATH
-              value: "/volume1/NFS_Drive"
+              value: "/volume/173f30ca-9f55-43a7-bec1-2d7874f146d3/.srv/.unifi-drive/fast_drives/.data"
           volumeMounts:
             - name: nfs-root
               mountPath: /persistentvolumes
@@ -46,5 +46,5 @@ spec:
       volumes:
         - name: nfs-root
           nfs:
-            server: "192.168.3.95"
-            path: "/volume1/NFS_Drive"
+            server: "192.168.1.95"
+            path: "/volume/173f30ca-9f55-43a7-bec1-2d7874f146d3/.srv/.unifi-drive/fast_drives/.data"
