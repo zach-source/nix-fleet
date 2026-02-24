@@ -33,6 +33,13 @@
     }
   },
 
+  "plugins": {
+    "entries": {
+      "slack": { "enabled": true },
+      "telegram": { "enabled": true }
+    }
+  },
+
   "tools": {
     "profile": "full",
     "web": {

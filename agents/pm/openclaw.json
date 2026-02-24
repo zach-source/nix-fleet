@@ -27,6 +27,12 @@
     }
   },
 
+  "plugins": {
+    "entries": {
+      "slack": { "enabled": true }
+    }
+  },
+
   "tools": {
     "profile": "full",
     "web": {
