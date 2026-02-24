@@ -33,6 +33,8 @@ spec:
                   key: NEO4J_PASSWORD
             - name: NEO4J_PLUGINS
               value: '["apoc"]'
+            - name: NEO4J_server_config_strict__validation_enabled
+              value: "false"
           ports:
             - name: bolt
               containerPort: 7687
