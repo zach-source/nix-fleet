@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: graphiti-route
+  namespace: graphiti
+spec:
+  hostnames:
+    - graphiti.stigen.home
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: default-ingress-gateway
+      namespace: cilium-gateway
+  rules:
+    - backendRefs:
+        - kind: Service
+          name: graphiti-mcp
+          port: 8000
+      matches:
+        - path:
+            type: PathPrefix
+            value: /

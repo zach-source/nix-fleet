@@ -9,3 +9,4 @@ resources:
   - graphiti-mcp-deployment.yaml
   - graphiti-mcp-service.yaml
   - networkpolicy.yaml
+  - httproute.yaml
