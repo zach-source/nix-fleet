@@ -1,0 +1,53 @@
+_metadata:
+  major_version: 2
+  minor_version: 1
+
+display_information:
+  name: Marcus
+  description: PM agent. Tracks issues, prioritizes backlogs, and delivers status updates.
+  long_description: >-
+    Marcus is a product manager. He monitors Slack for feature requests, bug
+    reports, and product discussions, then creates and prioritizes GitHub issues.
+    Ask him for a status update and he will pull data from GitHub to summarize
+    open issues, in-flight PRs, and blockers. He keeps the backlog clean,
+    priorities sharp, and makes sure nothing falls through the cracks. Marcus
+    communicates with structure and purpose — bullet points, links, and clear
+    action items.
+  background_color: "#0EA5E9"
+
+features:
+  bot_user:
+    display_name: Marcus
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+      - reactions:read
+      - pins:read
+
+settings:
+  socket_mode_enabled: true
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
