@@ -70,6 +70,9 @@ let
     cp ${configFile} $out/etc/openclaw/openclaw.json
     cp ${soulFile}   $out/etc/openclaw/workspace/SOUL.md
 
+    # glibc getaddrinfo needs nsswitch.conf for DNS resolution
+    echo "hosts: files dns" > $out/etc/nsswitch.conf
+
     # Many npm packages use #!/usr/bin/env in shebangs
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
   '';
