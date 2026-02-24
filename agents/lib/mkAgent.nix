@@ -116,6 +116,7 @@ n2c.buildImage {
     entrypoint = [ "${entrypoint}" ];
     Env = [
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+      "LD_LIBRARY_PATH=${pkgs.glibc}/lib"
       "NODE_ENV=production"
       "HOME=/home/agent"
     ];
