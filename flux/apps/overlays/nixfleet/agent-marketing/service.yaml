@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-marketing
+  namespace: agent-marketing
+spec:
+  clusterIP: None
+  selector:
+    app: agent-marketing

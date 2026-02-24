@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-security
+  namespace: agent-security
+spec:
+  clusterIP: None
+  selector:
+    app: agent-security

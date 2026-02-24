@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-devops
+  namespace: agent-devops
+spec:
+  clusterIP: None
+  selector:
+    app: agent-devops

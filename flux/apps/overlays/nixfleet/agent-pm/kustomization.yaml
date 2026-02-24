@@ -4,5 +4,6 @@ resources:
   - namespace.yaml
   - onepassword-item.yaml
   - configmap.yaml
-  - deployment.yaml
+  - statefulset.yaml
+  - service.yaml
   - networkpolicy.yaml

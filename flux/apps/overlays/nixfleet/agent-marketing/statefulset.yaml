@@ -1,20 +1,21 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: agent-research
-  namespace: agent-research
+  name: agent-marketing
+  namespace: agent-marketing
   labels:
-    app: agent-research
+    app: agent-marketing
     nixfleet.io/component: agent
 spec:
+  serviceName: agent-marketing
   replicas: 1
   selector:
     matchLabels:
-      app: agent-research
+      app: agent-marketing
   template:
     metadata:
       labels:
-        app: agent-research
+        app: agent-marketing
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -26,10 +27,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/zach-source/agent-research:latest
+          image: ghcr.io/zach-source/agent-marketing:latest
           envFrom:
             - secretRef:
-                name: agent-research-secrets
+                name: agent-marketing-secrets
           env:
             - name: NODE_ENV
               value: "production"
@@ -49,14 +50,21 @@ spec:
           volumeMounts:
             - name: npm-cache
               mountPath: /app
-            - name: openclaw-workspace
-              mountPath: /home/openclaw/.openclaw/workspace
+            - name: data
+              mountPath: /home/openclaw
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: npm-cache
           emptyDir: {}
-        - name: openclaw-workspace
-          emptyDir: {}
         - name: tmp
           emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nfs
+        resources:
+          requests:
+            storage: 1Gi

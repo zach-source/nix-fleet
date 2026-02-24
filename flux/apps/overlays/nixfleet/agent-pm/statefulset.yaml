@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agent-pm
+  namespace: agent-pm
+  labels:
+    app: agent-pm
+    nixfleet.io/component: agent
+spec:
+  serviceName: agent-pm
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-pm
+  template:
+    metadata:
+      labels:
+        app: agent-pm
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-pull
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: stigenai/agent-pm:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: agent-pm-secrets
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /home/agent
+            - name: config
+              mountPath: /home/agent/.openclaw/openclaw.json
+              subPath: openclaw.json
+            - name: config
+              mountPath: /home/agent/.openclaw/SOUL.md
+              subPath: SOUL.md
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: agent-pm-config
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nfs
+        resources:
+          requests:
+            storage: 1Gi

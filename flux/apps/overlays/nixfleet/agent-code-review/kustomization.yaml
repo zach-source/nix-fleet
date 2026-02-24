@@ -3,5 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - onepassword-item.yaml
-  - deployment.yaml
+  - configmap.yaml
+  - statefulset.yaml
+  - service.yaml
   - networkpolicy.yaml

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-code-review
+  namespace: agent-code-review
+spec:
+  clusterIP: None
+  selector:
+    app: agent-code-review
