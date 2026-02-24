@@ -9,5 +9,9 @@ mkAgent {
   name = "agent-code-review";
   configFile = ./openclaw.json;
   soulFile = ./SOUL.md;
+  plugins = [
+    "slack"
+    "telegram"
+  ];
   inherit config;
 }

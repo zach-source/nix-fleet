@@ -22,6 +22,7 @@ in
   configFile,
   soulFile,
   config,
+  plugins ? [ ],
 }:
 
 let
@@ -73,6 +74,13 @@ let
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
   '';
 
+  # Generate plugin enable commands from the plugins list
+  pluginEnableCommands = builtins.concatStringsSep "\n" (
+    builtins.map (p: ''
+      ${openclawApp}/node_modules/.bin/openclaw plugins enable ${p} 2>/dev/null || true
+    '') plugins
+  );
+
   entrypoint = pkgs.writeShellScript "agent-${name}-entrypoint" ''
     set -euo pipefail
 
@@ -83,6 +91,9 @@ let
     ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
     ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
     ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
+
+    # Enable channel plugins (writes to ~/.openclaw/openclaw.json)
+    ${pluginEnableCommands}
 
     # Authenticate gh CLI with the GitHub token from 1Password
     if [ -n "''${GITHUB_TOKEN:-}" ]; then

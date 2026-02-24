@@ -9,5 +9,6 @@ mkAgent {
   name = "agent-pm";
   configFile = ./openclaw.json;
   soulFile = ./SOUL.md;
+  plugins = [ "slack" ];
   inherit config;
 }
