@@ -76,6 +76,9 @@ let
     # Patch dns.lookup to use c-ares with retry (handles intermittent CoreDNS failures)
     cp ${./dns-patch.js} $out/etc/openclaw/dns-patch.js
 
+    # Exec approvals for headless K8s — auto-approve all exec, no interactive prompts
+    echo '{"version":1,"defaults":{"security":"full","ask":"off","autoAllowSkills":true},"agents":{}}' > $out/etc/openclaw/exec-approvals.json
+
     # Many npm packages use #!/usr/bin/env in shebangs
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
 
@@ -96,12 +99,18 @@ let
     set -euo pipefail
 
     export HOME=/home/agent
-    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:$PATH"
+    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:${pkgs.jq}/bin:${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gawk}/bin:$PATH"
 
     # Copy read-only configs to writable HOME
     ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
     ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
     ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
+
+    # Exec approvals: headless K8s — security=full, ask=off (no interactive prompts)
+    # Only seed if missing so agent-customized approvals on NFS are preserved
+    if [ ! -f /home/agent/.openclaw/exec-approvals.json ]; then
+      ${pkgs.coreutils}/bin/cp /etc/openclaw/exec-approvals.json /home/agent/.openclaw/exec-approvals.json
+    fi
 
     # Enable channel plugins (writes to ~/.openclaw/openclaw.json)
     ${pluginEnableCommands}
