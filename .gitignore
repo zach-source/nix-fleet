@@ -25,5 +25,8 @@ secrets/**/*.plain
 .DS_Store
 Thumbs.db
 
+# Slack bootstrap state (local app registrations)
+agents/.slack-apps.json
+
 # Claude working files
 .claude/
