@@ -78,6 +78,11 @@ let
 
     # Many npm packages use #!/usr/bin/env in shebangs
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
+
+    # OpenClaw exec tool spawns "sh" — needs /bin/sh to exist
+    mkdir -p $out/bin
+    ln -s ${pkgs.bashInteractive}/bin/bash $out/bin/sh
+    ln -s ${pkgs.bashInteractive}/bin/bash $out/bin/bash
   '';
 
   # Generate plugin enable commands from the plugins list
@@ -91,7 +96,7 @@ let
     set -euo pipefail
 
     export HOME=/home/agent
-    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:$PATH"
+    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:$PATH"
 
     # Copy read-only configs to writable HOME
     ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
