@@ -73,6 +73,9 @@ let
     # glibc getaddrinfo needs nsswitch.conf for DNS resolution
     echo "hosts: files dns" > $out/etc/nsswitch.conf
 
+    # Patch dns.lookup to use c-ares with retry (handles intermittent CoreDNS failures)
+    cp ${./dns-patch.js} $out/etc/openclaw/dns-patch.js
+
     # Many npm packages use #!/usr/bin/env in shebangs
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
   '';
@@ -116,7 +119,7 @@ n2c.buildImage {
     entrypoint = [ "${entrypoint}" ];
     Env = [
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-      "NODE_OPTIONS=--max-old-space-size=1536"
+      "NODE_OPTIONS=--max-old-space-size=1536 --require /etc/openclaw/dns-patch.js"
       "UV_THREADPOOL_SIZE=16"
       "NODE_ENV=production"
       "HOME=/home/agent"
