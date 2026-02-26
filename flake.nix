@@ -178,6 +178,7 @@
               agent-architect = import ./agents/architect { inherit n2c pkgs; };
               agent-sre = import ./agents/sre { inherit n2c pkgs; };
               agent-sage = import ./agents/sage { inherit n2c pkgs; };
+              agent-orchestrator = import ./agents/orchestrator { inherit n2c pkgs; };
             }
           else
             { }
