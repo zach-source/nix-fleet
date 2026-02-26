@@ -41,6 +41,10 @@
     modules.dns = {
       enable = true;
       domain = "stigen.lan";
+      accessControl = [
+        "192.168.0.0/16"
+        "10.244.0.0/16" # k0s pod network — CoreDNS forwards here
+      ];
       localRecords = {
         gtr = "192.168.3.31";
         gti = "192.168.3.131";

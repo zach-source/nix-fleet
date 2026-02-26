@@ -81,7 +81,7 @@ let
         # Access control
         access-control: 127.0.0.0/8 allow
         access-control: ::1/128 allow
-        access-control: ${cfg.accessControl} allow
+    ${lib.concatMapStringsSep "\n" (cidr: "    access-control: ${cidr} allow") cfg.accessControl}
         access-control: 0.0.0.0/0 refuse
         access-control: ::/0 refuse
 
@@ -179,9 +179,13 @@ in
     };
 
     accessControl = lib.mkOption {
-      type = lib.types.str;
-      default = "192.168.0.0/16";
-      description = "CIDR range allowed to query this DNS server";
+      type = lib.types.listOf lib.types.str;
+      default = [ "192.168.0.0/16" ];
+      description = "CIDR ranges allowed to query this DNS server";
+      example = [
+        "192.168.0.0/16"
+        "10.244.0.0/16"
+      ];
     };
 
     forwarders = lib.mkOption {
