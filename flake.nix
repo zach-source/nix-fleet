@@ -174,6 +174,10 @@
               agent-devops = import ./agents/devops { inherit n2c pkgs; };
               agent-research = import ./agents/research { inherit n2c pkgs; };
               agent-security = import ./agents/security { inherit n2c pkgs; };
+              agent-coder = import ./agents/coder { inherit n2c pkgs; };
+              agent-architect = import ./agents/architect { inherit n2c pkgs; };
+              agent-sre = import ./agents/sre { inherit n2c pkgs; };
+              agent-sage = import ./agents/sage { inherit n2c pkgs; };
             }
           else
             { }

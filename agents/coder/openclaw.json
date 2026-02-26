@@ -12,19 +12,13 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-5.3-codex",
-        "fallbacks": ["openai/gpt-5.2-codex"]
+        "primary": "zai/glm-5",
+        "fallbacks": ["openai/gpt-4.1-mini"]
       }
     }
   },
 
   "channels": {
-    "telegram": {
-      "enabled": true,
-      "botToken": "${TELEGRAM_BOT_TOKEN}",
-      "dmPolicy": "allowlist",
-      "allowFrom": ["${TELEGRAM_OWNER_ID}"]
-    },
     "slack": {
       "enabled": true,
       "mode": "socket",
@@ -35,8 +29,7 @@
 
   "plugins": {
     "entries": {
-      "slack": { "enabled": true },
-      "telegram": { "enabled": true }
+      "slack": { "enabled": true }
     }
   },
 

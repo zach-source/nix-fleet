@@ -19,6 +19,10 @@ spec:
                 - agent-devops
                 - agent-research
                 - agent-security
+                - agent-coder
+                - agent-architect
+                - agent-sre
+                - agent-sage
       toPorts:
         - ports:
             - port: "8000"

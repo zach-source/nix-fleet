@@ -19,12 +19,6 @@
   },
 
   "channels": {
-    "telegram": {
-      "enabled": true,
-      "botToken": "${TELEGRAM_BOT_TOKEN}",
-      "dmPolicy": "allowlist",
-      "allowFrom": ["${TELEGRAM_OWNER_ID}"]
-    },
     "slack": {
       "enabled": true,
       "mode": "socket",
@@ -35,15 +29,14 @@
 
   "plugins": {
     "entries": {
-      "slack": { "enabled": true },
-      "telegram": { "enabled": true }
+      "slack": { "enabled": true }
     }
   },
 
   "tools": {
     "profile": "full",
     "web": {
-      "search": { "enabled": false },
+      "search": { "enabled": true },
       "fetch": { "enabled": true }
     }
   }

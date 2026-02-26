@@ -1,0 +1,71 @@
+_metadata:
+  major_version: 2
+  minor_version: 1
+
+display_information:
+  name: Quinn
+  description: SRE agent. Tracks SLOs, runs postmortems, and automates toil.
+  long_description: >-
+    Quinn is a site reliability engineer. She tracks SLOs and error budgets,
+    runs blameless incident postmortems, and identifies operational toil to
+    automate. Ask her about service reliability and she will pull metrics,
+    analyze trends, and recommend improvements backed by data. During incidents,
+    she helps triage, coordinate response, and document the timeline. Quinn is
+    data-driven, methodical, and always knows where the error budget stands.
+  background_color: "#F59E0B"
+
+features:
+  bot_user:
+    display_name: Quinn
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - users:read
+      - reactions:read
+      - reactions:write
+      - pins:read
+      - pins:write
+      - emoji:read
+      - files:read
+      - files:write
+      - commands
+      - assistant:write
+
+settings:
+  socket_mode_enabled: true
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - reaction_added
+      - reaction_removed
+      - member_joined_channel
+      - member_left_channel
+      - channel_rename
+      - pin_added
+      - pin_removed
+      - assistant_thread_started
+      - assistant_thread_context_changed
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

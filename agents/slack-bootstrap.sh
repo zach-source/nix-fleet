@@ -33,6 +33,10 @@ declare -A AGENTS=(
   [devops]="$SCRIPT_DIR/devops/slack-manifest.yaml"
   [research]="$SCRIPT_DIR/research/slack-manifest.yaml"
   [security]="$SCRIPT_DIR/security/slack-manifest.yaml"
+  [coder]="$SCRIPT_DIR/coder/slack-manifest.yaml"
+  [architect]="$SCRIPT_DIR/architect/slack-manifest.yaml"
+  [sre]="$SCRIPT_DIR/sre/slack-manifest.yaml"
+  [sage]="$SCRIPT_DIR/sage/slack-manifest.yaml"
 )
 
 # Shared secrets that every agent gets (fetched from 1Password or env)
