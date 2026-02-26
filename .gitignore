@@ -30,3 +30,4 @@ agents/.slack-apps.json
 
 # Claude working files
 .claude/
+__pycache__/

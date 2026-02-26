@@ -24,5 +24,6 @@ in
     pkgs.findutils # find, xargs — file discovery in exec commands
     pkgs.gnused # sed — stream editing in exec commands
     pkgs.gawk # awk — text processing in exec commands
+    pkgs.openssl # JWT signing for GitHub App installation tokens
   ];
 }

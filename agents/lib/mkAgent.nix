@@ -79,6 +79,9 @@ let
     # Exec approvals for headless K8s — auto-approve all exec, no interactive prompts
     echo '{"version":1,"defaults":{"security":"full","ask":"off","autoAllowSkills":true},"agents":{}}' > $out/etc/openclaw/exec-approvals.json
 
+    # GitHub App token generator (PEM → JWT → installation token)
+    cp ${./gh-app-token.sh} $out/etc/openclaw/gh-app-token.sh
+
     # Many npm packages use #!/usr/bin/env in shebangs
     ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
 
@@ -99,7 +102,7 @@ let
     set -euo pipefail
 
     export HOME=/home/agent
-    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:${pkgs.jq}/bin:${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gawk}/bin:$PATH"
+    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:${pkgs.jq}/bin:${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gawk}/bin:${pkgs.openssl}/bin:$PATH"
 
     # Copy read-only configs to writable HOME
     ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
@@ -115,8 +118,27 @@ let
     # Enable channel plugins (writes to ~/.openclaw/openclaw.json)
     ${pluginEnableCommands}
 
-    # Authenticate gh CLI with the GitHub token from 1Password
-    if [ -n "''${GITHUB_TOKEN:-}" ]; then
+    # GitHub authentication — supports GitHub App (preferred) or static PAT (legacy)
+    if [ -n "''${GITHUB_APP_ID:-}" ] && [ -n "''${GITHUB_APP_PRIVATE_KEY_B64:-}" ] && [ -n "''${GITHUB_APP_INSTALLATION_ID:-}" ]; then
+      # GitHub App: generate short-lived installation token (1hr)
+      ${pkgs.coreutils}/bin/cp /etc/openclaw/gh-app-token.sh /home/agent/gh-app-token.sh
+      ${pkgs.coreutils}/bin/chmod +x /home/agent/gh-app-token.sh
+      GITHUB_TOKEN=$(/home/agent/gh-app-token.sh)
+      export GITHUB_TOKEN
+      echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
+      echo "$GITHUB_TOKEN" > /home/agent/.github-token
+
+      # Background refresh: generate new token every 50 minutes
+      (
+        while true; do
+          sleep 3000
+          NEW_TOKEN=$(/home/agent/gh-app-token.sh 2>/dev/null) || continue
+          echo "$NEW_TOKEN" > /home/agent/.github-token
+          echo "$NEW_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
+        done
+      ) &
+    elif [ -n "''${GITHUB_TOKEN:-}" ]; then
+      # Legacy: static PAT from 1Password
       echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
     fi
 

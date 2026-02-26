@@ -39,6 +39,28 @@ declare -A AGENTS=(
 SHARED_OPENAI_KEY_ITEM="OPENAI_API_KEY"  # 1Password item in same vault
 SHARED_GITHUB_TOKEN_ITEM="GitHub App Key" # or set GITHUB_TOKEN env var
 
+# GitHub fine-grained PAT config
+GH_ORG="stigenai"
+GH_PAT_DESCRIPTION="nixfleet-agents"
+# Repository access: "all" = all repos under GH_ORG (recommended)
+GH_REPO_ACCESS="all"
+# Required fine-grained PAT permissions (permission:access_level)
+GH_PAT_PERMISSIONS=(
+  "contents:read"
+  "issues:write"
+  "pull_requests:write"
+  "metadata:read"
+)
+# GitHub App manifest permissions (same as PAT but different key names)
+GH_APP_PERMISSIONS='{
+  "contents": "read",
+  "issues": "write",
+  "pull_requests": "write",
+  "metadata": "read"
+}'
+GH_APP_CALLBACK_PORT=3141
+GH_APP_STATE_FILE="$SCRIPT_DIR/.github-apps.json"
+
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 check_deps() {
@@ -564,6 +586,500 @@ op_show_status() {
   done
 }
 
+# ─── GitHub PAT Management ────────────────────────────────────────────────
+
+gh_setup() {
+  echo "GitHub Fine-Grained PAT Setup"
+  echo "=============================="
+  echo ""
+  echo "Create a fine-grained PAT at:"
+  echo "  https://github.com/settings/personal-access-tokens/new"
+  echo ""
+  echo "Configuration:"
+  echo "  Token name:       $GH_PAT_DESCRIPTION"
+  echo "  Expiration:       90 days (or custom)"
+  echo "  Resource owner:   $GH_ORG"
+  echo "  Repository access: All repositories under $GH_ORG"
+  echo ""
+  echo "  Permissions (Repository):"
+  for perm in "${GH_PAT_PERMISSIONS[@]}"; do
+    local name="${perm%%:*}"
+    local level="${perm##*:}"
+    local display_name="${name//_/ }"
+    display_name="$(echo "$display_name" | sed 's/\b\(.\)/\u\1/g')"
+    local display_level
+    case "$level" in
+      read)  display_level="Read-only" ;;
+      write) display_level="Read and write" ;;
+      *)     display_level="$level" ;;
+    esac
+    echo "    $display_name: $display_level"
+  done
+  echo ""
+  echo "After creating the PAT:"
+  echo "  1. Copy the github_pat_... token"
+  echo "  2. Update 1Password items:"
+  echo "     $0 gh-update-op"
+  echo "  3. Restart agent pods to pick up new token"
+  echo ""
+
+  # If an existing token is available, offer to check it
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    echo "GITHUB_TOKEN is set in environment. Checking permissions..."
+    echo ""
+    gh_check
+  fi
+}
+
+gh_check() {
+  local token="${GITHUB_TOKEN:-}"
+  if [[ -z "$token" ]]; then
+    # Try to get from 1Password
+    if command -v op &>/dev/null; then
+      token=$(op item get "$SHARED_GITHUB_TOKEN_ITEM" --vault "$OP_VAULT" --fields credential 2>/dev/null || true)
+    fi
+  fi
+
+  if [[ -z "$token" ]]; then
+    echo "Error: No GitHub token found." >&2
+    echo "Set GITHUB_TOKEN env var or ensure 1Password item '$SHARED_GITHUB_TOKEN_ITEM' exists." >&2
+    return 1
+  fi
+
+  echo "GitHub PAT Permission Check"
+  echo "==========================="
+  echo ""
+
+  # Check token info
+  local user_response
+  user_response=$(curl -s -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/user" 2>&1)
+  local login
+  login=$(echo "$user_response" | jq -r '.login // "unknown"')
+  echo "  Authenticated as: $login"
+  echo ""
+
+  # Fetch all repos under the org
+  echo "  Fetching repos for $GH_ORG..."
+  local repos_json
+  repos_json=$(curl -s -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/orgs/$GH_ORG/repos?per_page=100&sort=name" 2>&1)
+  local repo_names
+  repo_names=$(echo "$repos_json" | jq -r '.[].name // empty' 2>/dev/null)
+
+  if [[ -z "$repo_names" ]]; then
+    echo "  Error: Could not list repos for $GH_ORG (token may lack org access)" >&2
+    echo "  Response: $(echo "$repos_json" | jq -r '.message // "unknown"' 2>/dev/null)" >&2
+    return 1
+  fi
+
+  local repo_count
+  repo_count=$(echo "$repo_names" | wc -l | tr -d ' ')
+  echo "  Found $repo_count repos"
+  echo ""
+
+  local all_ok=true
+
+  while IFS= read -r repo; do
+    [[ -z "$repo" ]] && continue
+    echo "  $GH_ORG/$repo:"
+
+    # Check repo access
+    local repo_response
+    repo_response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/$GH_ORG/$repo" 2>&1)
+    local http_code
+    http_code=$(echo "$repo_response" | tail -1)
+    local repo_body
+    repo_body=$(echo "$repo_response" | sed '$d')
+
+    if [[ "$http_code" != "200" ]]; then
+      echo "    Repo access: FAIL (HTTP $http_code)"
+      all_ok=false
+      continue
+    fi
+
+    local permissions
+    permissions=$(echo "$repo_body" | jq -c '.permissions // {}')
+    echo "    Repo access: OK"
+    echo "    Permissions: $permissions"
+
+    # Check contents:read via GraphQL (the one that was failing)
+    local graphql_response
+    graphql_response=$(curl -s -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+      "https://api.github.com/graphql" \
+      -d "{\"query\": \"{ repository(owner: \\\"$GH_ORG\\\", name: \\\"$repo\\\") { defaultBranchRef { name } } }\"}" 2>&1)
+    local branch
+    branch=$(echo "$graphql_response" | jq -r '.data.repository.defaultBranchRef.name // empty')
+    local graphql_error
+    graphql_error=$(echo "$graphql_response" | jq -r '.errors[0].message // empty')
+
+    if [[ -n "$branch" ]]; then
+      echo "    Contents (GraphQL): OK (branch: $branch)"
+    elif [[ -n "$graphql_error" ]]; then
+      echo "    Contents (GraphQL): FAIL — $graphql_error"
+      all_ok=false
+    else
+      # Empty repo (no commits) — defaultBranchRef is null, but access is fine
+      echo "    Contents (GraphQL): OK (empty repo — no default branch)"
+    fi
+
+    # Check issues:write
+    local issues_response
+    issues_response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/$GH_ORG/$repo/issues?per_page=1&state=all" 2>&1)
+    http_code=$(echo "$issues_response" | tail -1)
+    if [[ "$http_code" == "200" ]]; then
+      echo "    Issues (read): OK"
+    else
+      echo "    Issues (read): FAIL (HTTP $http_code)"
+      all_ok=false
+    fi
+
+    # Check pull_requests:read
+    local pr_response
+    pr_response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/$GH_ORG/$repo/pulls?per_page=1&state=all" 2>&1)
+    http_code=$(echo "$pr_response" | tail -1)
+    if [[ "$http_code" == "200" ]]; then
+      echo "    Pull requests (read): OK"
+    else
+      echo "    Pull requests (read): FAIL (HTTP $http_code)"
+      all_ok=false
+    fi
+
+    echo ""
+  done <<< "$repo_names"
+
+  if $all_ok; then
+    echo "  All checks passed."
+  else
+    echo "  Some checks FAILED. Recreate the PAT with the required permissions:"
+    echo "    $0 gh-setup"
+  fi
+
+  return 0
+}
+
+gh_update_op() {
+  check_op
+
+  echo "Update GitHub PAT in 1Password"
+  echo "==============================="
+  echo ""
+  read -r -p "  Paste new GITHUB_TOKEN (github_pat_...): " new_token
+
+  if [[ -z "$new_token" ]]; then
+    echo "  No token provided. Aborting."
+    return 1
+  fi
+
+  # Verify the token works before saving
+  echo ""
+  echo "  Verifying token..."
+  local user_response
+  user_response=$(curl -s -H "Authorization: Bearer $new_token" "https://api.github.com/user" 2>&1)
+  local login
+  login=$(echo "$user_response" | jq -r '.login // empty')
+  if [[ -z "$login" ]]; then
+    echo "  Error: Token is invalid or expired." >&2
+    return 1
+  fi
+  echo "  Authenticated as: $login"
+
+  # Update shared 1Password item
+  echo "  Updating shared item: $SHARED_GITHUB_TOKEN_ITEM..."
+  if op item get "$SHARED_GITHUB_TOKEN_ITEM" --vault "$OP_VAULT" &>/dev/null 2>&1; then
+    op item edit "$SHARED_GITHUB_TOKEN_ITEM" --vault "$OP_VAULT" "credential=$new_token" &>/dev/null
+    echo "  Updated: $SHARED_GITHUB_TOKEN_ITEM"
+  else
+    echo "  Shared item not found, skipping."
+  fi
+
+  # Update each agent's 1Password item
+  echo ""
+  for agent in "${!AGENTS[@]}"; do
+    local op_title
+    op_title=$(op_item_title "$agent")
+    if op item get "$op_title" --vault "$OP_VAULT" &>/dev/null 2>&1; then
+      op item edit "$op_title" --vault "$OP_VAULT" "GITHUB_TOKEN=$new_token" &>/dev/null
+      echo "  Updated: $op_title"
+    else
+      echo "  Skipped: $op_title (not found)"
+    fi
+  done
+
+  echo ""
+  echo "  Token updated in all 1Password items."
+  echo "  Restart agent pods to pick up new token:"
+  echo "    kubectl delete pod -n agent-pm agent-pm-0"
+  echo "    # ... (or restart all agents)"
+  echo ""
+  echo "  Run '$0 gh-check' to verify permissions."
+}
+
+# ─── GitHub App Management ────────────────────────────────────────────────
+
+load_gh_app_state() {
+  if [[ -f "$GH_APP_STATE_FILE" ]]; then
+    cat "$GH_APP_STATE_FILE"
+  else
+    echo '{}'
+  fi
+}
+
+save_gh_app_state() {
+  echo "$1" | jq '.' > "$GH_APP_STATE_FILE"
+}
+
+get_gh_app_id() {
+  local agent="$1"
+  load_gh_app_state | jq -r ".\"$agent\".app_id // empty"
+}
+
+# Agent display name for GitHub App (e.g., "Marcus PM" → "marcus-pm")
+gh_app_slug() {
+  local agent="$1"
+  local name
+  name=$(get_agent_name "$agent")
+  echo "${name,,}-${agent}" | tr ' ' '-'
+}
+
+gh_app_create_one() {
+  local agent="$1"
+  local name
+  name=$(get_agent_name "$agent")
+  local app_name="${name} (NixFleet)"
+
+  local existing_id
+  existing_id=$(get_gh_app_id "$agent")
+  if [[ -n "$existing_id" ]]; then
+    echo "  GitHub App already exists for $agent: $existing_id"
+    echo "  Settings: https://github.com/organizations/$GH_ORG/settings/apps"
+    return 0
+  fi
+
+  echo "  Creating GitHub App: $app_name"
+
+  # Build manifest
+  local manifest
+  manifest=$(jq -n \
+    --arg name "$app_name" \
+    --arg url "https://github.com/$GH_ORG" \
+    --argjson port "$GH_APP_CALLBACK_PORT" \
+    --argjson perms "$GH_APP_PERMISSIONS" \
+    '{
+      name: $name,
+      url: $url,
+      hook_attributes: { active: false },
+      redirect_url: "http://127.0.0.1:\($port)/callback",
+      public: false,
+      default_events: [],
+      default_permissions: $perms
+    }')
+
+  local output_file
+  output_file=$(mktemp)
+  trap "rm -f '$output_file'" RETURN
+
+  # Start manifest flow server in background
+  python3 "$SCRIPT_DIR/lib/gh-manifest-server.py" \
+    "$manifest" "$GH_ORG" "$output_file" "$GH_APP_CALLBACK_PORT" &
+  local server_pid=$!
+
+  sleep 1
+
+  # Open browser
+  local url="http://127.0.0.1:$GH_APP_CALLBACK_PORT"
+  echo "  Opening browser: $url"
+  if command -v open &>/dev/null; then
+    open "$url"
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "$url"
+  else
+    echo "  Please open $url in your browser"
+  fi
+
+  echo "  Waiting for GitHub approval..."
+  wait "$server_pid" 2>/dev/null || true
+
+  # Read result
+  if [[ ! -f "$output_file" ]] || [[ ! -s "$output_file" ]]; then
+    echo "  Error: No credentials received" >&2
+    return 1
+  fi
+
+  local app_id slug pem client_id html_url
+  app_id=$(jq -r '.id' "$output_file")
+  slug=$(jq -r '.slug' "$output_file")
+  pem=$(jq -r '.pem' "$output_file")
+  client_id=$(jq -r '.client_id' "$output_file")
+  html_url=$(jq -r '.html_url' "$output_file")
+
+  echo ""
+  echo "  Created: $app_name"
+  echo "  App ID:  $app_id"
+  echo "  Slug:    $slug"
+  echo "  URL:     $html_url"
+
+  # Save to state
+  local state
+  state=$(load_gh_app_state)
+  local pem_b64
+  pem_b64=$(echo "$pem" | base64)
+  state=$(echo "$state" | jq \
+    --arg agent "$agent" \
+    --arg app_id "$app_id" \
+    --arg slug "$slug" \
+    --arg pem_b64 "$pem_b64" \
+    --arg client_id "$client_id" \
+    --arg html_url "$html_url" \
+    --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.[$agent] = {app_id: ($app_id | tonumber), slug: $slug, pem_b64: $pem_b64, client_id: $client_id, html_url: $html_url, created: $created}')
+  save_gh_app_state "$state"
+
+  echo ""
+  echo "  Next steps:"
+  echo "    1. Install the app on $GH_ORG:"
+  echo "       https://github.com/organizations/$GH_ORG/settings/installations"
+  echo "       Or: $0 gh-app-install $agent"
+  echo "    2. Store credentials in 1Password:"
+  echo "       $0 gh-app-op $agent"
+}
+
+gh_app_install_one() {
+  local agent="$1"
+  local app_id
+  app_id=$(get_gh_app_id "$agent")
+
+  if [[ -z "$app_id" ]]; then
+    echo "  No GitHub App for $agent. Run 'gh-app-create $agent' first." >&2
+    return 1
+  fi
+
+  local state
+  state=$(load_gh_app_state)
+  local slug
+  slug=$(echo "$state" | jq -r ".\"$agent\".slug // empty")
+
+  echo "  Installing $slug (app $app_id) on $GH_ORG..."
+  echo ""
+  echo "  Open this URL to install:"
+  echo "  https://github.com/apps/$slug/installations/new/permissions?target_id=$(
+    curl -s -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/orgs/$GH_ORG" 2>/dev/null | jq -r '.id // empty'
+  )"
+  echo ""
+
+  if command -v open &>/dev/null; then
+    open "https://github.com/apps/$slug/installations/new"
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "https://github.com/apps/$slug/installations/new"
+  fi
+
+  echo "  After installing, get the installation ID:"
+  echo "    The URL will be: https://github.com/organizations/$GH_ORG/settings/installations/<ID>"
+  echo ""
+  read -r -p "  Enter installation ID: " installation_id
+
+  if [[ -z "$installation_id" ]]; then
+    echo "  Skipped."
+    return 0
+  fi
+
+  state=$(load_gh_app_state)
+  state=$(echo "$state" | jq \
+    --arg agent "$agent" \
+    --arg inst_id "$installation_id" \
+    '.[$agent].installation_id = ($inst_id | tonumber)')
+  save_gh_app_state "$state"
+
+  echo "  Saved installation ID: $installation_id"
+}
+
+gh_app_op_one() {
+  local agent="$1"
+  check_op
+
+  local state
+  state=$(load_gh_app_state)
+  local app_id pem_b64 installation_id
+  app_id=$(echo "$state" | jq -r ".\"$agent\".app_id // empty")
+  pem_b64=$(echo "$state" | jq -r ".\"$agent\".pem_b64 // empty")
+  installation_id=$(echo "$state" | jq -r ".\"$agent\".installation_id // empty")
+
+  if [[ -z "$app_id" ]]; then
+    echo "  No GitHub App for $agent. Run 'gh-app-create $agent' first." >&2
+    return 1
+  fi
+
+  if [[ -z "$installation_id" ]]; then
+    echo "  No installation ID for $agent. Run 'gh-app-install $agent' first." >&2
+    return 1
+  fi
+
+  local op_title
+  op_title=$(op_item_title "$agent")
+  echo "  Updating 1Password item: $op_title"
+
+  if ! op item get "$op_title" --vault "$OP_VAULT" &>/dev/null 2>&1; then
+    echo "  Item does not exist. Run 'op-create $agent' first." >&2
+    return 1
+  fi
+
+  # Update the 1Password item with GitHub App credentials
+  op item edit "$op_title" --vault "$OP_VAULT" \
+    "GITHUB_APP_ID=$app_id" \
+    "GITHUB_APP_PRIVATE_KEY_B64=$pem_b64" \
+    "GITHUB_APP_INSTALLATION_ID=$installation_id" \
+    &>/dev/null
+
+  echo "  Updated: $op_title"
+  echo "    GITHUB_APP_ID=$app_id"
+  echo "    GITHUB_APP_INSTALLATION_ID=$installation_id"
+  echo "    GITHUB_APP_PRIVATE_KEY_B64=(${#pem_b64} chars)"
+  echo ""
+  echo "  Restart the pod to pick up new credentials:"
+  echo "    kubectl delete pod -n agent-$agent agent-$agent-0"
+}
+
+gh_app_status() {
+  local filter="${1:-}"
+
+  echo "GitHub App Status"
+  echo "================="
+  echo ""
+
+  local state
+  state=$(load_gh_app_state)
+
+  for agent in "${!AGENTS[@]}"; do
+    if [[ -n "$filter" && "$agent" != "$filter" ]]; then
+      continue
+    fi
+
+    local name app_id slug installation_id
+    name=$(get_agent_name "$agent")
+    app_id=$(echo "$state" | jq -r ".\"$agent\".app_id // empty")
+    slug=$(echo "$state" | jq -r ".\"$agent\".slug // empty")
+    installation_id=$(echo "$state" | jq -r ".\"$agent\".installation_id // empty")
+
+    if [[ -n "$app_id" ]]; then
+      echo "  $agent ($name): $slug (ID: $app_id)"
+      echo "    Settings:        https://github.com/organizations/$GH_ORG/settings/apps/$slug"
+      if [[ -n "$installation_id" ]]; then
+        echo "    Installation ID: $installation_id"
+      else
+        echo "    Installation:    NOT INSTALLED — run: $0 gh-app-install $agent"
+      fi
+    else
+      echo "  $agent ($name): not created"
+      echo "    Run: $0 gh-app-create $agent"
+    fi
+    echo ""
+  done
+}
+
 # ─── Full Bootstrap Pipeline ───────────────────────────────────────────────
 
 bootstrap_agent() {
@@ -572,6 +1088,15 @@ bootstrap_agent() {
   name=$(get_agent_name "$agent")
 
   echo "=== Bootstrapping $name (agent-$agent) ==="
+  echo ""
+
+  # Step 0: Check GitHub PAT
+  echo "[0/3] Checking GitHub PAT..."
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    gh_check 2>/dev/null && echo "" || echo "  Warning: PAT check failed — run '$0 gh-setup' to fix"
+  else
+    echo "  GITHUB_TOKEN not set — will prompt during op-create"
+  fi
   echo ""
 
   # Step 1: Create Slack app if needed
@@ -637,6 +1162,17 @@ usage() {
   echo "  validate [agent]  Validate manifest(s) against Slack API"
   echo "  status [agent]    Show Slack app + 1Password status"
   echo ""
+  echo "GitHub App Commands (recommended):"
+  echo "  gh-app-create [agent]   Create GitHub App(s) via manifest flow"
+  echo "  gh-app-install [agent]  Install app on $GH_ORG org (opens browser)"
+  echo "  gh-app-op [agent]       Store app credentials in 1Password"
+  echo "  gh-app-status [agent]   Show GitHub App status"
+  echo ""
+  echo "GitHub PAT Commands (legacy):"
+  echo "  gh-setup          Show PAT creation instructions with required permissions"
+  echo "  gh-check          Verify current PAT has all required permissions"
+  echo "  gh-update-op      Update GitHub PAT in all 1Password agent items"
+  echo ""
   echo "1Password Commands:"
   echo "  op-create [agent] Create 1Password item(s) with agent tokens"
   echo "  op-sync [agent]   Update fields in existing 1Password item(s)"
@@ -684,6 +1220,29 @@ main() {
       ;;
     status)
       show_status "$agent"
+      ;;
+    gh-app-create)
+      for_each_agent gh_app_create_one "$agent"
+      ;;
+    gh-app-install)
+      for_each_agent gh_app_install_one "$agent"
+      ;;
+    gh-app-op)
+      check_op
+      for_each_agent gh_app_op_one "$agent"
+      ;;
+    gh-app-status)
+      gh_app_status "$agent"
+      ;;
+    gh-setup)
+      gh_setup
+      ;;
+    gh-check)
+      gh_check
+      ;;
+    gh-update-op)
+      check_op
+      gh_update_op
       ;;
     op-create)
       check_op

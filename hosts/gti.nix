@@ -49,6 +49,8 @@
         gtr = "192.168.3.31";
         gti = "192.168.3.131";
         netboot = "192.168.3.131";
+        jetkvm-gti = "192.168.3.135";
+        jetkvm-gtr = "192.168.3.120";
       };
       insecureDomains = [
         "cluster.local"
