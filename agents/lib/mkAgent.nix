@@ -98,53 +98,58 @@ let
     '') plugins
   );
 
-  entrypoint = pkgs.writeShellScript "agent-${name}-entrypoint" ''
-    set -euo pipefail
+  entrypoint = pkgs.writeTextFile {
+    name = "agent-${name}-entrypoint";
+    executable = true;
+    text = ''
+      #!${pkgs.bashInteractive}/bin/bash
+      set -euo pipefail
 
-    export HOME=/home/agent
-    export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:${pkgs.jq}/bin:${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gawk}/bin:${pkgs.openssl}/bin:$PATH"
+      export HOME=/home/agent
+      export PATH="${openclawApp}/node_modules/.bin:${base.nodejs}/bin:${pkgs.gh}/bin:${pkgs.git}/bin:${pkgs.bashInteractive}/bin:${pkgs.coreutils}/bin:${pkgs.jq}/bin:${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gawk}/bin:${pkgs.openssl}/bin:$PATH"
 
-    # Copy read-only configs to writable HOME
-    ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
-    ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
-    ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
+      # Copy read-only configs to writable HOME
+      ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/workspace
+      ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
+      ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
 
-    # Exec approvals: headless K8s — security=full, ask=off (no interactive prompts)
-    # Only seed if missing so agent-customized approvals on NFS are preserved
-    if [ ! -f /home/agent/.openclaw/exec-approvals.json ]; then
-      ${pkgs.coreutils}/bin/cp /etc/openclaw/exec-approvals.json /home/agent/.openclaw/exec-approvals.json
-    fi
+      # Exec approvals: headless K8s — security=full, ask=off (no interactive prompts)
+      # Only seed if missing so agent-customized approvals on NFS are preserved
+      if [ ! -f /home/agent/.openclaw/exec-approvals.json ]; then
+        ${pkgs.coreutils}/bin/cp /etc/openclaw/exec-approvals.json /home/agent/.openclaw/exec-approvals.json
+      fi
 
-    # Enable channel plugins (writes to ~/.openclaw/openclaw.json)
-    ${pluginEnableCommands}
+      # Enable channel plugins (writes to ~/.openclaw/openclaw.json)
+      ${pluginEnableCommands}
 
-    # GitHub authentication — supports GitHub App (preferred) or static PAT (legacy)
-    if [ -n "''${GITHUB_APP_ID:-}" ] && [ -n "''${GITHUB_APP_PRIVATE_KEY_B64:-}" ] && [ -n "''${GITHUB_APP_INSTALLATION_ID:-}" ]; then
-      # GitHub App: generate short-lived installation token (1hr)
-      ${pkgs.coreutils}/bin/cp /etc/openclaw/gh-app-token.sh /home/agent/gh-app-token.sh
-      ${pkgs.coreutils}/bin/chmod +x /home/agent/gh-app-token.sh
-      GITHUB_TOKEN=$(/home/agent/gh-app-token.sh)
-      export GITHUB_TOKEN
-      echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
-      echo "$GITHUB_TOKEN" > /home/agent/.github-token
+      # GitHub authentication — supports GitHub App (preferred) or static PAT (legacy)
+      if [ -n "''${GITHUB_APP_ID:-}" ] && [ -n "''${GITHUB_APP_PRIVATE_KEY_B64:-}" ] && [ -n "''${GITHUB_APP_INSTALLATION_ID:-}" ]; then
+        # GitHub App: generate short-lived installation token (1hr)
+        ${pkgs.coreutils}/bin/cp /etc/openclaw/gh-app-token.sh /home/agent/gh-app-token.sh
+        ${pkgs.coreutils}/bin/chmod +x /home/agent/gh-app-token.sh
+        GITHUB_TOKEN=$(/home/agent/gh-app-token.sh)
+        export GITHUB_TOKEN
+        echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
+        echo "$GITHUB_TOKEN" > /home/agent/.github-token
 
-      # Background refresh: generate new token every 50 minutes
-      (
-        while true; do
-          sleep 3000
-          NEW_TOKEN=$(/home/agent/gh-app-token.sh 2>/dev/null) || continue
-          echo "$NEW_TOKEN" > /home/agent/.github-token
-          echo "$NEW_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
-        done
-      ) &
-    elif [ -n "''${GITHUB_TOKEN:-}" ]; then
-      # Legacy: static PAT from 1Password
-      echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
-    fi
+        # Background refresh: generate new token every 50 minutes
+        (
+          while true; do
+            sleep 3000
+            NEW_TOKEN=$(/home/agent/gh-app-token.sh 2>/dev/null) || continue
+            echo "$NEW_TOKEN" > /home/agent/.github-token
+            echo "$NEW_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
+          done
+        ) &
+      elif [ -n "''${GITHUB_TOKEN:-}" ]; then
+        # Legacy: static PAT from 1Password
+        echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
+      fi
 
-    # Start OpenClaw gateway
-    exec ${openclawApp}/node_modules/.bin/openclaw gateway
-  '';
+      # Start OpenClaw gateway
+      exec ${openclawApp}/node_modules/.bin/openclaw gateway
+    '';
+  };
 
 in
 n2c.buildImage {
