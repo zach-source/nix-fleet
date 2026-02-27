@@ -1,24 +1,22 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: agent-pm
-  namespace: agent-pm
+  name: agent-architect
+  namespace: agent-architect
   labels:
-    app: agent-pm
+    app: agent-architect
     nixfleet.io/component: agent
 spec:
-  serviceName: agent-pm
+  serviceName: agent-architect
   replicas: 1
   selector:
     matchLabels:
-      app: agent-pm
+      app: agent-architect
   template:
     metadata:
       labels:
-        app: agent-pm
+        app: agent-architect
     spec:
-      imagePullSecrets:
-        - name: dockerhub-pull
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -29,11 +27,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: stigenai/agent-pm:latest
+          image: ghcr.io/zach-source/agent-architect:latest
           imagePullPolicy: Always
           envFrom:
             - secretRef:
-                name: agent-pm-secrets
+                name: agent-architect-secrets
           env:
             - name: NODE_ENV
               value: "production"
@@ -44,8 +42,8 @@ spec:
               cpu: 250m
               memory: 512Mi
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: 750m
+              memory: 768Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -55,11 +53,8 @@ spec:
             - name: data
               mountPath: /home/agent
             - name: config
-              mountPath: /home/agent/.openclaw/openclaw.json
+              mountPath: /etc/openclaw/openclaw.json
               subPath: openclaw.json
-            - name: config
-              mountPath: /home/agent/.openclaw/SOUL.md
-              subPath: SOUL.md
             - name: config
               mountPath: /etc/openclaw/cron-jobs.json
               subPath: cron-jobs.json
@@ -68,7 +63,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agent-pm-config
+            name: agent-architect-config
         - name: tmp
           emptyDir: {}
   volumeClaimTemplates:

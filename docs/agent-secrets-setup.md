@@ -30,7 +30,7 @@ All agents need this. You can reuse the same key across agents or create one per
 
 ### Pro Subscription (GPT-5 / Codex)
 
-The agents are configured to use `openai/gpt-5` with `openai/codex-mini` fallback. Make sure your OpenAI account has access to these models (requires a paid plan).
+The agents are configured to use `openai/gpt-5` with `openai/gpt-4.1-mini` fallback. ZAI agents (coder, architect, sre) use `zai/glm-5` primary. Code-focused agents (sage, code-review) use `openai/gpt-5.3-codex` primary. Make sure your accounts have access to these models.
 
 ### 1Password Field
 

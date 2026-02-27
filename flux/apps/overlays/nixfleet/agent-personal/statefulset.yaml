@@ -52,9 +52,18 @@ spec:
               mountPath: /app
             - name: data
               mountPath: /home/openclaw
+            - name: config
+              mountPath: /etc/openclaw/openclaw.json
+              subPath: openclaw.json
+            - name: config
+              mountPath: /etc/openclaw/cron-jobs.json
+              subPath: cron-jobs.json
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: config
+          configMap:
+            name: agent-personal-config
         - name: npm-cache
           emptyDir: {}
         - name: tmp

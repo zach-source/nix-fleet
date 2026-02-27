@@ -13,7 +13,7 @@
     "defaults": {
       "model": {
         "primary": "openai/gpt-5",
-        "fallbacks": ["openai/codex-mini"]
+        "fallbacks": ["openai/gpt-4.1-mini"]
       }
     }
   },
@@ -29,7 +29,10 @@
       "enabled": true,
       "mode": "socket",
       "botToken": "${SLACK_BOT_TOKEN}",
-      "appToken": "${SLACK_APP_TOKEN}"
+      "appToken": "${SLACK_APP_TOKEN}",
+      "requireMention": true,
+      "allowBots": true,
+      "groupPolicy": "open"
     }
   },
 

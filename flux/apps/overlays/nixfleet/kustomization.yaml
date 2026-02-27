@@ -10,3 +10,7 @@ resources:
   - agent-devops/
   - agent-research/
   - agent-security/
+  - agent-coder/
+  - agent-architect/
+  - agent-sre/
+  - agent-sage/

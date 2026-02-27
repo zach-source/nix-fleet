@@ -23,7 +23,10 @@
       "enabled": true,
       "mode": "socket",
       "botToken": "${SLACK_BOT_TOKEN}",
-      "appToken": "${SLACK_APP_TOKEN}"
+      "appToken": "${SLACK_APP_TOKEN}",
+      "requireMention": true,
+      "allowBots": true,
+      "groupPolicy": "open"
     }
   },
 

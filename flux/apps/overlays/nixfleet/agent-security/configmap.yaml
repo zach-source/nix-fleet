@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-security-config
+  namespace: agent-security
+data:
+  openclaw.json: |
+    {
+      "gateway": {
+        "port": 18789,
+        "mode": "local",
+        "bind": "loopback",
+        "auth": {
+          "mode": "token",
+          "token": "${OPENCLAW_GATEWAY_TOKEN}"
+        }
+      },
+      "agents": {
+        "defaults": {
+          "model": {
+            "primary": "openai/gpt-5",
+            "fallbacks": ["openai/gpt-4.1-mini"]
+          }
+        }
+      },
+      "channels": {
+        "slack": {
+          "enabled": true,
+          "mode": "socket",
+          "botToken": "${SLACK_BOT_TOKEN}",
+          "appToken": "${SLACK_APP_TOKEN}",
+          "requireMention": true,
+          "allowBots": true,
+          "groupPolicy": "open"
+        }
+      },
+      "plugins": {
+        "entries": {
+          "slack": { "enabled": true }
+        }
+      },
+      "tools": {
+        "profile": "full",
+        "web": {
+          "search": { "enabled": true },
+          "fetch": { "enabled": true }
+        }
+      }
+    }
+  cron-jobs.json: |
+    {
+      "version": 1,
+      "jobs": [
+        {
+          "id": "inbox-check",
+          "name": "Inbox Check",
+          "description": "Check Graphiti message board for tasks and requests",
+          "enabled": true,
+          "schedule": {
+            "kind": "cron",
+            "expr": "33 * * * *"
+          },
+          "sessionTarget": "isolated",
+          "payload": {
+            "kind": "agentTurn",
+            "message": "Inbox check. Search the Graphiti message board for messages addressed to you (@Rex) in group_id 'messages'. If you find actionable requests, work on them. Also check your personal memory (group_id 'agent-security') for any in-progress work. After completing any tasks, store the results in your personal memory and reply to the sender via the message board."
+          }
+        }
+      ]
+    }

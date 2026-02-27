@@ -1,24 +1,22 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: agent-pm
-  namespace: agent-pm
+  name: agent-sage
+  namespace: agent-sage
   labels:
-    app: agent-pm
+    app: agent-sage
     nixfleet.io/component: agent
 spec:
-  serviceName: agent-pm
+  serviceName: agent-sage
   replicas: 1
   selector:
     matchLabels:
-      app: agent-pm
+      app: agent-sage
   template:
     metadata:
       labels:
-        app: agent-pm
+        app: agent-sage
     spec:
-      imagePullSecrets:
-        - name: dockerhub-pull
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -29,11 +27,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: stigenai/agent-pm:latest
+          image: ghcr.io/zach-source/agent-sage:latest
           imagePullPolicy: Always
           envFrom:
             - secretRef:
-                name: agent-pm-secrets
+                name: agent-sage-secrets
           env:
             - name: NODE_ENV
               value: "production"
@@ -45,7 +43,7 @@ spec:
               memory: 512Mi
             limits:
               cpu: "1"
-              memory: 2Gi
+              memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -55,11 +53,8 @@ spec:
             - name: data
               mountPath: /home/agent
             - name: config
-              mountPath: /home/agent/.openclaw/openclaw.json
+              mountPath: /etc/openclaw/openclaw.json
               subPath: openclaw.json
-            - name: config
-              mountPath: /home/agent/.openclaw/SOUL.md
-              subPath: SOUL.md
             - name: config
               mountPath: /etc/openclaw/cron-jobs.json
               subPath: cron-jobs.json
@@ -68,7 +63,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: agent-pm-config
+            name: agent-sage-config
         - name: tmp
           emptyDir: {}
   volumeClaimTemplates:

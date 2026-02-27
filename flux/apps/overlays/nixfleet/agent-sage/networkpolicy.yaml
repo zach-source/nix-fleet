@@ -1,0 +1,38 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agent-sage-egress
+  namespace: agent-sage
+spec:
+  endpointSelector: {}
+  egress:
+    - toFQDNs:
+        - matchName: "api.openai.com"
+        - matchName: "api.github.com"
+        - matchName: "wss-primary.slack.com"
+        - matchName: "wss-backup.slack.com"
+        - matchName: "slack.com"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Graphiti MCP server (cluster-internal)
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: graphiti
+            app: graphiti-mcp
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+  ingress: []

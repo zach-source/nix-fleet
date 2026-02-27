@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-sre
+  namespace: agent-sre
+spec:
+  clusterIP: None
+  selector:
+    app: agent-sre

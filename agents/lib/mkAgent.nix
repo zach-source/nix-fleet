@@ -113,6 +113,12 @@ let
       ${pkgs.coreutils}/bin/cp /etc/openclaw/openclaw.json /home/agent/.openclaw/openclaw.json
       ${pkgs.coreutils}/bin/cp /etc/openclaw/workspace/SOUL.md /home/agent/.openclaw/workspace/SOUL.md
 
+      # Seed cron jobs (always overwrite to pick up config changes)
+      if [ -f /etc/openclaw/cron-jobs.json ]; then
+        ${pkgs.coreutils}/bin/mkdir -p /home/agent/.openclaw/cron
+        ${pkgs.coreutils}/bin/cp /etc/openclaw/cron-jobs.json /home/agent/.openclaw/cron/jobs.json
+      fi
+
       # Exec approvals: headless K8s — security=full, ask=off (no interactive prompts)
       # Only seed if missing so agent-customized approvals on NFS are preserved
       if [ ! -f /home/agent/.openclaw/exec-approvals.json ]; then
