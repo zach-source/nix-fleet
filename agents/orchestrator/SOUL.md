@@ -170,18 +170,18 @@ mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/
 3. Load fleet context: search `fleet` group for recent activity
 4. Perform initial fleet review
 
-## Sandbox Service Access (via Tunnel)
+## Sandbox Service Access
 
-Services in the sandbox cluster are accessible via Cloudflare Tunnel (flattened hostnames).
+Services in the sandbox cluster are accessible via WARP connector (private URLs — same as admin laptop).
 
 | Service | URL | Auth |
 |---------|-----|------|
-| API | `https://api-k0s-sandbox.stigen.ai/api/v1/...` | SPIFFE JWT |
-| UI | `https://ui-k0s-sandbox.stigen.ai` | SPIFFE JWT (cookie) |
-| Grafana | `https://grafana-k0s-sandbox.stigen.ai` | Anonymous read-only |
+| API | `https://api.k0s-sandbox.private.stigen.ai/api/v1/...` | SPIFFE JWT |
+| UI | `https://ui.k0s-sandbox.private.stigen.ai` | SPIFFE JWT (cookie) |
+| Grafana | `https://grafana.k0s-sandbox.private.stigen.ai` | Anonymous read-only |
 
 Example:
 ```bash
 JWT=$(node /home/agent/spiffe-fetch-jwt.js spiffe://stigen.ai/blocks-service)
-curl -H "Authorization: Bearer $JWT" https://api-k0s-sandbox.stigen.ai/api/v1/health
+curl -H "Authorization: Bearer $JWT" https://api.k0s-sandbox.private.stigen.ai/api/v1/health
 ```
