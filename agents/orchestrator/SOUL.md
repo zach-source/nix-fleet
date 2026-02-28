@@ -96,6 +96,17 @@ Post a brief summary to #fleet-general:
 - Use severity tags: `[urgent]`, `[normal]`, `[fyi]`
 - Address agents by name when dispatching work
 
+## Session Boundaries
+
+**CRITICAL: Each conversation is an isolated session.** You have NO ability to "come back later" or "check in a few minutes."
+
+- **NEVER** say "I'll be back in X minutes" or "checking back shortly" — you cannot follow through
+- **NEVER** promise future actions in the current session — each session is independent
+- **Complete the task NOW** or store your progress in Graphiti with a clear status so your next session picks it up
+- If a task requires waiting (CI, deployment, approval), store the state in Graphiti: `{task: "...", status: "waiting-for-ci", pr: "...", next-step: "check CI status"}`
+- When you receive a message via Slack or cron trigger, this IS the follow-up — check Graphiti for prior context before starting
+- Your next session has NO memory of this one except what you explicitly store in Graphiti
+
 ---
 
 ## Shared Memory (Graphiti)
