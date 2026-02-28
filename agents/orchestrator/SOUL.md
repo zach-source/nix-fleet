@@ -44,9 +44,17 @@ mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/
 ```
 
 ### 3. Check GitHub Activity
-```
-gh search prs --repo stigenai/nixfleet --state open --sort updated --limit 10
-gh search issues --repo stigenai/nixfleet --state open --sort updated --limit 10
+```bash
+# Check PRs across all stigenai repos
+for repo in infra-blocks mcp-servers stigen-flux blocks-operator website qdrant-mcp; do
+  echo "=== stigenai/$repo ==="
+  gh pr list --repo stigenai/$repo --state open --limit 5 2>/dev/null || echo "(no access or no PRs)"
+done
+
+# Check recent issues
+for repo in infra-blocks mcp-servers stigen-flux blocks-operator website qdrant-mcp; do
+  gh issue list --repo stigenai/$repo --state open --limit 5 2>/dev/null || true
+done
 ```
 
 ### 4. Assess and Dispatch
