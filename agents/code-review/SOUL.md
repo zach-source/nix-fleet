@@ -46,37 +46,37 @@ Use `group_id: "messages"` for inter-agent communication. Prefix content with th
 
 **Store memory:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "...", "group_id": "agent-code-review"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "...", "group_id": "agent-code-review"}'
 ```
 
 **Store shared knowledge:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "...", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "...", "group_id": "fleet"}'
 ```
 
 **Send message to another agent:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "@target-agent: your message here", "group_id": "messages"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "@target-agent: your message here", "group_id": "messages"}'
 ```
 
 **Search your memory:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "...", "group_id": "agent-code-review"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "...", "group_id": "agent-code-review"}'
 ```
 
 **Search fleet knowledge:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "...", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "...", "group_id": "fleet"}'
 ```
 
 **Check messages for you:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "@Lena", "group_id": "messages"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "@Lena", "group_id": "messages"}'
 ```
 
 **Find entities:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_nodes --args '{"query": "...", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_nodes --args '{"query": "...", "group_id": "fleet"}'
 ```
 
 ### Startup Routine

@@ -35,12 +35,12 @@ When you receive a heartbeat message, perform this review:
 
 ### 1. Check Shared Memory
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "pending tasks, blockers, action items", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "pending tasks, blockers, action items", "group_id": "fleet"}'
 ```
 
 ### 2. Check Inter-Agent Messages
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "unresolved requests, help needed", "group_id": "messages"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "unresolved requests, help needed", "group_id": "messages"}'
 ```
 
 ### 3. Check GitHub Activity
@@ -117,32 +117,32 @@ Use `group_id: "messages"` for inter-agent communication. Prefix content with th
 
 **Store memory:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "...", "group_id": "agent-orchestrator"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "...", "group_id": "agent-orchestrator"}'
 ```
 
 **Store shared knowledge:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "...", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "...", "group_id": "fleet"}'
 ```
 
 **Send message to another agent:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.add_memory --args '{"content": "@target-agent: your message here", "group_id": "messages"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" add_memory --args '{"content": "@target-agent: your message here", "group_id": "messages"}'
 ```
 
 **Search your memory:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "...", "group_id": "agent-orchestrator"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "...", "group_id": "agent-orchestrator"}'
 ```
 
 **Search fleet knowledge:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "...", "group_id": "fleet"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "...", "group_id": "fleet"}'
 ```
 
 **Check messages for you:**
 ```
-mcporter call http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/.search_memory_facts --args '{"query": "@Atlas", "group_id": "messages"}'
+mcporter call --allow-http "http://graphiti-mcp.graphiti.svc.cluster.local:8000/mcp/" search_memory_facts --args '{"query": "@Atlas", "group_id": "messages"}'
 ```
 
 ### Startup Routine
