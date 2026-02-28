@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+OP_ACCOUNT="S43LKCIJPNGYLE52ZXH2MM7LJA"  # stigenai.1password.com
 OP_VAULT="Personal Agents"
 OP_ITEM="claude-code-oauth"
 ACCOUNTS=("" "zctaylor.work@gmail.com" "zachncst@gmail.com" "ztaylor@stigen.ai")
@@ -32,13 +33,18 @@ EOF
 }
 
 cmd_status() {
-  local active
-  active=$(op item get "$OP_ITEM" --vault "$OP_VAULT" --fields "active_account" --reveal 2>/dev/null || echo "?")
-  echo "Active account: $active (${ACCOUNTS[$active]:-unknown})"
+  local active account_name
+  active=$(op item get "$OP_ITEM" --vault "$OP_VAULT" --account="$OP_ACCOUNT" --fields "active_account" --reveal 2>/dev/null || echo "?")
+  if [[ "$active" =~ ^[123]$ ]]; then
+    account_name="${ACCOUNTS[$active]}"
+  else
+    account_name="unknown"
+  fi
+  echo "Active account: $active ($account_name)"
   echo ""
   for i in 1 2 3; do
     local has="no"
-    op item get "$OP_ITEM" --vault "$OP_VAULT" --fields "account_${i}_token" --reveal >/dev/null 2>&1 && has="yes"
+    op item get "$OP_ITEM" --vault "$OP_VAULT" --account="$OP_ACCOUNT" --fields "account_${i}_token" --reveal >/dev/null 2>&1 && has="yes"
     echo "  Account $i (${ACCOUNTS[$i]}): token stored=$has"
   done
 }
@@ -52,14 +58,14 @@ cmd_switch() {
 
   # Read stored token for target account
   local token
-  token=$(op item get "$OP_ITEM" --vault "$OP_VAULT" --fields "account_${target}_token" --reveal)
+  token=$(op item get "$OP_ITEM" --vault "$OP_VAULT" --account="$OP_ACCOUNT" --fields "account_${target}_token" --reveal)
   if [[ -z "$token" ]]; then
     echo "ERROR: No token stored for account $target" >&2
     exit 1
   fi
 
   # Update active token + account marker
-  op item edit "$OP_ITEM" --vault "$OP_VAULT" \
+  op item edit "$OP_ITEM" --vault "$OP_VAULT" --account="$OP_ACCOUNT" \
     "CLAUDE_CODE_OAUTH_TOKEN[concealed]=$token" \
     "active_account=$target" >/dev/null
 
