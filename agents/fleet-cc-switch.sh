@@ -41,8 +41,8 @@ cmd_status() {
   printf "%-22s %-10s %s\n" "-----" "-------" "-----"
   for agent in $AGENT_NAMES; do
     local acct
-    acct=$(ssh "$SSH_HOST" sudo k0s kubectl get statefulset "$agent" -n "$agent" \
-      -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="CLAUDE_ACCOUNT")].value}' 2>/dev/null || echo "?")
+    acct=$(ssh "$SSH_HOST" "sudo k0s kubectl get statefulset $agent -n $agent -o json" 2>/dev/null \
+      | python3 -c "import json,sys;[print(e['value']) for e in json.load(sys.stdin)['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='CLAUDE_ACCOUNT']" 2>/dev/null || echo "?")
     local email="unknown"
     if [[ "$acct" =~ ^[123]$ ]]; then
       email="${ACCOUNTS[$acct]}"
