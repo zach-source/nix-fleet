@@ -152,8 +152,8 @@ let
         echo "$GITHUB_TOKEN" | ${pkgs.gh}/bin/gh auth login --with-token 2>/dev/null || true
       fi
 
-      # Start OpenClaw gateway
-      exec ${openclawApp}/node_modules/.bin/openclaw gateway
+      # Start OpenClaw gateway (--verbose for structured logging → Vector → Loki)
+      exec ${openclawApp}/node_modules/.bin/openclaw gateway --verbose
     '';
   };
 

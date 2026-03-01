@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nixfleet/nixfleet/internal/agenttui"
 	"github.com/nixfleet/nixfleet/internal/cache"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/k0s"
@@ -106,6 +107,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(pkiCmd())
 	cmd.AddCommand(k0sCmd())
 	cmd.AddCommand(nodeStatusCmd())
+	cmd.AddCommand(agentsCmd())
 
 	return cmd
 }
@@ -5745,6 +5747,90 @@ Example:
 	cmd.Flags().StringVar(&logFile, "log-file", "", "Pull log file (default: /var/log/nixfleet/pull.log)")
 	cmd.Flags().StringVar(&hostRepoPath, "host-repo", "", "Host config repository path (default: /var/lib/nixfleet/repo)")
 	cmd.Flags().StringVar(&homeManagerPath, "home-manager-path", "", "Home-manager dotfiles path")
+
+	return cmd
+}
+
+func agentsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "agents",
+		Short: "Manage fleet agents",
+		Long: `Manage OpenClaw agents running in the k0s cluster.
+
+Commands:
+  monitor  - Live TUI dashboard showing agent status and logs`,
+	}
+
+	cmd.AddCommand(agentsMonitorCmd())
+	return cmd
+}
+
+func agentsMonitorCmd() *cobra.Command {
+	var (
+		hostName        string
+		refreshInterval int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "monitor",
+		Short: "Live TUI dashboard for agent monitoring",
+		Long: `Launch a terminal UI showing real-time agent status and logs.
+
+The left panel shows all 6 agents with pod status (running, crash-looping, etc.),
+restart count, and uptime. The right panel shows a live tail of the selected agent's
+logs. Data is fetched via SSH → k0s kubectl.
+
+Examples:
+  nixfleet agents monitor -H ztaylor-gti-nvidia
+  nixfleet agents monitor -H gti --refresh 5`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if hostName == "" {
+				hostName = targetHost
+			}
+			if hostName == "" {
+				return fmt.Errorf("host is required: use -H flag")
+			}
+
+			// Load inventory to resolve host address
+			inv, err := inventory.LoadFromDir(inventoryPath)
+			if err != nil {
+				inv, err = inventory.LoadFromFile(inventoryPath)
+				if err != nil {
+					return fmt.Errorf("loading inventory: %w", err)
+				}
+			}
+
+			host, ok := inv.GetHost(hostName)
+			if !ok {
+				return fmt.Errorf("host %q not found in inventory", hostName)
+			}
+
+			// SSH connect
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+
+			client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+			if err != nil {
+				return fmt.Errorf("SSH connect to %s: %w", host.Name, err)
+			}
+
+			interval := time.Duration(refreshInterval) * time.Second
+			if interval == 0 {
+				interval = 10 * time.Second
+			}
+
+			return agenttui.Run(agenttui.Config{
+				SSHClient:       client,
+				Host:            host.Name,
+				RefreshInterval: interval,
+			})
+		},
+	}
+
+	cmd.Flags().StringVarP(&hostName, "host", "H", "", "Host to SSH to (k0s controller)")
+	cmd.Flags().IntVar(&refreshInterval, "refresh", 10, "Refresh interval in seconds")
 
 	return cmd
 }
