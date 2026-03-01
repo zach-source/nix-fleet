@@ -58,7 +58,7 @@ let
     # npm needs network access
     outputHashAlgo = "sha256";
     outputHashMode = "recursive";
-    outputHash = "sha256-HmsQSi/u4R+SRWuviZe+lAuaQMskq+PE3o4GANlCCFw=";
+    outputHash = "sha256-eMobky1DPekWCaKiHqNfAu7Ezi2fArm7+SBFr3DoKb0=";
   };
 
   # Config files baked into the image at /etc/openclaw (read-only)
