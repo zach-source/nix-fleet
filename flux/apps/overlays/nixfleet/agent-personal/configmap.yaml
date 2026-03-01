@@ -13,6 +13,10 @@ data:
         "auth": {
           "mode": "token",
           "token": "${OPENCLAW_GATEWAY_TOKEN}"
+        },
+        "controlUi": {
+          "allowedOrigins": ["https://ada.stigen.home"],
+          "dangerouslyDisableDeviceAuth": true
         }
       },
       "agents": {
