@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agent-sage-config
-  namespace: agent-sage
+  name: agent-orchestrator-config
+  namespace: agent-orchestrator
 data:
   openclaw.json: |
     {
@@ -62,12 +62,12 @@ data:
           "enabled": true,
           "schedule": {
             "kind": "cron",
-            "expr": "53 * * * *"
+            "expr": "58 * * * *"
           },
           "sessionTarget": "isolated",
           "payload": {
             "kind": "agentTurn",
-            "message": "Inbox check. Search the Graphiti message board for messages addressed to you (@Sage) in group_id 'messages'. If you find actionable requests, work on them. Also check your personal memory (group_id 'agent-sage') for any in-progress work. After completing any tasks, store the results in your personal memory and reply to the sender via the message board."
+            "message": "Inbox check. Search the Graphiti message board for messages addressed to you (@Atlas) in group_id 'messages'. If you find actionable requests, work on them. Also check your personal memory (group_id 'agent-orchestrator') for any in-progress work. After completing any tasks, store the results in your personal memory and reply to the sender via the message board."
           }
         }
       ]

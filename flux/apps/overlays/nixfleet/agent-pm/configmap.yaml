@@ -19,7 +19,11 @@ data:
         "defaults": {
           "model": {
             "primary": "openai/gpt-5",
-            "fallbacks": ["openai/gpt-4.1-mini"]
+            "fallbacks": ["openai/gpt-5-mini"]
+          },
+          "memorySearch": {
+            "provider": "openai",
+            "model": "text-embedding-3-small"
           }
         }
       },

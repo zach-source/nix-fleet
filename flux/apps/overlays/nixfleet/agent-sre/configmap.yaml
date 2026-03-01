@@ -18,8 +18,12 @@ data:
       "agents": {
         "defaults": {
           "model": {
-            "primary": "zai/glm-5",
-            "fallbacks": ["openai/gpt-4.1-mini"]
+            "primary": "openai/gpt-5.3-codex",
+            "fallbacks": ["openai/codex-mini-latest"]
+          },
+          "memorySearch": {
+            "provider": "openai",
+            "model": "text-embedding-3-small"
           }
         }
       },
