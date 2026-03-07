@@ -7,6 +7,8 @@
   imports = [
     ../modules/netboot-server.nix
     ../modules/dns.nix
+    ../modules/tpm2-unlock.nix
+    ../modules/installer.nix
   ];
 
   nixfleet = {
@@ -23,8 +25,21 @@
       jq
       tmux
       vim
-      nfs-kernel-server
+      nfs-utils
     ];
+
+    # ============================================================================
+    # TPM2 auto-unlock for ZFS-on-LUKS keystore
+    # ============================================================================
+    modules.tpm2Unlock.enable = true;
+
+    # ============================================================================
+    # Ubuntu installer — serves autoinstall configs for PXE installs
+    # ============================================================================
+    modules.installer = {
+      enable = true;
+      targets = [ "gtr" ];
+    };
 
     # ============================================================================
     # Netboot server — serves GTR NixOS image over PXE

@@ -252,10 +252,10 @@
   # ============================================================================
   # Systemd units for automatic mounting and backup
   # ============================================================================
-  nixfleet.systemdUnits = {
+  nixfleet.systemd.units = {
     # SMB mount service
     "mnt-personal.mount" = {
-      enable = true;
+      enabled = true;
       text = ''
         [Unit]
         Description=SMB mount for personal drive
@@ -275,7 +275,7 @@
 
     # SMB backup mount service
     "mnt-backup.mount" = {
-      enable = true;
+      enabled = true;
       text = ''
         [Unit]
         Description=SMB mount for backups
@@ -295,7 +295,7 @@
 
     # ZFS backup timer
     "zfs-backup.timer" = {
-      enable = true;
+      enabled = true;
       text = ''
         [Unit]
         Description=Daily ZFS snapshot backup
@@ -312,7 +312,7 @@
 
     # ZFS backup service
     "zfs-backup.service" = {
-      enable = true;
+      enabled = true;
       text = ''
         [Unit]
         Description=ZFS snapshot backup to NFS

@@ -15,12 +15,12 @@
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      flake-utils,
-      nix-darwin,
-      nix2container,
+    { self
+    , nixpkgs
+    , flake-utils
+    , nix-darwin
+    , nix2container
+    ,
     }:
     let
       # Supported systems for the CLI/tooling
@@ -45,10 +45,10 @@
 
       # Create a NixFleet host configuration (for Ubuntu hosts)
       mkNixFleetConfiguration =
-        {
-          system ? "x86_64-linux",
-          modules ? [ ],
-          specialArgs ? { },
+        { system ? "x86_64-linux"
+        , modules ? [ ]
+        , specialArgs ? { }
+        ,
         }:
         let
           pkgs = nixpkgsFor.${system};
@@ -84,10 +84,10 @@
 
       # Create a NixOS configuration with NixFleet modules
       mkNixOSFleetConfiguration =
-        {
-          system ? "x86_64-linux",
-          modules ? [ ],
-          specialArgs ? { },
+        { system ? "x86_64-linux"
+        , modules ? [ ]
+        , specialArgs ? { }
+        ,
         }:
         nixpkgs.lib.nixosSystem {
           inherit system specialArgs;
@@ -103,10 +103,10 @@
 
       # Create a nix-darwin configuration with NixFleet modules
       mkDarwinFleetConfiguration =
-        {
-          system ? "aarch64-darwin",
-          modules ? [ ],
-          specialArgs ? { },
+        { system ? "aarch64-darwin"
+        , modules ? [ ]
+        , specialArgs ? { }
+        ,
         }:
         nix-darwin.lib.darwinSystem {
           inherit system specialArgs;
@@ -179,6 +179,18 @@
               agent-sre = import ./agents/sre { inherit n2c pkgs; };
               agent-sage = import ./agents/sage { inherit n2c pkgs; };
               agent-orchestrator = import ./agents/orchestrator { inherit n2c pkgs; };
+
+              # Ubuntu installer artifacts (autoinstall configs + scripts)
+              installer = pkgs.runCommand "nixfleet-installer" { } ''
+                mkdir -p $out/common
+                ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList (name: cfg: ''
+                  mkdir -p $out/${name}
+                  cp ${cfg}/user-data $out/${name}/
+                  cp ${cfg}/meta-data $out/${name}/
+                '') self.installerConfigs)}
+                cp ${./installer/zfs-partition.sh} $out/common/zfs-partition.sh
+                cp ${./installer/nixfleet-late-commands.sh} $out/common/nixfleet-late-commands.sh
+              '';
             }
           else
             { }
@@ -234,10 +246,28 @@
         inherit mkNixFleetConfiguration mkNixOSFleetConfiguration mkDarwinFleetConfiguration;
       };
 
-      # NixFleet library functions are available via self.lib
-      # Users can create their own configurations using:
-      #   nixfleetConfigurations.myhost = self.lib.mkNixFleetConfiguration { ... };
-      #   nixosConfigurations.myhost = self.lib.mkNixOSFleetConfiguration { ... };
-      #   darwinConfigurations.myhost = self.lib.mkDarwinFleetConfiguration { ... };
+      # NixFleet host configurations (Ubuntu hosts managed by NixFleet CLI)
+      nixfleetConfigurations = {
+        gti = mkNixFleetConfiguration {
+          modules = [ ./hosts/gti.nix ];
+        };
+        gtr = mkNixFleetConfiguration {
+          modules = [ ./hosts/gtr.nix ];
+        };
+      };
+
+      # Per-host autoinstall configs for Ubuntu installer
+      installerConfigs =
+        let
+          pkgs = nixpkgsFor.x86_64-linux;
+        in
+        {
+          gtr = import ./installer/autoinstall.nix {
+            inherit (nixpkgs) lib;
+            inherit pkgs;
+            hostConfig = self.nixfleetConfigurations.gtr.config;
+            sshPubKey = ./secrets/deploy.pub;
+          };
+        };
     };
 }
