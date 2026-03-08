@@ -1,0 +1,57 @@
+===FILE:llama-rocm-qwen35-spec.service===
+[Unit]
+Description=llama.cpp FORK (PR #20075 + ne0/view_init/re-decode fixes) Qwen3.5-35B-A3B with WORKING speculation
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm-qwen35/lib:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib
+Environment=GGML_CUDA_FORCE_MMQ=1
+Environment=HIP_FORCE_DEV_KERNARG=1
+Environment=GPU_MAX_HW_QUEUES=8
+Environment=HSA_ENABLE_SDMA=0
+ExecStart=/opt/llama-rocm-qwen35/bin/llama-server \
+  --model /srv/models/Qwen3.5-35B-A3B-Q4_K_M.gguf \
+  --host 0.0.0.0 --port 8084 \
+  --ctx-size 131072 \
+  --batch-size 2048 \
+  --ubatch-size 512 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --flash-attn on \
+  --threads 8 \
+  --threads-batch 16 \
+  --mlock \
+  -ngl 99 \
+  --parallel 1 \
+  --cache-reuse 256 \
+  --jinja \
+  --reasoning-format deepseek
+Restart=on-failure
+RestartSec=10
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+===DROPIN:override.conf===
+[Service]
+ExecStart=
+ExecStart=/opt/llama-rocm-qwen35/bin/llama-server   --model /srv/models/Qwen3.5-35B-A3B-Q4_K_M.gguf   --model-draft /srv/models/Qwen3.5-0.8B-Q4_K_M.gguf   --host 0.0.0.0 --port 8084   --ctx-size 200000   --batch-size 512   --ubatch-size 512   --cache-type-k q4_0   --cache-type-v q4_0   --flash-attn on   --threads 8   --threads-batch 16   --mlock   -ngl 99   --gpu-layers-draft 99   --draft-max 4   --draft-p-min 0.6   --parallel 1   --jinja   --reasoning-format deepseek   --reasoning-budget 2048 --ctx-checkpoints 0
+===FILE:llama-rpc.service===
+[Unit]
+Description=llama.cpp RPC Worker
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+ExecStart=/usr/local/bin/rpc-server -H 0.0.0.0 -p 50052
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

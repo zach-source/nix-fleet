@@ -1,0 +1,45 @@
+2026-04-11 20:41:05,251 - INFO - Creating container for astropy__astropy-14365...
+2026-04-11 20:41:05,404 - INFO - Container for astropy__astropy-14365 created: 21ee9c13fbe8efa0633423bacb0a85088d0d9650c324be56d81e01cdc94017a6
+2026-04-11 20:41:05,676 - INFO - Container for astropy__astropy-14365 started: 21ee9c13fbe8efa0633423bacb0a85088d0d9650c324be56d81e01cdc94017a6
+2026-04-11 20:41:05,676 - INFO - Intermediate patch for astropy__astropy-14365 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14365/patch.diff, now applying to container...
+2026-04-11 20:41:05,787 - INFO - >>>>> Applied Patch:
+Checking patch astropy/io/ascii/qdp.py...
+Applied patch astropy/io/ascii/qdp.py cleanly.
+
+2026-04-11 20:41:07,119 - INFO - Git diff before:
+diff --git a/astropy/io/ascii/qdp.py b/astropy/io/ascii/qdp.py
+index 83a4f004a..7287a268d 100644
+--- a/astropy/io/ascii/qdp.py
++++ b/astropy/io/ascii/qdp.py
+@@ -68,7 +68,7 @@ def _line_type(line, delimiter=None):
+     _new_re = rf"NO({sep}NO)+"
+     _data_re = rf"({_decimal_re}|NO|[-+]?nan)({sep}({_decimal_re}|NO|[-+]?nan))*)"
+     _type_re = rf"^\s*((?P<command>{_command_re})|(?P<new>{_new_re})|(?P<data>{_data_re})?\s*(\!(?P<comment>.*))?\s*$"
+-    _line_type_re = re.compile(_type_re)
++    _line_type_re = re.compile(_type_re, re.I)
+     line = line.strip()
+     if not line:
+         return "comment"
+2026-04-11 20:41:07,120 - INFO - Eval script for astropy__astropy-14365 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14365/eval.sh; copying to container...
+2026-04-11 20:42:10,191 - INFO - Test runtime: 63.03 seconds
+2026-04-11 20:42:10,194 - INFO - Test output for astropy__astropy-14365 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14365/test_output.txt
+2026-04-11 20:42:10,306 - INFO - Git diff after:
+diff --git a/astropy/io/ascii/qdp.py b/astropy/io/ascii/qdp.py
+index 83a4f004a..7287a268d 100644
+--- a/astropy/io/ascii/qdp.py
++++ b/astropy/io/ascii/qdp.py
+@@ -68,7 +68,7 @@ def _line_type(line, delimiter=None):
+     _new_re = rf"NO({sep}NO)+"
+     _data_re = rf"({_decimal_re}|NO|[-+]?nan)({sep}({_decimal_re}|NO|[-+]?nan))*)"
+     _type_re = rf"^\s*((?P<command>{_command_re})|(?P<new>{_new_re})|(?P<data>{_data_re})?\s*(\!(?P<comment>.*))?\s*$"
+-    _line_type_re = re.compile(_type_re)
++    _line_type_re = re.compile(_type_re, re.I)
+     line = line.strip()
+     if not line:
+         return "comment"
+2026-04-11 20:42:10,306 - INFO - Grading answer for astropy__astropy-14365...
+2026-04-11 20:42:10,307 - INFO - report: {'astropy__astropy-14365': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': False, 'tests_status': {'FAIL_TO_PASS': {'success': [], 'failure': ['astropy/io/ascii/tests/test_qdp.py::test_roundtrip[True]']}, 'PASS_TO_PASS': {'success': ['astropy/io/ascii/tests/test_qdp.py::test_get_tables_from_qdp_file', 'astropy/io/ascii/tests/test_qdp.py::test_roundtrip[False]', 'astropy/io/ascii/tests/test_qdp.py::test_read_example', 'astropy/io/ascii/tests/test_qdp.py::test_roundtrip_example', 'astropy/io/ascii/tests/test_qdp.py::test_roundtrip_example_comma', 'astropy/io/ascii/tests/test_qdp.py::test_read_write_simple', 'astropy/io/ascii/tests/test_qdp.py::test_read_write_simple_specify_name', 'astropy/io/ascii/tests/test_qdp.py::test_get_lines_from_qdp'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for astropy__astropy-14365: resolved: False
+2026-04-11 20:42:10,307 - INFO - Attempting to stop container sweb.eval.astropy__astropy-14365.qwen35-spec-q4-20...
+2026-04-11 20:42:25,622 - INFO - Attempting to remove container sweb.eval.astropy__astropy-14365.qwen35-spec-q4-20...
+2026-04-11 20:42:25,672 - INFO - Container sweb.eval.astropy__astropy-14365.qwen35-spec-q4-20 removed.

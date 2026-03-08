@@ -1,0 +1,37 @@
+===FILE:llama-rocm-qwen3-coder.service===
+[Unit]
+Description=llama.cpp ROCm (Qwen3-Coder-30B-A3B + speculative draft)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+Environment=GGML_CUDA_FORCE_MMQ=1
+Environment=HIP_FORCE_DEV_KERNARG=1
+Environment=GPU_MAX_HW_QUEUES=8
+Environment=HSA_ENABLE_SDMA=0
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf   --model-draft /srv/models/Qwen3-0.6B-Q4_K_M.gguf   --host 0.0.0.0 --port 8082   --ctx-size 262144   --batch-size 2048   --ubatch-size 2048   --cache-type-k q4_0   --cache-type-v q4_0   --flash-attn on   --threads 8   --threads-batch 16   --mlock   -ngl 99   --gpu-layers-draft 99   --draft-max 8   --draft-min 2   --draft-p-min 0.6   --parallel 1   --cache-reuse 256   --jinja   --reasoning-format deepseek --reasoning-budget 2048
+Restart=on-failure
+RestartSec=10
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+===FILE:llama-rpc.service===
+[Unit]
+Description=llama.cpp RPC Worker
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+ExecStart=/usr/local/bin/rpc-server -H 0.0.0.0 -p 50052
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

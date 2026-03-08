@@ -128,6 +128,7 @@
           gitCommit = self.rev or self.dirtyRev or "";
           gitTag = if self ? rev then "v0.1.0" else "dev";
         };
+        spire-agent = final.callPackage ./pkgs/spire-agent { };
       };
 
       # CLI package for each system + netboot images for x86_64-linux
@@ -156,6 +157,7 @@
         {
           default = pkgs.nixfleet;
           nixfleet = pkgs.nixfleet;
+          spire-agent = pkgs.spire-agent;
         }
         // (
           if system == "x86_64-linux" then
@@ -218,6 +220,9 @@
               nix-tree
               nixpkgs-fmt
 
+              # SPIRE agent (for local identity)
+              pkgs.spire-agent
+
               # SSH/deployment testing
               openssh
 
@@ -253,6 +258,18 @@
         };
         gtr = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr.nix ];
+        };
+        gtr-150 = mkNixFleetConfiguration {
+          modules = [ ./hosts/gtr-150.nix ];
+        };
+        gtr-151 = mkNixFleetConfiguration {
+          modules = [ ./hosts/gtr-151.nix ];
+        };
+        gtr-152 = mkNixFleetConfiguration {
+          modules = [ ./hosts/gtr-152.nix ];
+        };
+        gtr-153 = mkNixFleetConfiguration {
+          modules = [ ./hosts/gtr-153.nix ];
         };
       };
 

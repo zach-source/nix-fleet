@@ -56,10 +56,12 @@ def build_install_config(host):
         "kernel": f"file://{BOOT_DIR}/vmlinuz",
         "initrd": [f"file://{BOOT_DIR}/initrd"],
         "cmdline": (
-            "{{.Initrd}} "
+            f"root=/dev/ram0 ramdisk_size=1500000 "
+            f"ip=dhcp "
+            f"url={INSTALLER_URL}/boot/ubuntu-25.04.iso "
             f"autoinstall "
             f"ds=nocloud-net\\;s={INSTALLER_URL}/{host}/ "
-            "ip=dhcp "
+            f"cloud-config-url=/dev/null "
             "---"
         ),
     }
@@ -70,7 +72,7 @@ def build_recovery_config():
     return {
         "kernel": f"file://{BOOT_DIR}/vmlinuz",
         "initrd": [f"file://{BOOT_DIR}/initrd"],
-        "cmdline": ("{{.Initrd}} " "ip=dhcp " "---"),
+        "cmdline": ("ip=dhcp " "---"),
     }
 
 
@@ -79,7 +81,11 @@ class PXEAPIHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Override to add prefix."""
-        print(f"[pxe-api] {args[0]}")
+        if args:
+            msg = format % args
+        else:
+            msg = format
+        print(f"[pxe-api] {msg}")
 
     def do_GET(self):
         # Pixiecore calls /v1/boot/<mac-address>
@@ -131,6 +137,8 @@ class PXEAPIHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    global BOOT_DIR, TARGETS_FILE, INSTALLER_URL
+
     import argparse
 
     parser = argparse.ArgumentParser(description="NixFleet Pixiecore API Backend")
@@ -144,7 +152,6 @@ def main():
     )
     args = parser.parse_args()
 
-    global BOOT_DIR, TARGETS_FILE, INSTALLER_URL
     BOOT_DIR = args.boot_dir
     TARGETS_FILE = args.targets_file
     INSTALLER_URL = args.installer_url

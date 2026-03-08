@@ -1,0 +1,146 @@
+2026-04-11 20:41:05,252 - INFO - Creating container for astropy__astropy-14182...
+2026-04-11 20:41:05,404 - INFO - Container for astropy__astropy-14182 created: d7091a8ca9027cfae5bfbbcab44eb1c5b8baaf936a284f3e8eecf94dfd232e24
+2026-04-11 20:41:05,665 - INFO - Container for astropy__astropy-14182 started: d7091a8ca9027cfae5bfbbcab44eb1c5b8baaf936a284f3e8eecf94dfd232e24
+2026-04-11 20:41:05,665 - INFO - Intermediate patch for astropy__astropy-14182 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14182/patch.diff, now applying to container...
+2026-04-11 20:41:05,790 - INFO - >>>>> Applied Patch:
+/tmp/patch.diff:31: trailing whitespace.
+        
+/tmp/patch.diff:38: trailing whitespace.
+        
+/tmp/patch.diff:43: trailing whitespace.
+            
+/tmp/patch.diff:46: trailing whitespace.
+            
+/tmp/patch.diff:57: trailing whitespace.
+        
+Checking patch astropy/io/ascii/rst.py...
+Applied patch astropy/io/ascii/rst.py cleanly.
+warning: 5 lines add whitespace errors.
+
+2026-04-11 20:41:07,063 - INFO - Git diff before:
+diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py
+index abdeba8ef..13d26e746 100644
+--- a/astropy/io/ascii/rst.py
++++ b/astropy/io/ascii/rst.py
+@@ -57,10 +57,50 @@ class RST(FixedWidth):
+     data_class = SimpleRSTData
+     header_class = SimpleRSTHeader
+ 
+-    def __init__(self):
+-        super().__init__(delimiter_pad=None, bookend=False)
++    def __init__(self, header_rows=None):
++        if header_rows is None:
++            header_rows = ["name"]
++        super().__init__(delimiter_pad=None, bookend=False, header_rows=header_rows)
+ 
+     def write(self, lines):
+         lines = super().write(lines)
+-        lines = [lines[1]] + lines + [lines[1]]
++        # For RST, we need to format the output correctly.
++        # The super().write() returns:
++        # - Header rows (including column names)
++        # - Position line (separator with = signs)
++        # - Data rows
++        #
++        # For RST simple tables, we need:
++        # - Separator line at the beginning
++        # - All header rows
++        # - Separator line
++        # - Data rows
++        # - Closing separator line
++        
++        # Find the position of the separator line (position_char = "=")
++        sep_idx = None
++        for i, line in enumerate(lines):
++            if all(c in "= " for c in line.strip()):
++                sep_idx = i
++                break
++        
++        if sep_idx is not None:
++            # Separate header rows and data
++            header_lines = lines[:sep_idx]
++            data_lines = lines[sep_idx + 1:]
++            
++            # Create the closing separator line (same as the position line)
++            closing_sep = lines[sep_idx]
++            
++            # Output format:
++            # - Separator at beginning
++            # - All header rows
++            # - Separator
++            # - Data rows
++            # - Closing separator
++            lines = [lines[sep_idx]] + header_lines + [closing_sep] + data_lines + [closing_sep]
++        else:
++            # Fallback to original behavior if no separator found
++            lines = [lines[1]] + lines + [lines[1]]
++        
+         return lines
+2026-04-11 20:41:07,064 - INFO - Eval script for astropy__astropy-14182 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14182/eval.sh; copying to container...
+2026-04-11 20:42:47,818 - INFO - Test runtime: 100.71 seconds
+2026-04-11 20:42:47,819 - INFO - Test output for astropy__astropy-14182 written to logs/run_evaluation/qwen35-spec-q4-20/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-14182/test_output.txt
+2026-04-11 20:42:47,884 - INFO - Git diff after:
+diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py
+index abdeba8ef..13d26e746 100644
+--- a/astropy/io/ascii/rst.py
++++ b/astropy/io/ascii/rst.py
+@@ -57,10 +57,50 @@ class RST(FixedWidth):
+     data_class = SimpleRSTData
+     header_class = SimpleRSTHeader
+ 
+-    def __init__(self):
+-        super().__init__(delimiter_pad=None, bookend=False)
++    def __init__(self, header_rows=None):
++        if header_rows is None:
++            header_rows = ["name"]
++        super().__init__(delimiter_pad=None, bookend=False, header_rows=header_rows)
+ 
+     def write(self, lines):
+         lines = super().write(lines)
+-        lines = [lines[1]] + lines + [lines[1]]
++        # For RST, we need to format the output correctly.
++        # The super().write() returns:
++        # - Header rows (including column names)
++        # - Position line (separator with = signs)
++        # - Data rows
++        #
++        # For RST simple tables, we need:
++        # - Separator line at the beginning
++        # - All header rows
++        # - Separator line
++        # - Data rows
++        # - Closing separator line
++        
++        # Find the position of the separator line (position_char = "=")
++        sep_idx = None
++        for i, line in enumerate(lines):
++            if all(c in "= " for c in line.strip()):
++                sep_idx = i
++                break
++        
++        if sep_idx is not None:
++            # Separate header rows and data
++            header_lines = lines[:sep_idx]
++            data_lines = lines[sep_idx + 1:]
++            
++            # Create the closing separator line (same as the position line)
++            closing_sep = lines[sep_idx]
++            
++            # Output format:
++            # - Separator at beginning
++            # - All header rows
++            # - Separator
++            # - Data rows
++            # - Closing separator
++            lines = [lines[sep_idx]] + header_lines + [closing_sep] + data_lines + [closing_sep]
++        else:
++            # Fallback to original behavior if no separator found
++            lines = [lines[1]] + lines + [lines[1]]
++        
+         return lines
+2026-04-11 20:42:47,884 - INFO - Grading answer for astropy__astropy-14182...
+2026-04-11 20:42:47,885 - INFO - report: {'astropy__astropy-14182': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': False, 'tests_status': {'FAIL_TO_PASS': {'success': [], 'failure': ['astropy/io/ascii/tests/test_rst.py::test_rst_with_header_rows']}, 'PASS_TO_PASS': {'success': ['astropy/io/ascii/tests/test_rst.py::test_read_normal', 'astropy/io/ascii/tests/test_rst.py::test_read_normal_names', 'astropy/io/ascii/tests/test_rst.py::test_read_normal_names_include', 'astropy/io/ascii/tests/test_rst.py::test_read_normal_exclude', 'astropy/io/ascii/tests/test_rst.py::test_read_unbounded_right_column', 'astropy/io/ascii/tests/test_rst.py::test_read_unbounded_right_column_header', 'astropy/io/ascii/tests/test_rst.py::test_read_right_indented_table', 'astropy/io/ascii/tests/test_rst.py::test_trailing_spaces_in_row_definition', 'astropy/io/ascii/tests/test_rst.py::test_write_normal'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for astropy__astropy-14182: resolved: False
+2026-04-11 20:42:47,885 - INFO - Attempting to stop container sweb.eval.astropy__astropy-14182.qwen35-spec-q4-20...
+2026-04-11 20:43:03,032 - INFO - Attempting to remove container sweb.eval.astropy__astropy-14182.qwen35-spec-q4-20...
+2026-04-11 20:43:03,074 - INFO - Container sweb.eval.astropy__astropy-14182.qwen35-spec-q4-20 removed.

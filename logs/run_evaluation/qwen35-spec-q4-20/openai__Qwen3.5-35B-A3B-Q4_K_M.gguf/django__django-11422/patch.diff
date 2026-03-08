@@ -1,0 +1,15 @@
+diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
+index 7ca0d68fae..128fc183d6 100644
+--- a/django/utils/autoreload.py
++++ b/django/utils/autoreload.py
+@@ -557,6 +557,10 @@ def get_reloader():
+ 
+ def start_django(reloader, main_func, *args, **kwargs):
+     ensure_echo_on()
++    # Watch the main script file (e.g., manage.py) for changes.
++    main_file = Path(sys.argv[0]).resolve().absolute()
++    if main_file.exists():
++        reloader.watch_file(main_file)
+ 
+     main_func = check_errors(main_func)
+     django_main_thread = threading.Thread(target=main_func, args=args, kwargs=kwargs, name='django-main-thread')

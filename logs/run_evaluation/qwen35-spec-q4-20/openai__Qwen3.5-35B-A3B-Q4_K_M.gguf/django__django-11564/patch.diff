@@ -1,0 +1,55 @@
+diff --git a/django/templatetags/static.py b/django/templatetags/static.py
+index 39712aaba0..a9ecfd07b6 100644
+--- a/django/templatetags/static.py
++++ b/django/templatetags/static.py
+@@ -8,6 +8,19 @@ from django.utils.html import conditional_escape
+ register = template.Library()
+ 
+ 
++def get_script_prefix(context):
++    """
++    Return the script prefix (SCRIPT_NAME) from the request context.
++    """
++    request = context.get('request')
++    if request is not None:
++        try:
++            return request.META.get('SCRIPT_NAME', '')
++        except AttributeError:
++            pass
++    return ''
++
++
+ class PrefixNode(template.Node):
+ 
+     def __repr__(self):
+@@ -48,6 +61,14 @@ class PrefixNode(template.Node):
+ 
+     def render(self, context):
+         prefix = self.handle_simple(self.name)
++        if not prefix.endswith('/'):
++            prefix += '/'
++        script_prefix = get_script_prefix(context)
++        if script_prefix:
++            # Ensure only one slash between script_prefix and prefix
++            if prefix.startswith('/'):
++                prefix = prefix[1:]
++            prefix = script_prefix.rstrip('/') + '/' + prefix
+         if self.varname is None:
+             return prefix
+         context[self.varname] = prefix
+@@ -100,7 +121,14 @@ class StaticNode(template.Node):
+ 
+     def url(self, context):
+         path = self.path.resolve(context)
+-        return self.handle_simple(path)
++        url = self.handle_simple(path)
++        script_prefix = get_script_prefix(context)
++        if script_prefix:
++            # Ensure only one slash between script_prefix and url
++            if url.startswith('/'):
++                url = url[1:]
++            url = script_prefix.rstrip('/') + '/' + url
++        return url
+ 
+     def render(self, context):
+         url = self.url(context)

@@ -1,0 +1,62 @@
+services:
+  server:
+    image: judge0/judge0:latest
+    ports:
+      - "2358:2358"
+    privileged: true
+    env_file: judge0.conf
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+  worker:
+    image: judge0/judge0:latest
+    command: ./scripts/workers
+    privileged: true
+    env_file: judge0.conf
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=nixfleet-judge0-2026
+    volumes:
+      - judge0-db:/var/lib/postgresql/data
+    restart: unless-stopped
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "nixfleet-redis-2026", "--appendonly", "no"]
+    restart: unless-stopped
+volumes:
+  judge0-db:
+---CONF---
+REDIS_PASSWORD=nixfleet-redis-2026
+POSTGRES_DB=judge0
+POSTGRES_USER=judge0
+POSTGRES_PASSWORD=nixfleet-judge0-2026
+AUTHN_TOKEN=nixfleet-judge0-auth
+AUTHZ_TOKEN=nixfleet-judge0-authz
+ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=true
+ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=true
+CPU_TIME_LIMIT=10
+MAX_CPU_TIME_LIMIT=30
+WALL_TIME_LIMIT=30
+MAX_WALL_TIME_LIMIT=60
+MEMORY_LIMIT=256000
+MAX_MEMORY_LIMIT=512000
+MAX_PROCESSES_AND_OR_THREADS=120
+ENABLE_BATCHED_SUBMISSIONS=true

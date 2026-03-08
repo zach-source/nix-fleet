@@ -1,0 +1,58 @@
+diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py
+index abdeba8ef..13d26e746 100644
+--- a/astropy/io/ascii/rst.py
++++ b/astropy/io/ascii/rst.py
+@@ -57,10 +57,50 @@ class RST(FixedWidth):
+     data_class = SimpleRSTData
+     header_class = SimpleRSTHeader
+ 
+-    def __init__(self):
+-        super().__init__(delimiter_pad=None, bookend=False)
++    def __init__(self, header_rows=None):
++        if header_rows is None:
++            header_rows = ["name"]
++        super().__init__(delimiter_pad=None, bookend=False, header_rows=header_rows)
+ 
+     def write(self, lines):
+         lines = super().write(lines)
+-        lines = [lines[1]] + lines + [lines[1]]
++        # For RST, we need to format the output correctly.
++        # The super().write() returns:
++        # - Header rows (including column names)
++        # - Position line (separator with = signs)
++        # - Data rows
++        #
++        # For RST simple tables, we need:
++        # - Separator line at the beginning
++        # - All header rows
++        # - Separator line
++        # - Data rows
++        # - Closing separator line
++        
++        # Find the position of the separator line (position_char = "=")
++        sep_idx = None
++        for i, line in enumerate(lines):
++            if all(c in "= " for c in line.strip()):
++                sep_idx = i
++                break
++        
++        if sep_idx is not None:
++            # Separate header rows and data
++            header_lines = lines[:sep_idx]
++            data_lines = lines[sep_idx + 1:]
++            
++            # Create the closing separator line (same as the position line)
++            closing_sep = lines[sep_idx]
++            
++            # Output format:
++            # - Separator at beginning
++            # - All header rows
++            # - Separator
++            # - Data rows
++            # - Closing separator
++            lines = [lines[sep_idx]] + header_lines + [closing_sep] + data_lines + [closing_sep]
++        else:
++            # Fallback to original behavior if no separator found
++            lines = [lines[1]] + lines + [lines[1]]
++        
+         return lines

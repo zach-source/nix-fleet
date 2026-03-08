@@ -49,6 +49,7 @@ func DefaultConfig() *ClientConfig {
 		KnownHostsFile: filepath.Join(home, ".ssh", "known_hosts"),
 		StrictHostKeys: true,
 		KeyFiles: []string{
+			filepath.Join(home, ".ssh", "nixfleet"),
 			filepath.Join(home, ".ssh", "id_ed25519"),
 			filepath.Join(home, ".ssh", "id_rsa"),
 		},

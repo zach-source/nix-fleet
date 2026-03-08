@@ -26,6 +26,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/reboot"
 	"github.com/nixfleet/nixfleet/internal/secrets"
 	"github.com/nixfleet/nixfleet/internal/server"
+	spirepkg "github.com/nixfleet/nixfleet/internal/spire"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 	"github.com/nixfleet/nixfleet/internal/state"
 	"github.com/spf13/cobra"
@@ -108,6 +109,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(k0sCmd())
 	cmd.AddCommand(nodeStatusCmd())
 	cmd.AddCommand(agentsCmd())
+	cmd.AddCommand(spireCmd())
 
 	return cmd
 }
@@ -5831,6 +5833,206 @@ Examples:
 
 	cmd.Flags().StringVarP(&hostName, "host", "H", "", "Host to SSH to (k0s controller)")
 	cmd.Flags().IntVar(&refreshInterval, "refresh", 10, "Refresh interval in seconds")
+
+	return cmd
+}
+
+// --- SPIRE identity management ---
+
+func spireCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "spire",
+		Short: "SPIRE identity management for this host",
+		Long: `Manage a local SPIRE agent that connects to the fleet's SPIRE server.
+
+This allows processes on this Mac to obtain SPIFFE identities (X.509 SVIDs
+and JWT SVIDs) from the nixfleet trust domain.
+
+Commands:
+  join   - Generate join token, fetch trust bundle, configure and start agent
+  status - Show local SPIRE agent status
+  leave  - Stop agent and clean up`,
+	}
+	cmd.AddCommand(spireJoinCmd())
+	cmd.AddCommand(spireStatusCmd())
+	cmd.AddCommand(spireLeaveCmd())
+	return cmd
+}
+
+func spireJoinCmd() *cobra.Command {
+	var (
+		hostname   string
+		serverAddr string
+		serverPort string
+		noStart    bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "join",
+		Short: "Join the SPIRE trust domain",
+		Long: `Generate a join token, fetch the trust bundle, configure a local SPIRE agent,
+and start it via launchd. Requires kubectl access to the cluster.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			// Check spire-agent binary
+			agentBin, err := spirepkg.CheckBinary()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Found spire-agent: %s\n", agentBin)
+
+			// Determine hostname
+			if hostname == "" {
+				hostname, err = os.Hostname()
+				if err != nil {
+					return fmt.Errorf("determine hostname: %w", err)
+				}
+				// Clean up .local suffix
+				hostname = strings.TrimSuffix(hostname, ".local")
+				hostname = strings.ToLower(hostname)
+			}
+			fmt.Printf("Hostname: %s\n", hostname)
+
+			// Check if agent is already running
+			status, _ := spirepkg.GetStatus()
+			if status != nil && status.Running {
+				return fmt.Errorf("SPIRE agent already running (PID %d) — run 'nixfleet spire leave' first", status.PID)
+			}
+
+			// Read server config from cluster ConfigMap (flags override)
+			if serverAddr == "" || serverPort == "" {
+				fmt.Println("Reading SPIRE server config from cluster...")
+				clientCfg, err := spirepkg.FetchClientConfig(ctx)
+				if err != nil {
+					return fmt.Errorf("could not read server config from cluster (use --server-addr/--server-port to override): %w", err)
+				}
+				if serverAddr == "" {
+					serverAddr = clientCfg.ServerAddress
+				}
+				if serverPort == "" {
+					serverPort = clientCfg.ServerPort
+				}
+				fmt.Printf("Server: %s:%s\n", serverAddr, serverPort)
+			}
+
+			// Generate join token
+			fmt.Println("Generating join token...")
+			token, err := spirepkg.GenerateJoinToken(ctx, hostname)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Join token generated (TTL 600s)")
+
+			// Fetch trust bundle
+			fmt.Println("Fetching trust bundle...")
+			bundle, err := spirepkg.FetchTrustBundle(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Println("Trust bundle fetched")
+
+			// Write config
+			fmt.Println("Writing agent config...")
+			configPath, err := spirepkg.WriteAgentConfig(token, bundle, serverAddr, serverPort)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Config written to: %s\n", configPath)
+
+			// Create registration entry
+			fmt.Println("Creating workload registration entry...")
+			if err := spirepkg.CreateRegistrationEntry(ctx, hostname); err != nil {
+				return err
+			}
+			fmt.Println("Registration entry created")
+
+			if noStart {
+				fmt.Println("\nAgent configured but not started (--no-start)")
+				fmt.Printf("Start manually: spire-agent run -config %s -joinToken %s\n", configPath, token)
+				return nil
+			}
+
+			// Bootstrap: run agent once with join token to complete attestation
+			fmt.Println("Bootstrapping agent (initial attestation)...")
+			if err := spirepkg.BootstrapAgent(ctx, agentBin, configPath, token); err != nil {
+				return fmt.Errorf("bootstrap failed: %w", err)
+			}
+			fmt.Println("Attestation successful")
+
+			// Install launchd for ongoing operation (no token needed after attestation)
+			fmt.Println("Installing launchd service...")
+			if err := spirepkg.InstallLaunchd(agentBin, configPath); err != nil {
+				return err
+			}
+
+			fmt.Printf("\nSPIRE agent started successfully!\n")
+			fmt.Printf("  Trust domain: %s\n", spirepkg.TrustDomain)
+			fmt.Printf("  SPIFFE ID:    spiffe://%s/host/%s\n", spirepkg.TrustDomain, hostname)
+			fmt.Printf("  Socket:       %s\n", spirepkg.AgentSocket)
+			fmt.Printf("  Server:       %s:%s\n", serverAddr, serverPort)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&hostname, "hostname", "", "Override hostname (default: system hostname)")
+	cmd.Flags().StringVar(&serverAddr, "server-addr", spirepkg.DefaultServerAddr, "SPIRE server address")
+	cmd.Flags().StringVar(&serverPort, "server-port", spirepkg.DefaultServerPort, "SPIRE server port")
+	cmd.Flags().BoolVar(&noStart, "no-start", false, "Write config only, don't start agent")
+
+	return cmd
+}
+
+func spireStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show local SPIRE agent status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := spirepkg.GetStatus()
+			if err != nil {
+				return err
+			}
+
+			if !status.Running {
+				fmt.Println("SPIRE agent: not running")
+				return nil
+			}
+
+			fmt.Printf("SPIRE agent: running (PID %d)\n", status.PID)
+			fmt.Printf("  Socket: %s\n", status.SocketPath)
+			if status.CanFetchID {
+				fmt.Printf("  Status: connected\n")
+				if status.SVID != "" {
+					fmt.Printf("  SVID:   %s\n", status.SVID)
+				}
+			} else {
+				fmt.Printf("  Status: agent running but cannot fetch SVIDs\n")
+			}
+			return nil
+		},
+	}
+}
+
+func spireLeaveCmd() *cobra.Command {
+	var keepConfig bool
+
+	cmd := &cobra.Command{
+		Use:   "leave",
+		Short: "Stop SPIRE agent and clean up",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := spirepkg.StopAgent(keepConfig); err != nil {
+				return err
+			}
+			if keepConfig {
+				fmt.Println("SPIRE agent stopped (config preserved)")
+			} else {
+				fmt.Println("SPIRE agent stopped and config removed")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&keepConfig, "keep-config", false, "Keep config files for re-joining")
 
 	return cmd
 }

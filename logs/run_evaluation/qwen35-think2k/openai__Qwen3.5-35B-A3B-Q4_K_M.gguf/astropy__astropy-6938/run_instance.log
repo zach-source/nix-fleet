@@ -1,0 +1,45 @@
+2026-04-13 12:16:07,351 - INFO - Creating container for astropy__astropy-6938...
+2026-04-13 12:16:07,461 - INFO - Container for astropy__astropy-6938 created: a0b380c8f32a84f8473937994bfdde2a90bc3e0489ff61d21eb9c6d99a792cdc
+2026-04-13 12:16:07,806 - INFO - Container for astropy__astropy-6938 started: a0b380c8f32a84f8473937994bfdde2a90bc3e0489ff61d21eb9c6d99a792cdc
+2026-04-13 12:16:07,807 - INFO - Intermediate patch for astropy__astropy-6938 written to logs/run_evaluation/qwen35-think2k/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-6938/patch.diff, now applying to container...
+2026-04-13 12:16:08,014 - INFO - >>>>> Applied Patch:
+Checking patch astropy/io/fits/fitsrec.py...
+Applied patch astropy/io/fits/fitsrec.py cleanly.
+
+2026-04-13 12:16:09,266 - INFO - Git diff before:
+diff --git a/astropy/io/fits/fitsrec.py b/astropy/io/fits/fitsrec.py
+index 574b4073b1..bfadf72f02 100644
+--- a/astropy/io/fits/fitsrec.py
++++ b/astropy/io/fits/fitsrec.py
+@@ -1261,7 +1261,7 @@ class FITS_rec(np.recarray):
+ 
+         # Replace exponent separator in floating point numbers
+         if 'D' in format:
+-            output_field.replace(encode_ascii('E'), encode_ascii('D'))
++            output_field[:] = output_field.replace(encode_ascii("E"), encode_ascii("D"))
+ 
+ 
+ def _get_recarray_field(array, key):
+2026-04-13 12:16:09,266 - INFO - Eval script for astropy__astropy-6938 written to logs/run_evaluation/qwen35-think2k/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-6938/eval.sh; copying to container...
+2026-04-13 12:16:18,125 - INFO - Test runtime: 8.83 seconds
+2026-04-13 12:16:18,126 - INFO - Test output for astropy__astropy-6938 written to logs/run_evaluation/qwen35-think2k/openai__Qwen3.5-35B-A3B-Q4_K_M.gguf/astropy__astropy-6938/test_output.txt
+2026-04-13 12:16:18,410 - INFO - Git diff after:
+diff --git a/astropy/io/fits/fitsrec.py b/astropy/io/fits/fitsrec.py
+index 574b4073b1..bfadf72f02 100644
+--- a/astropy/io/fits/fitsrec.py
++++ b/astropy/io/fits/fitsrec.py
+@@ -1261,7 +1261,7 @@ class FITS_rec(np.recarray):
+ 
+         # Replace exponent separator in floating point numbers
+         if 'D' in format:
+-            output_field.replace(encode_ascii('E'), encode_ascii('D'))
++            output_field[:] = output_field.replace(encode_ascii("E"), encode_ascii("D"))
+ 
+ 
+ def _get_recarray_field(array, key):
+2026-04-13 12:16:18,410 - INFO - Grading answer for astropy__astropy-6938...
+2026-04-13 12:16:18,414 - INFO - report: {'astropy__astropy-6938': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'tests_status': {'FAIL_TO_PASS': {'success': ['astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_ascii_table_data', 'astropy/io/fits/tests/test_table.py::TestTableFunctions::test_ascii_table'], 'failure': []}, 'PASS_TO_PASS': {'success': ['astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_sample_file', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_image_create', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_scaled_data', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_scaled_data_auto_rescale', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_uint16_data', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_groups_hdu_data', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_open_with_no_keywords', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_writeto_convenience', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_hdu_writeto', 'astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_datasum_only', 'astropy/io/fits/tests/test_table.py::test_regression_scalar_indexing'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for astropy__astropy-6938: resolved: True
+2026-04-13 12:16:18,415 - INFO - Attempting to stop container sweb.eval.astropy__astropy-6938.qwen35-think2k...
+2026-04-13 12:16:33,774 - INFO - Attempting to remove container sweb.eval.astropy__astropy-6938.qwen35-think2k...
+2026-04-13 12:16:33,812 - INFO - Container sweb.eval.astropy__astropy-6938.qwen35-think2k removed.

@@ -1,0 +1,120 @@
+===FILE:llama-rocm-codecomplete.service===
+[Unit]
+Description=llama.cpp ROCm (Qwen2.5-Coder 1.5B - FIM Code Completion)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/support/qwen2.5-coder-1.5b-instruct-q8_0.gguf   --host 0.0.0.0 --port 8092   --ctx-size 32768   --flash-attn on   -ngl 99   --parallel 4   --jinja
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+===FILE:llama-rocm-embeddings.service===
+[Unit]
+Description=llama.cpp ROCm (Nomic Embed Text v2 - Embeddings)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/support/nomic-embed-text-v2-moe-Q8_0.gguf   --host 0.0.0.0 --port 8090   --ctx-size 8192   --batch-size 2048   --ubatch-size 2048   --flash-attn on   -ngl 99   --parallel 4   --embedding
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+===FILE:●===
+===FILE:llama-rocm-gemma4.service===
+[Unit]
+Description=llama.cpp ROCm (Gemma 4 26B-A4B Q4_K_M)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+Environment=GGML_CUDA_FORCE_MMQ=1
+Environment=HIP_FORCE_DEV_KERNARG=1
+Environment=GPU_MAX_HW_QUEUES=8
+Environment=HSA_ENABLE_SDMA=0
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/mythos/gemma-4-26B-A4B-it-Q4_K_M.gguf   --host 0.0.0.0 --port 8080   --ctx-size 262144   --batch-size 2048   --ubatch-size 2048   --cache-type-k q4_0   --cache-type-v q4_0   --flash-attn on   --threads 8   --threads-batch 16   --no-mmap   -ngl 99   --parallel 1   --cache-reuse 256   --jinja --reasoning-format deepseek --reasoning-budget 2048
+Restart=on-failure
+RestartSec=10
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+===FILE:llama-rocm-orchestrator.service===
+[Unit]
+Description=llama.cpp ROCm (Qwen3.5-9B - Agent Orchestrator)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+Environment=GGML_CUDA_FORCE_MMQ=1
+Environment=HIP_FORCE_DEV_KERNARG=1
+Environment=GPU_MAX_HW_QUEUES=8
+Environment=HSA_ENABLE_SDMA=0
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/support/Qwen3.5-9B-Q4_K_M.gguf   --host 0.0.0.0 --port 8093   --ctx-size 131072   --batch-size 2048   --ubatch-size 2048   --cache-type-k q4_0   --cache-type-v q4_0   --flash-attn on   -ngl 99   --parallel 2   --cache-reuse 256   --jinja   --reasoning-format deepseek   --reasoning-budget 2048
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+===FILE:llama-rocm-safety.service===
+[Unit]
+Description=llama.cpp ROCm (ShieldGemma 2B - Safety Filter)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=LD_LIBRARY_PATH=/opt/llama-rocm
+ExecStart=/opt/llama-rocm/llama-server   --model /srv/models/support/shieldgemma-2b-Q8_0.gguf   --host 0.0.0.0 --port 8091   --ctx-size 8192   -ngl 99   --parallel 2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+===FILE:llama-rpc.service===
+[Unit]
+Description=llama.cpp RPC Worker (local)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+SupplementaryGroups=render video
+Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+ExecStart=/usr/local/bin/rpc-server -H 0.0.0.0 -p 50052
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+===FILE:whisper-server.service===
+[Unit]
+Description=Whisper.cpp Server (Speech-to-Text, CPU)
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+ExecStart=/opt/build/whisper.cpp/build/bin/whisper-server   --model /srv/models/support/ggml-base.en.bin   --host 0.0.0.0 --port 8094   --threads 4
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

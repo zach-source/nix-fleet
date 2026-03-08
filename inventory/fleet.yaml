@@ -1,0 +1,161 @@
+# NixFleet Fleet Inventory
+# Production hosts managed by NixFleet
+
+groups:
+  gtr:
+    hosts:
+      - gtr-150
+      - gtr-151
+      - gtr-152
+      - gtr-153
+    vars:
+      max_parallel: 4
+      hardware: "Ryzen AI MAX+ 395"
+      vram: "131GB unified (LPDDR5X-8000)"
+      gpu: "Radeon 8060S (gfx1151)"
+      backend: "ROCm/HIP"
+
+  infra:
+    hosts:
+      - gti
+    vars:
+      max_parallel: 1
+
+  all:
+    children:
+      - infra
+      - gtr
+
+hosts:
+  gti:
+    base: ubuntu
+    addr: 192.168.3.131
+    ssh_user: ztaylor
+    roles:
+      - base
+      - k0s-controller
+      - netboot-server
+      - dns
+      - installer
+
+  gtr-150:
+    base: ubuntu
+    addr: 192.168.3.133
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+      - embeddings
+      - safety-filter
+      - code-completion
+      - agent-orchestrator
+      - whisper-stt
+      - rpc-worker
+    services:
+      - port: 8080
+        model: gemma-4-26B-A4B-it-Q4_K_M
+        role: primary-llm
+        tok_s: 53
+      - port: 8090
+        model: nomic-embed-text-v2-moe-Q8_0
+        role: embeddings
+      - port: 8091
+        model: shieldgemma-2b-Q8_0
+        role: safety
+      - port: 8092
+        model: qwen2.5-coder-1.5b-instruct-q8_0
+        role: code-completion
+        tok_s: 107
+      - port: 8093
+        model: Qwen3.5-9B-Q4_K_M
+        role: orchestrator
+        tok_s: 33
+      - port: 8094
+        model: whisper-base-en
+        role: stt
+      - port: 50052
+        role: rpc-worker
+
+  gtr-151:
+    base: ubuntu
+    addr: 192.168.3.132
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+      - rpc-worker
+    services:
+      - port: 8084
+        model: Qwen3.5-35B-A3B-Q4_K_M (fork + spec)
+        role: primary-llm
+        tok_s: 32-60
+        draft: Qwen3.5-0.8B-Q4_K_M
+        notes: "Custom fork (github.com/zach-source/llama.cpp qwen35-speculation). SWE-bench 60%."
+      - port: 50052
+        role: rpc-worker
+
+  gtr-152:
+    base: ubuntu
+    addr: 192.168.3.134
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+      - rpc-worker
+    services:
+      - port: 8082
+        model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M
+        role: primary-llm
+        tok_s: 95-124
+        draft: Qwen3-0.6B-Q4_K_M
+        notes: "Throughput king. SWE-bench 40%."
+      - port: 50052
+        role: rpc-worker
+
+  gtr-153:
+    base: ubuntu
+    addr: 192.168.3.130
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+      - code-sandbox
+      - rpc-worker
+    services:
+      - port: 8082
+        model: MiniMax-M2.7-UD-IQ4_XS (229B)
+        role: primary-llm
+        tok_s: 23
+        notes: "SOTA 229B model, 10B active MoE"
+      - port: 2358
+        model: judge0
+        role: code-sandbox
+        notes: "47 languages, Docker Compose, privileged"
+      - port: 50052
+        role: rpc-worker
+
+# K8s services (on gti k0s cluster, managed by Flux)
+k8s:
+  litellm:
+    namespace: litellm
+    url: https://llm.stigen.home
+    port: 4000
+    role: ai-gateway
+    notes: "Routes all models, OpenAI-compatible, API key sk-nixfleet-2026"
+
+  open-webui:
+    namespace: open-webui
+    url: https://chat.stigen.home
+    role: chat-ui
+
+  librechat:
+    namespace: librechat
+    url: https://libre.stigen.home
+    role: chat-ui
+    notes: "MCP agents, multi-user"
+
+  lobechat:
+    namespace: lobechat
+    url: https://lobe.stigen.home
+    role: chat-ui
+    notes: "Access code: nixfleet"
