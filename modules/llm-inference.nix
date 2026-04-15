@@ -280,7 +280,7 @@ in
   };
 
   config = mkIf cfg.enable {
-    nixfleet.units = mapAttrs' (
+    nixfleet.systemd.units = mapAttrs' (
       name: svc:
       nameValuePair "llama-rocm-${name}.service" {
         text = mkUnit name svc;

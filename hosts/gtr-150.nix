@@ -80,7 +80,7 @@
     };
 
     # Whisper is a separate binary, not llama-server
-    units."whisper-server.service" = {
+    systemd.units."whisper-server.service" = {
       text = ''
         [Unit]
         Description=Whisper.cpp Server (Speech-to-Text, CPU)
