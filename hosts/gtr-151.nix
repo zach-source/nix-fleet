@@ -47,7 +47,7 @@
           format = "deepseek";
           budget = 2048;
         };
-        extraFlags = [ "--reasoning-format deepseek" ];
+        extraFlags = [ ];
       };
     };
   };

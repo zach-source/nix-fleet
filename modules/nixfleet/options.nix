@@ -465,6 +465,7 @@ in
 
       repoURL = mkOption {
         type = types.str;
+        default = "";
         description = "Git repository URL (SSH format: git@github.com:org/repo.git)";
         example = "git@github.com:myorg/nix-fleet-hosts.git";
       };
@@ -518,11 +519,13 @@ in
 
         user = mkOption {
           type = types.str;
+          default = "";
           description = "Username to run home-manager as";
         };
 
         dotfilesPath = mkOption {
           type = types.str;
+          default = "";
           description = "Path to dotfiles repository on the host";
         };
 
@@ -540,6 +543,7 @@ in
 
         configName = mkOption {
           type = types.str;
+          default = "";
           description = "Flake configuration name (e.g., 'user@x86_64-linux')";
         };
       };
