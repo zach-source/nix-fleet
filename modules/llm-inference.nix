@@ -245,6 +245,8 @@ let
     [Unit]
     Description=${svc.description}
     After=network.target
+    Wants=dev-kfd.device
+    After=dev-kfd.device
 
     [Service]
     Type=simple
@@ -252,6 +254,7 @@ let
     SupplementaryGroups=render video
     Environment=LD_LIBRARY_PATH=${svc.ldLibraryPath}
     ${concatStringsSep "\n" (mapAttrsToList (k: v: "Environment=${k}=${v}") svc.rocmEnv)}
+    ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/kfd ] && exit 0; sleep 1; done; echo "WARNING: /dev/kfd not found after 30s"'
     ExecStart=${mkExecStart name svc}
     Restart=on-failure
     RestartSec=10
