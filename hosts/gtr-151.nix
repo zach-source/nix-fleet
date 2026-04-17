@@ -51,7 +51,15 @@
           format = "deepseek";
           budget = 2048;
         };
-        extraFlags = [ ];
+        # --cache-ram 0 disables prompt cache restore — workaround for
+        # upstream bug in llama-memory-recurrent.cpp:1086 where state_read_meta
+        # asserts cells[head].pos == ubatch.pos[0] but recurrent find_slot sets
+        # cell.pos = ubatch.pos[cell_count-1]. Crashes server with concurrent
+        # requests that hit the prompt cache. See git log of fork for fix.
+        extraFlags = [
+          "--cache-ram"
+          "0"
+        ];
       };
     };
   };

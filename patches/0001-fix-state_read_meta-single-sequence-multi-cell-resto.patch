@@ -1,0 +1,137 @@
+From 9e71f1bd67a773adc8c2eaad7227eede601cdbb8 Mon Sep 17 00:00:00 2001
+From: Zach Taylor <zachncst@gmail.com>
+Date: Fri, 17 Apr 2026 13:51:14 -0400
+Subject: [PATCH] fix: state_read_meta single-sequence multi-cell restore for
+ recurrent memory
+
+The single-sequence path (dest_seq_id != -1) called find_slot() once with
+a multi-token ubatch and then asserted that cell_count cells existed
+contiguously starting at head. This is never true for recurrent / SSM
+memory: find_slot() in llama-memory-recurrent.cpp allocates exactly one
+cell per sequence and sets cell.pos = ubatch.pos[last] (not pos[0]).
+
+The bug was latent until checkpointing was added (commits f191236,
+d5496e2). With multiple checkpoints saved per sequence, state_write
+emits cell_count > 1 entries for one seq_id, and any prompt-cache
+restore then crashes on:
+
+    GGML_ASSERT(cells[head].pos == ubatch.pos[0]) failed
+    src/llama-memory-recurrent.cpp:1086
+
+Reproducer: --cache-ram > 0 (default 8192 MiB) with concurrent or
+repeat requests against a Qwen3.5/3.6 hybrid model.
+
+Fix: read all positions first, manually find a contiguous run of
+empty cells, populate them, and pick the highest-pos cell as the
+active tail. Matches the layout that state_read_data and the trailing
+src-fixup loop already expect (cells[head .. head+cell_count-1]).
+---
+ src/llama-memory-recurrent.cpp | 74 ++++++++++++++++++++++++----------
+ 1 file changed, 52 insertions(+), 22 deletions(-)
+
+diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
+index efa8702..ff24034 100644
+--- a/src/llama-memory-recurrent.cpp
++++ b/src/llama-memory-recurrent.cpp
+@@ -1047,46 +1047,76 @@ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::
+ 
+ bool llama_memory_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id) {
+     if (dest_seq_id != -1) {
+-        // single sequence
++        // single sequence — restore one or more checkpoints for this seq_id.
++        //
++        // For recurrent / SSM memory, find_slot() only ever allocates ONE cell
++        // per sequence (it sets cells[head].pos = ubatch.pos[last]).
++        // Multi-cell restores (cell_count > 1) happen when the sequence has
++        // saved checkpoints for speculative-decoding rollback, and each cell
++        // holds an independent state snapshot at a different position.
++        //
++        // The previous implementation called find_slot() once with a
++        // multi-token ubatch and then asserted that cell_count cells existed
++        // contiguously starting at head — which is never true for recurrent
++        // memory. We instead manually carve out a contiguous run of empty
++        // cells, one per checkpoint.
+         seq_rm(dest_seq_id, -1, -1);
+ 
+         if (cell_count == 0) {
+             return true;
+         }
+ 
+-        llama_batch_allocr balloc(hparams.n_pos_per_embd());
+-
+-        llama_ubatch ubatch = balloc.ubatch_reserve(cell_count, 1);
+-
++        // Read all positions first; they're needed to choose tail correctly.
++        std::vector<llama_pos> positions(cell_count);
+         for (uint32_t i = 0; i < cell_count; ++i) {
+-            llama_pos pos;
+             uint32_t n_seq_id;
+-
+-            io.read_to(&pos,      sizeof(pos));
+-            io.read_to(&n_seq_id, sizeof(n_seq_id));
++            io.read_to(&positions[i], sizeof(positions[i]));
++            io.read_to(&n_seq_id,     sizeof(n_seq_id));
+ 
+             if (n_seq_id != 0) {
+                 LLAMA_LOG_ERROR("%s: invalid seq_id-agnostic kv cell\n", __func__);
+                 return false;
+             }
+-
+-            ubatch.pos[i] = pos;
+         }
+-        ubatch.n_seq_id[0] = 1;
+-        ubatch.seq_id[0] = &dest_seq_id;
+ 
+-        if (!find_slot(ubatch)) {
+-            LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
++        // Find a contiguous run of cell_count empty cells (state_read_data and
++        // the trailing src-fixup loop both require head, head+1, … head+N-1).
++        uint32_t start_idx = size;
++        for (uint32_t s = 0; s + cell_count <= size; ++s) {
++            bool all_empty = true;
++            for (uint32_t i = 0; i < cell_count; ++i) {
++                if (!cells[s + i].is_empty()) {
++                    all_empty = false;
++                    break;
++                }
++            }
++            if (all_empty) {
++                start_idx = s;
++                break;
++            }
++        }
++        if (start_idx == size) {
++            LLAMA_LOG_ERROR("%s: failed to find %u contiguous empty cells (size=%u, used=%u)\n",
++                            __func__, cell_count, size, used);
+             return false;
+         }
+ 
+-        // DEBUG CHECK: kv.head should be our first cell, kv.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
+-        // Assume that this is one contiguous block of cells
+-        GGML_ASSERT(head + cell_count <= size);
+-        GGML_ASSERT(cells[head].pos == ubatch.pos[0]);
+-        GGML_ASSERT(cells[head + cell_count - 1].pos == ubatch.pos[cell_count - 1]);
+-        GGML_ASSERT(cells[head].has_seq_id(dest_seq_id));
+-        GGML_ASSERT(cells[head + cell_count - 1].has_seq_id(dest_seq_id));
++        // Populate the cells and pick the highest-pos cell as the active tail.
++        int32_t   tail_idx = -1;
++        llama_pos max_pos  = -1;
++        for (uint32_t i = 0; i < cell_count; ++i) {
++            const uint32_t cell_id = start_idx + i;
++            cells[cell_id].pos = positions[i];
++            cells[cell_id].seq_id.insert(dest_seq_id);
++            if (positions[i] > max_pos) {
++                max_pos  = positions[i];
++                tail_idx = (int32_t) cell_id;
++            }
++        }
++        cells[dest_seq_id].tail = tail_idx;
++
++        head  = start_idx;
++        used += cell_count;
+     } else {
+         // whole KV cache restore
+ 
+-- 
+2.50.1
+
