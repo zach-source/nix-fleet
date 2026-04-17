@@ -86,11 +86,11 @@ hosts:
       - rpc-worker
     services:
       - port: 8084
-        model: Qwen3.5-35B-A3B-Q4_K_M (fork + spec)
+        model: Qwen3.6-35B-A3B-UD-Q4_K_M (fork + spec)
         role: primary-llm
-        tok_s: 32-60
+        tok_s: 32-129
         draft: Qwen3.5-0.8B-Q4_K_M
-        notes: "Custom fork (github.com/zach-source/llama.cpp qwen35-speculation). SWE-bench 60%."
+        notes: "Custom fork (github.com/zach-source/llama.cpp qwen35-speculation) handles qwen35moe arch. Warm ~49 tok/s, cache-hit 129 tok/s."
       - port: 50052
         role: rpc-worker
 
