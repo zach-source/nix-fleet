@@ -1,5 +1,5 @@
 # GTR-151 — AMD Ryzen AI MAX+ 395 (192.168.3.132)
-# Quality king: Qwen3.5-35B-A3B with speculative decoding (custom fork)
+# Quality king: Qwen3.6-35B-A3B with speculative decoding (custom fork)
 # 131GB unified VRAM, ROCm 7.13 (TheRock SDK), gfx1151
 { pkgs, ... }:
 
@@ -26,9 +26,10 @@
       enable = true;
       # Uses custom fork at /opt/llama-rocm-qwen35 (PR #20075 + our fixes)
       # Fork repo: https://github.com/zach-source/llama.cpp/tree/qwen35-speculation
-      services.qwen35-spec = {
-        description = "Qwen3.5-35B-A3B + speculation (custom fork)";
-        model = "/srv/models/Qwen3.5-35B-A3B-Q4_K_M.gguf";
+      # Qwen3.6 uses qwen35moe architecture — same hybrid backbone as Qwen3.5, so fork applies.
+      services.qwen36-spec = {
+        description = "Qwen3.6-35B-A3B + speculation (custom fork)";
+        model = "/srv/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
         binary = "/opt/llama-rocm-qwen35/bin/llama-server";
         ldLibraryPath = "/opt/llama-rocm-qwen35/lib:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8084;
