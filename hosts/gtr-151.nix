@@ -39,6 +39,9 @@
         ctxCheckpoints = 0; # incompatible with hybrid memory
         cacheReuse = null; # IMROPE doesn't support seq_add
         draft = {
+          # Qwen3.5-0.8B outperforms 2B draft on varied prompts:
+          # 0.8B: 38.8 tok/s mean, 61% accept
+          # 2B:   35.3 tok/s mean, 65% accept (slower draft pass negates higher accept)
           model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
           max = 4;
           min = 1;
