@@ -9,6 +9,7 @@
     ../modules/dns.nix
     ../modules/tpm2-unlock.nix
     ../modules/installer.nix
+    ../modules/sysctl.nix
   ];
 
   nixfleet = {
@@ -32,6 +33,25 @@
     # TPM2 auto-unlock for ZFS-on-LUKS keystore
     # ============================================================================
     modules.tpm2Unlock.enable = true;
+
+    # ============================================================================
+    # Kernel tuning for k0s + JuiceFS CSI driver
+    # The CSI plugin opens many inotify watchers at startup; Ubuntu's defaults
+    # (max_user_instances=128, max_user_watches=8192) exhaust quickly under
+    # mixed k8s workloads and surface as "too many open files" at CSI init.
+    # ============================================================================
+    modules.sysctl = {
+      enable = true;
+      settings = {
+        # JuiceFS CSI + general k8s inotify headroom
+        "fs.inotify.max_user_watches" = 524288;
+        "fs.inotify.max_user_instances" = 8192;
+        # Process-wide fd ceiling (containerd/kubelet already high, but
+        # kernel cap keeps us out of per-process EMFILE territory)
+        "fs.file-max" = 1048576;
+        "fs.nr_open" = 1048576;
+      };
+    };
 
     # ============================================================================
     # Ubuntu installer — serves autoinstall configs for PXE installs

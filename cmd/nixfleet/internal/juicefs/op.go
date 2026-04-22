@@ -75,11 +75,14 @@ func ItemCreate(ctx context.Context, vault, title string, fields []string) error
 	return nil
 }
 
-// ItemRead reads a single field via the op:// reference syntax.
+// ItemRead reads a single field via the op:// reference syntax. Uses
+// runCombined so op's stderr is folded into the error when it fails —
+// the CLI's failures are mostly informational ("not currently signed in",
+// "item not found", etc.) and unhelpful without them.
 func ItemRead(ctx context.Context, ref string) (string, error) {
-	out, err := runOutput(ctx, "op", "read", ref)
+	out, err := runCombined(ctx, "op", "read", ref)
 	if err != nil {
-		return "", fmt.Errorf("op read %q: %w", ref, err)
+		return "", fmt.Errorf("op read %q: %w: %s", ref, err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimRight(string(out), "\n"), nil
 }
