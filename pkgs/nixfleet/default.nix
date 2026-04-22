@@ -13,7 +13,7 @@ buildGoModule rec {
 
   src = ../../cmd/nixfleet;
 
-  vendorHash = "sha256-mX9RPVn7vhmhge9WD4vdA2iKyoioVurS0T3hjeY5umo=";
+  vendorHash = "sha256-bMpgBgpnO6rMoXW0IQouJwBed8sfVHLx7s0ThlvmJSo=";
 
   nativeBuildInputs = [ installShellFiles ];
 
