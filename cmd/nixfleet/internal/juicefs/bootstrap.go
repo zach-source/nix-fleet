@@ -106,11 +106,13 @@ func EnsurePGItem(ctx context.Context, cfg Config, w io.Writer) error {
 
 func EnsureMinIOItem(ctx context.Context, cfg Config, w io.Writer) error {
 	return ensureItem(ctx, cfg.Vault, cfg.MinIOItem, w, func() ([]string, error) {
+		// Root password can be long; MinIO root has no length cap.
 		rootPW, err := RandomPassword(32)
 		if err != nil {
 			return nil, err
 		}
-		svcSecret, err := RandomPassword(32)
+		// Service-account secret-key must fit MinIO's 8-40 char range.
+		svcSecret, err := MinIOSecretKey()
 		if err != nil {
 			return nil, err
 		}

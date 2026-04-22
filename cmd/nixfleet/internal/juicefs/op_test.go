@@ -138,7 +138,7 @@ func TestItemRead(t *testing.T) {
 		_, fn := newFakeRunner(t, map[string]fakeResponse{
 			"op read op://v/i/f": {Stdout: []byte("secret-value\n")},
 		})
-		withRunners(t, fn, nil)
+		withRunners(t, nil, fn)
 
 		got, err := ItemRead(ctx, "op://v/i/f")
 		if err != nil {
@@ -153,7 +153,7 @@ func TestItemRead(t *testing.T) {
 		_, fn := newFakeRunner(t, map[string]fakeResponse{
 			"op read op://v/missing/f": {Err: errors.New("exit 1")},
 		})
-		withRunners(t, fn, nil)
+		withRunners(t, nil, fn)
 
 		_, err := ItemRead(ctx, "op://v/missing/f")
 		if err == nil {

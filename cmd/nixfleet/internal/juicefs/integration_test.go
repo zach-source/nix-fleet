@@ -89,9 +89,19 @@ func TestIntegration_RandomPassword(t *testing.T) {
 	if pw1 == pw2 {
 		t.Error("two RandomPassword calls returned the same value")
 	}
-	// base64-RawURL of 32 bytes is 43 chars (no padding).
-	if len(pw1) != 43 {
-		t.Errorf("len(pw1) = %d, want 43", len(pw1))
+	// Hex-encoded: 32 bytes → 64 chars.
+	if len(pw1) != 64 {
+		t.Errorf("len(pw1) = %d, want 64", len(pw1))
+	}
+}
+
+func TestIntegration_MinIOSecretKey(t *testing.T) {
+	sk, err := MinIOSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sk) < 8 || len(sk) > 40 {
+		t.Errorf("MinIO secret-key len = %d, want 8-40", len(sk))
 	}
 }
 

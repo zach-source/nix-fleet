@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -12,21 +11,38 @@ import (
 )
 
 type Keypair struct {
-	PrivateKeyPEM []byte // AES256-encrypted PKCS#1 PEM
+	PrivateKeyPEM []byte // AES256-encrypted PKCS#8 PEM
 	PublicKeyPEM  []byte // PKCS#1 public key PEM
 	Passphrase    string // decrypts PrivateKeyPEM
 	Fingerprint   string // SHA256 over DER-encoded public key
 }
 
-// GenerateEncryptedKeypair produces an AES256-encrypted RSA-4096 keypair by
-// shelling out to openssl. Uses temp files under os.TempDir() (typically
-// tmpfs on Linux) so the private key never persists.
+// DefaultRSABits is 2048, not 4096: JuiceFS stores the encrypted PEM in the
+// metadata engine's VARCHAR(4096) column; the 4096-bit PEM overflows.
+// 2048-bit RSA is still ~112-bit security — well above the useful threshold
+// for this threat model (LAN-reachable MinIO on a home NAS).
+const DefaultRSABits = 2048
+
+// GenerateEncryptedKeypair produces an AES256-encrypted RSA keypair via
+// openssl. Uses a hex passphrase + stdin transport to sidestep two
+// openssl/shell edge cases:
+//   - base64 passphrases contain +/= which some openssl builds mishandle
+//     when passed as `pass:` or `env:` arguments
+//   - exported env vars don't always propagate to openssl subprocesses
+//     across & && chains on zsh
 func GenerateEncryptedKeypair(ctx context.Context) (*Keypair, error) {
-	buf := make([]byte, 48)
-	if _, err := rand.Read(buf); err != nil {
+	return GenerateEncryptedKeypairBits(ctx, DefaultRSABits)
+}
+
+// GenerateEncryptedKeypairBits is the sized variant for callers that
+// genuinely need a different key size.
+func GenerateEncryptedKeypairBits(ctx context.Context, bits int) (*Keypair, error) {
+	// 24 bytes hex-encoded = 48 chars, hex only (openssl/shell safe).
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
 		return nil, fmt.Errorf("read random bytes: %w", err)
 	}
-	passphrase := base64.StdEncoding.EncodeToString(buf)
+	passphrase := hex.EncodeToString(raw)
 
 	tmpDir, err := os.MkdirTemp("", "juicefs-keygen-")
 	if err != nil {
@@ -37,24 +53,22 @@ func GenerateEncryptedKeypair(ctx context.Context) (*Keypair, error) {
 	privPath := filepath.Join(tmpDir, "key.pem")
 	pubPath := filepath.Join(tmpDir, "key.pub")
 
-	if out, err := runCombined(ctx, "openssl", "genrsa",
+	if err := runPipe(ctx, []byte(passphrase), "openssl", "genrsa",
 		"-aes256",
-		"-passout", "pass:"+passphrase,
+		"-passout", "stdin",
 		"-out", privPath,
-		"4096"); err != nil {
-		return nil, fmt.Errorf("openssl genrsa: %w: %s", err, string(out))
+		fmt.Sprintf("%d", bits)); err != nil {
+		return nil, fmt.Errorf("openssl genrsa: %w", err)
 	}
 
-	// Decrypt private once to derive public PEM.
-	if out, err := runCombined(ctx, "openssl", "rsa",
+	if err := runPipe(ctx, []byte(passphrase), "openssl", "rsa",
 		"-in", privPath,
-		"-passin", "pass:"+passphrase,
+		"-passin", "stdin",
 		"-pubout",
 		"-out", pubPath); err != nil {
-		return nil, fmt.Errorf("openssl rsa -pubout: %w: %s", err, string(out))
+		return nil, fmt.Errorf("openssl rsa -pubout: %w", err)
 	}
 
-	// Derive DER from the already-public-PEM (no second RSA decrypt).
 	derOut, err := runOutput(ctx, "openssl", "rsa",
 		"-in", pubPath,
 		"-pubin",
@@ -83,10 +97,19 @@ func GenerateEncryptedKeypair(ctx context.Context) (*Keypair, error) {
 	}, nil
 }
 
+// RandomPassword returns a hex-encoded cryptographic random string. Use for
+// database passwords, MinIO keys, etc. Output length = nBytes * 2 chars.
+// Hex-only charset is safe across shell quoting + URL + S3 access-key rules.
 func RandomPassword(nBytes int) (string, error) {
 	buf := make([]byte, nBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return hex.EncodeToString(buf), nil
+}
+
+// MinIOSecretKey returns a 32-char hex secret suitable for a MinIO service
+// account access key (MinIO enforces 8-40 char range on svcacct creation).
+func MinIOSecretKey() (string, error) {
+	return RandomPassword(16) // 16 bytes → 32 hex chars
 }
