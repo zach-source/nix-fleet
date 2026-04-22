@@ -17,6 +17,7 @@ import (
 	"github.com/nixfleet/nixfleet/internal/agenttui"
 	"github.com/nixfleet/nixfleet/internal/cache"
 	"github.com/nixfleet/nixfleet/internal/inventory"
+	"github.com/nixfleet/nixfleet/internal/juicefs"
 	"github.com/nixfleet/nixfleet/internal/k0s"
 	"github.com/nixfleet/nixfleet/internal/nix"
 	"github.com/nixfleet/nixfleet/internal/nodestatus"
@@ -110,6 +111,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(nodeStatusCmd())
 	cmd.AddCommand(agentsCmd())
 	cmd.AddCommand(spireCmd())
+	cmd.AddCommand(juicefsCmd())
 
 	return cmd
 }
@@ -6034,5 +6036,213 @@ func spireLeaveCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&keepConfig, "keep-config", false, "Keep config files for re-joining")
 
+	return cmd
+}
+
+// ============================================================================
+// juicefs — bootstrap + format the shared JuiceFS filesystem
+// ============================================================================
+
+// juicefsConfigFromCmd reads persistent flags off cmd's parent chain into a
+// juicefs.Config, then applies defaults.
+func juicefsConfigFromCmd(cmd *cobra.Command) juicefs.Config {
+	str := func(name string) string {
+		v, _ := cmd.Flags().GetString(name)
+		return v
+	}
+	cfg := juicefs.Config{
+		Vault:       str("jfs-vault"),
+		Namespace:   str("jfs-namespace"),
+		FSName:      str("jfs-name"),
+		K0sNode:     str("jfs-node"),
+		CacheDir:    str("jfs-cache-dir"),
+		Kubeconfig:  str("kubeconfig"),
+		KubeContext: str("kube-context"),
+	}
+	return cfg.WithDefaults()
+}
+
+func juicefsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "juicefs",
+		Short: "Bootstrap and manage the shared JuiceFS filesystem",
+		Long: `JuiceFS bootstrap and operations.
+
+The shared 'fleet' filesystem provides fast POSIX storage for agent
+workloads, backed by MinIO on NFS and PostgreSQL for metadata. See
+.claude/juicefs-plan.md for the full architecture.
+
+Typical flow for a clean environment:
+  1. nixfleet juicefs bootstrap           # creates 1P items + host prep
+  2. (commit + push nix-fleet-hosts; wait for Flux to reconcile)
+  3. nixfleet juicefs csi-secret          # compose CSI secret once pods are up
+  4. nixfleet juicefs format              # one-time format of the filesystem
+
+Each subcommand is idempotent — safe to re-run.`,
+	}
+
+	cmd.PersistentFlags().String("jfs-vault", "Personal Agents", "1Password vault holding JuiceFS items")
+	cmd.PersistentFlags().String("jfs-namespace", "juicefs-system", "Kubernetes namespace for PG + MinIO")
+	cmd.PersistentFlags().String("jfs-name", "fleet", "JuiceFS filesystem name")
+	cmd.PersistentFlags().String("jfs-node", "gti", "K0s node for host prep (from inventory)")
+	cmd.PersistentFlags().String("jfs-cache-dir", "/var/lib/juicefs/cache", "Host cache directory on k0s node")
+	cmd.PersistentFlags().String("kubeconfig", "", "kubectl --kubeconfig (default: env/~/.kube/config)")
+	cmd.PersistentFlags().String("kube-context", "", "kubectl --context")
+
+	cmd.AddCommand(juicefsPrepareHostCmd())
+	cmd.AddCommand(juicefsKeygenCmd())
+	cmd.AddCommand(juicefsSecretsCmd())
+	cmd.AddCommand(juicefsCSISecretCmd())
+	cmd.AddCommand(juicefsFormatCmd())
+	cmd.AddCommand(juicefsDumpCmd())
+	cmd.AddCommand(juicefsBootstrapCmd())
+
+	return cmd
+}
+
+func juicefsPrepareHostCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "prepare-host",
+		Short: "SSH to the k0s node and create the cache directory",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			inv, _, err := loadInventoryAndHosts(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return juicefs.PrepareHost(cmd.Context(), cfg, inv, os.Stdout)
+		},
+	}
+}
+
+func juicefsKeygenCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "keygen",
+		Short: "Generate RSA-4096 encryption keypair and upload to 1Password (idempotent)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			return juicefs.EnsureEncryptionKey(cmd.Context(), cfg, os.Stdout)
+		},
+	}
+}
+
+func juicefsSecretsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "secrets",
+		Short: "Create 1Password items for PostgreSQL + MinIO (idempotent)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			if err := juicefs.EnsurePGItem(cmd.Context(), cfg, os.Stdout); err != nil {
+				return err
+			}
+			return juicefs.EnsureMinIOItem(cmd.Context(), cfg, os.Stdout)
+		},
+	}
+}
+
+func juicefsCSISecretCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "csi-secret",
+		Short: "Compose the CSI composite 1Password item (run after PG + MinIO are running)",
+		Long: `Reads the PG password, MinIO access keys, and encryption keypair from their
+source 1Password items, composes them with the cluster-internal endpoint URLs,
+and uploads as a single 'juicefs-csi-secret' 1Password item for the CSI driver.
+
+Run this AFTER you have pushed manifests and the PG + MinIO StatefulSets are
+Running. Use --wait to poll for readiness first.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			wait, _ := cmd.Flags().GetBool("wait")
+			if wait {
+				if err := juicefs.WaitForBackingServices(cmd.Context(), cfg, os.Stdout); err != nil {
+					return err
+				}
+			}
+			return juicefs.EnsureCSISecret(cmd.Context(), cfg, os.Stdout)
+		},
+	}
+	cmd.Flags().Bool("wait", false, "Wait for PG + MinIO pods to be Ready first")
+	return cmd
+}
+
+func juicefsFormatCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "format",
+		Short: "Format the JuiceFS filesystem (one-time; idempotent)",
+		Long: `Port-forwards the in-cluster PostgreSQL + MinIO services to localhost,
+then runs 'juicefs format' with the encryption keypair from 1Password.
+
+Skipped if the filesystem is already formatted. Requires:
+  - juicefs binary on PATH
+  - kubectl access to the cluster
+  - op CLI authenticated (for reading passphrase + PEM)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			return juicefs.FormatFilesystem(cmd.Context(), cfg, os.Stdout)
+		},
+	}
+}
+
+func juicefsDumpCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dump [output-path]",
+		Short: "Dump JuiceFS metadata to a local file (baseline backup)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			return juicefs.DumpMetadata(cmd.Context(), cfg, args[0], os.Stdout)
+		},
+	}
+	return cmd
+}
+
+func juicefsBootstrapCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bootstrap",
+		Short: "Run the full pre-deploy bootstrap (host prep + 1P items)",
+		Long: `One-shot idempotent bootstrap. Performs:
+
+  1. prepare-host  — SSH mkdir /var/lib/juicefs/cache on the k0s node
+  2. keygen        — generate + upload RSA-4096 keypair to 1Password
+  3. secrets       — create PG + MinIO 1Password items
+
+After this completes, commit + push the nix-fleet-hosts manifests. Once
+Flux reconciles and PG + MinIO pods are Running, run:
+
+  nixfleet juicefs csi-secret --wait     # compose composite CSI secret
+  nixfleet juicefs format                # initialize the filesystem
+  nixfleet juicefs dump baseline.json.gz # baseline metadata backup`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := juicefsConfigFromCmd(cmd)
+			skipHost, _ := cmd.Flags().GetBool("skip-host")
+
+			if !skipHost {
+				inv, _, err := loadInventoryAndHosts(cmd.Context())
+				if err != nil {
+					return err
+				}
+				if err := juicefs.PrepareHost(cmd.Context(), cfg, inv, os.Stdout); err != nil {
+					return err
+				}
+			}
+			if err := juicefs.EnsureEncryptionKey(cmd.Context(), cfg, os.Stdout); err != nil {
+				return err
+			}
+			if err := juicefs.EnsurePGItem(cmd.Context(), cfg, os.Stdout); err != nil {
+				return err
+			}
+			if err := juicefs.EnsureMinIOItem(cmd.Context(), cfg, os.Stdout); err != nil {
+				return err
+			}
+			fmt.Println("\n[juicefs] Bootstrap complete.")
+			fmt.Println("[juicefs] Next steps:")
+			fmt.Println("  1. Commit + push nix-fleet-hosts to trigger Flux deploy")
+			fmt.Println("  2. nixfleet juicefs csi-secret --wait")
+			fmt.Println("  3. nixfleet juicefs format")
+			fmt.Println("  4. nixfleet juicefs dump baseline.json.gz")
+			return nil
+		},
+	}
+	cmd.Flags().Bool("skip-host", false, "Skip the SSH host prep step")
 	return cmd
 }

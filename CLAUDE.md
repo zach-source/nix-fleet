@@ -248,6 +248,40 @@ nixfleet secrets edit secrets/api-key.age
 echo "value" | nixfleet secrets add secret-name --host hostname
 ```
 
+### Accessing 1Password Connect from bare-metal hosts
+
+K8s pods pull secrets via the 1P Operator (OnePasswordItem CRDs). Bare-metal hosts (gtr-150..153, mac-1, docker on mac) use the in-cluster Connect server via a Cloudflare tunnel + nginx header-remap proxy (`op-proxy`).
+
+**Why the proxy exists**: Cloudflare Access strips the `Authorization` header, but 1P Connect requires it. `op-proxy` remaps a custom `X-OP-Token` header into `Authorization: Bearer` inside the cluster.
+
+**Flow**:
+```
+Host
+  │  curl with: X-OP-Token, CF-Access-Client-Id, CF-Access-Client-Secret
+  ▼
+Cloudflare Tunnel (op.nixfleet.private.stigen.ai) — CF Access service-token enforced
+  ▼
+op-proxy (onepassword/op-proxy:8090) — rewrites X-OP-Token → Authorization: Bearer
+  ▼
+onepassword-connect (onepassword/onepassword-connect:8080)
+```
+
+**Three secrets needed per host** (in 1Password vault `Personal Agents`):
+
+| Item | Field | Use |
+|------|-------|-----|
+| `op-connect-token` | `credential` | 1P Connect bearer |
+| `op-connect-cf-access` | `client_id` | CF Access service token ID |
+| `op-connect-cf-access` | `client_secret` | CF Access service token secret |
+
+**Important**: the `op` CLI has no native support for custom HTTP headers, so it cannot talk to this proxy directly. Bare-metal clients use `curl` against the Connect REST API, or a library like autoeng's `OnePasswordConnectProvider`.
+
+**Reference client**: `mcp-auto-engineering/src/shared/secret-providers.ts` → `OnePasswordConnectProvider` class. Bootstrap flow: resolve the three secrets once via `op` CLI with biometric auth, then export as env vars for downstream tools.
+
+**Manifests**:
+- Proxy: `nix-fleet-hosts/flux/apps/overlays/nixfleet/onepassword-proxy/proxy.yaml`
+- Tunnel: `nix-fleet-hosts/flux/apps/overlays/nixfleet/cloudflare-tunnel/configmap.yaml`
+
 ## CI/CD
 
 ### Workflows
