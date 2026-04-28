@@ -10,6 +10,7 @@
     ../modules/tpm2-unlock.nix
     ../modules/installer.nix
     ../modules/sysctl.nix
+    ../modules/ufw.nix
   ];
 
   nixfleet = {
@@ -51,6 +52,38 @@
         "fs.file-max" = 1048576;
         "fs.nr_open" = 1048576;
       };
+    };
+
+    # ============================================================================
+    # UFW rules — open k8s API + ICMP for cluster pods + LAN/WARP sources.
+    # gti's default UFW only allows 22/80/443 + lo, which broke kubectl over
+    # the WARP→cloudflared→LAN path (cloudflared forwards traffic that lands
+    # on gti's external interface, not lo).
+    # ============================================================================
+    modules.ufw = {
+      enable = true;
+      rules = [
+        {
+          from = "10.244.0.0/16";
+          port = 6443;
+          comment = "k8s API from cluster pod CIDR (incl. cloudflared egress)";
+        }
+        {
+          from = "192.168.0.0/16";
+          port = 6443;
+          comment = "k8s API from LAN/WARP";
+        }
+        {
+          from = "10.244.0.0/16";
+          proto = "icmp";
+          comment = "ICMP from cluster pods";
+        }
+        {
+          from = "192.168.0.0/16";
+          proto = "icmp";
+          comment = "ICMP from LAN/WARP";
+        }
+      ];
     };
 
     # ============================================================================
