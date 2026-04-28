@@ -110,35 +110,42 @@ in
         group = "root";
         text = ''
           #!/bin/bash
+          # Idempotent applier for UFW rules tagged `nixfleet:<id>:`. Pure bash
+          # so we don't depend on gawk's 3-arg match (Ubuntu's default awk is
+          # mawk and rejects it). Stale nixfleet-marked rules whose <id> isn't
+          # in the desired set get deleted; user-managed rules without the
+          # marker are left alone.
           set -eu
 
           DESIRED_IDS=(${lib.concatStringsSep " " (map (i: "\"${i}\"") desiredIds)})
 
-          # Build a regex-friendly union of desired ids for the keep filter.
-          desired_match=""
-          for id in "''${DESIRED_IDS[@]}"; do
-            desired_match="''${desired_match}|''${id}"
-          done
-          desired_match="''${desired_match#|}"
+          is_desired() {
+            local needle="$1"
+            for id in "''${DESIRED_IDS[@]:-}"; do
+              [ "$id" = "$needle" ] && return 0
+            done
+            return 1
+          }
 
-          # Delete stale nixfleet-managed rules in reverse order (rule numbers
-          # shift on each delete; doing it bottom-up avoids that pitfall).
+          # Find one stale rule's number, or empty if none. Iterating one-at-
+          # a-time avoids the rule-number-shift problem after each delete.
+          find_stale() {
+            while IFS= read -r line; do
+              [[ "$line" =~ ^\[\ *([0-9]+)\].*nixfleet:([^:]+): ]] || continue
+              local num="''${BASH_REMATCH[1]}"
+              local id="''${BASH_REMATCH[2]}"
+              if ! is_desired "$id"; then
+                echo "$num"
+                return
+              fi
+            done < <(/usr/sbin/ufw status numbered)
+          }
+
           while :; do
-            stale_line=$(/usr/sbin/ufw status numbered | \
-              awk -v desired="$desired_match" '
-                /nixfleet:/ {
-                  match($0, /nixfleet:[^:]+:/);
-                  id_str = substr($0, RSTART + 9, RLENGTH - 10);
-                  if (desired == "" || id_str !~ ("^(" desired ")$")) {
-                    match($0, /^\[ *([0-9]+)\]/, m);
-                    print m[1];
-                    exit;
-                  }
-                }
-              ' | tail -1)
-            if [ -z "''${stale_line:-}" ]; then break; fi
-            echo "[ufw] removing stale nixfleet rule #''${stale_line}"
-            /usr/sbin/ufw --force delete "$stale_line"
+            stale=$(find_stale)
+            [ -z "$stale" ] && break
+            echo "[ufw] removing stale nixfleet rule #$stale"
+            /usr/sbin/ufw --force delete "$stale"
           done
 
           # Add desired rules. UFW silently no-ops on identical re-adds.

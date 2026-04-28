@@ -55,10 +55,13 @@
     };
 
     # ============================================================================
-    # UFW rules — open k8s API + ICMP for cluster pods + LAN/WARP sources.
-    # gti's default UFW only allows 22/80/443 + lo, which broke kubectl over
-    # the WARP→cloudflared→LAN path (cloudflared forwards traffic that lands
-    # on gti's external interface, not lo).
+    # UFW rules — declared via NixFleet so they survive re-deploys.
+    # gti's default UFW had 22/80/443/etc. preconfigured manually. These are
+    # additive nixfleet:-marked entries supporting the WARP→cloudflared→LAN
+    # path (kubectl from a WARP-enrolled mac).
+    #
+    # Note: ICMP echo is already allowed cluster-wide via UFW's before.rules;
+    # no rule needed here. UFW's basic `allow` syntax doesn't accept icmp anyway.
     # ============================================================================
     modules.ufw = {
       enable = true;
@@ -72,16 +75,6 @@
           from = "192.168.0.0/16";
           port = 6443;
           comment = "k8s API from LAN/WARP";
-        }
-        {
-          from = "10.244.0.0/16";
-          proto = "icmp";
-          comment = "ICMP from cluster pods";
-        }
-        {
-          from = "192.168.0.0/16";
-          proto = "icmp";
-          comment = "ICMP from LAN/WARP";
         }
       ];
     };
