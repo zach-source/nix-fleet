@@ -51,6 +51,12 @@
         # kernel cap keeps us out of per-process EMFILE territory)
         "fs.file-max" = 1048576;
         "fs.nr_open" = 1048576;
+        # cloudflared (hostNetwork) + quic-go: the QUIC stack wants 7 MiB
+        # UDP socket buffers to absorb bursty CF edge traffic. Ubuntu's
+        # default rmem_max=212992 (208 KiB) trips a noisy warning and
+        # caps throughput. 7340032 = 7 MiB matches quic-go's wanted size.
+        "net.core.rmem_max" = 7340032;
+        "net.core.wmem_max" = 7340032;
       };
     };
 
