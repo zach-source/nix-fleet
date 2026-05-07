@@ -34,7 +34,13 @@ let
       port = if r.port != null then " to any port ${toString r.port}" else " to any";
       comment = "nixfleet:${ruleId r}: ${r.comment}";
     in
-    "/usr/sbin/ufw allow from ${r.from}${port}${proto} comment '${comment}'";
+    # Insert at position 1 so nixfleet allow rules take precedence over any
+    # pre-existing `limit`/deny rules the user (or Ubuntu defaults) may have
+    # appended. Without this, e.g. `limit 22/tcp` will tarpit-drop SSH from
+    # LAN sources before our explicit `allow from 192.168.0.0/16 ... 22` is
+    # consulted, since UFW evaluates in numbered order. UFW silently no-ops
+    # on identical re-inserts, so this stays idempotent.
+    "/usr/sbin/ufw insert 1 allow from ${r.from}${port}${proto} comment '${comment}'";
 
   # Stable id list — used by the script to know which rules to delete from
   # the live ruleset that aren't desired anymore.
@@ -110,46 +116,36 @@ in
         group = "root";
         text = ''
           #!/bin/bash
-          # Idempotent applier for UFW rules tagged `nixfleet:<id>:`. Pure bash
-          # so we don't depend on gawk's 3-arg match (Ubuntu's default awk is
-          # mawk and rejects it). Stale nixfleet-marked rules whose <id> isn't
-          # in the desired set get deleted; user-managed rules without the
-          # marker are left alone.
+          # Idempotent applier for UFW rules tagged `nixfleet:<id>:`. Pure
+          # bash (no gawk 3-arg match — Ubuntu's mawk rejects it).
+          #
+          # Strategy: flush all nixfleet-marked rules, then re-insert from
+          # the desired set. Each insert goes to position 1 so nixfleet
+          # rules outrank any pre-existing user `limit`/deny rules (e.g.
+          # Ubuntu's default `limit 22/tcp`). User-managed rules without
+          # the marker are never touched.
           set -eu
 
-          DESIRED_IDS=(${lib.concatStringsSep " " (map (i: "\"${i}\"") desiredIds)})
-
-          is_desired() {
-            local needle="$1"
-            for id in "''${DESIRED_IDS[@]:-}"; do
-              [ "$id" = "$needle" ] && return 0
-            done
-            return 1
-          }
-
-          # Find one stale rule's number, or empty if none. Iterating one-at-
-          # a-time avoids the rule-number-shift problem after each delete.
-          find_stale() {
+          # Find one nixfleet-marked rule number, or empty if none. We
+          # delete one at a time because each deletion shifts the numbering.
+          find_nixfleet() {
             while IFS= read -r line; do
-              [[ "$line" =~ ^\[\ *([0-9]+)\].*nixfleet:([^:]+): ]] || continue
-              local num="''${BASH_REMATCH[1]}"
-              local id="''${BASH_REMATCH[2]}"
-              if ! is_desired "$id"; then
-                echo "$num"
-                return
-              fi
+              [[ "$line" =~ ^\[\ *([0-9]+)\].*nixfleet: ]] || continue
+              echo "''${BASH_REMATCH[1]}"
+              return
             done < <(/usr/sbin/ufw status numbered)
           }
 
           while :; do
-            stale=$(find_stale)
-            [ -z "$stale" ] && break
-            echo "[ufw] removing stale nixfleet rule #$stale"
-            /usr/sbin/ufw --force delete "$stale"
+            n=$(find_nixfleet)
+            [ -z "$n" ] && break
+            /usr/sbin/ufw --force delete "$n" >/dev/null
           done
 
-          # Add desired rules. UFW silently no-ops on identical re-adds.
-          ${lib.concatStringsSep "\n          " (map renderRule cfg.rules)}
+          # Re-insert desired rules. Inserting in reverse so the first rule
+          # in cfg.rules ends up at the lowest position number after all
+          # inserts have shifted prior entries down.
+          ${lib.concatStringsSep "\n          " (lib.reverseList (map renderRule cfg.rules))}
 
           /usr/sbin/ufw reload >/dev/null
           /usr/sbin/ufw status verbose | head -40

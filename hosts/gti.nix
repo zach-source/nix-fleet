@@ -56,16 +56,21 @@
 
     # ============================================================================
     # UFW rules — declared via NixFleet so they survive re-deploys.
-    # gti's default UFW had 22/80/443/etc. preconfigured manually. These are
-    # additive nixfleet:-marked entries supporting the WARP→cloudflared→LAN
-    # path (kubectl from a WARP-enrolled mac).
-    #
-    # Note: ICMP echo is already allowed cluster-wide via UFW's before.rules;
-    # no rule needed here. UFW's basic `allow` syntax doesn't accept icmp anyway.
+    # The apply script inserts these at UFW position 1 so they win over
+    # any pre-existing `limit`/deny rules. The port 22 entry below is
+    # specifically there to outrank the legacy `limit 22/tcp` from
+    # Ubuntu's default install: `limit` tarpit-drops new SYNs after 6
+    # connections in 30s, which makes interactive ssh debugging from a
+    # single LAN IP fail intermittently.
     # ============================================================================
     modules.ufw = {
       enable = true;
       rules = [
+        {
+          from = "192.168.0.0/16";
+          port = 22;
+          comment = "ssh from LAN — outrank legacy `limit 22/tcp`";
+        }
         {
           from = "10.244.0.0/16";
           port = 6443;
