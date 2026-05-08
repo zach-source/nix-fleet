@@ -57,6 +57,13 @@
         # caps throughput. 7340032 = 7 MiB matches quic-go's wanted size.
         "net.core.rmem_max" = 7340032;
         "net.core.wmem_max" = 7340032;
+        # IP forwarding for WARP Connector — the cloudflared pod in
+        # warp-connector mode forwards packets between Cloudflare's
+        # edge and the LAN. k0s already enables ipv4.ip_forward at
+        # cluster bring-up; we re-declare it here so the host stays
+        # consistent on cold boot before k0scontroller starts.
+        "net.ipv4.ip_forward" = 1;
+        "net.ipv6.conf.all.forwarding" = 1;
       };
     };
 
