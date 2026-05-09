@@ -213,6 +213,43 @@
           /srv/netboot/persistent/gtr 192.168.3.31/32(rw,sync,no_subtree_check,no_root_squash)
         '';
       };
+
+      # WARP Connector reverse-path route applier.
+      #
+      # Background: the cloudflared-warp-connector pod creates a
+      # `CloudflareWARP` TUN device with only its own /32 (e.g.
+      # 100.96.0.13/32) attached. warp-svc's connector mode does NOT
+      # install the wider 100.96.0.0/16 covering the rest of CF's
+      # CGNAT range, so reply packets to other WARP clients
+      # (100.96.0.x) miss the TUN and fall through to the default
+      # route — out enp174s0f1 to the LAN gateway, which has no path
+      # back to CGNAT and silently drops them.
+      #
+      # The pod's entrypoint also installs this route, but declaring
+      # it at the host layer means: (a) survives any pod-side mishap,
+      # (b) re-installs automatically when the pod restarts and the
+      # TUN cycles, (c) shows up in `ip route` even if the pod isn't
+      # the only thing managing routes long-term.
+      "/etc/nixfleet/warp-route-apply.sh" = {
+        mode = "0755";
+        owner = "root";
+        group = "root";
+        text = ''
+          #!/bin/bash
+          # Loop forever, re-applying the route whenever the
+          # CloudflareWARP TUN exists. `ip route replace` is
+          # idempotent (no-op when route is identical). When the iface
+          # goes away the kernel removes the route automatically; we
+          # add it back next iteration.
+          set -u
+          while true; do
+            if /usr/sbin/ip link show CloudflareWARP >/dev/null 2>&1; then
+              /usr/sbin/ip route replace 100.96.0.0/16 dev CloudflareWARP 2>/dev/null || true
+            fi
+            sleep 30
+          done
+        '';
+      };
     };
 
     # ============================================================================
@@ -258,6 +295,28 @@
         '';
         enabled = true;
       };
+
+      # WARP Connector route maintainer — re-installs
+      # 100.96.0.0/16 → CloudflareWARP whenever the TUN exists.
+      # See /etc/nixfleet/warp-route-apply.sh for the full rationale.
+      "nixfleet-warp-route.service" = {
+        text = ''
+          [Unit]
+          Description=Maintain reverse-path route for WARP Connector CGNAT
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/etc/nixfleet/warp-route-apply.sh
+          Restart=always
+          RestartSec=10s
+
+          [Install]
+          WantedBy=multi-user.target
+        '';
+        enabled = true;
+      };
     };
 
     # ============================================================================
@@ -267,6 +326,11 @@
       nfs-server = {
         type = "command";
         command = "systemctl is-active nfs-server || systemctl is-active nfs-kernel-server";
+        timeout = 5;
+      };
+      warp-route-applier = {
+        type = "command";
+        command = "systemctl is-active nixfleet-warp-route.service >/dev/null";
         timeout = 5;
       };
     };
