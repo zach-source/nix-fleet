@@ -94,6 +94,16 @@
           port = 6443;
           comment = "k8s API from LAN/WARP";
         }
+        {
+          from = "10.244.0.0/16";
+          port = 8132;
+          comment = "konnectivity-agent → server from pod CIDR";
+        }
+        {
+          from = "192.168.0.0/16";
+          port = 8132;
+          comment = "konnectivity-agent → server from LAN (multi-node future)";
+        }
       ];
     };
 
