@@ -1,5 +1,7 @@
 # GTR-151 — AMD Ryzen AI MAX+ 395 (192.168.3.132)
-# Quality king: Qwen3.6-35B-A3B with speculative decoding (custom fork)
+# The "Qwen3.6" node — both family variants co-hosted:
+#   :8084  Qwen3.6-35B-A3B MoE  + speculation (custom fork)
+#   :8085  Qwen3.6-27B    dense (stock llama.cpp)
 # 131GB unified VRAM, ROCm 7.13 (TheRock SDK), gfx1151
 { pkgs, ... }:
 
@@ -59,6 +61,47 @@
         extraFlags = [
           "--cache-ram"
           "0"
+        ];
+      };
+
+      # Qwen3.6-27B DENSE — the quality/coding counterpart to the 35B-A3B
+      # MoE above. Runs on STOCK llama.cpp (/opt/llama-rocm, the default
+      # binary) — NO fork needed: the dense arch has none of the hybrid
+      # recurrent-memory quirks that forced the custom fork for the MoE.
+      # Co-hosted here so gtr-151 is the single "Qwen3.6" node: MoE on
+      # :8084, dense on :8085. Qwen claims the 27B dense beats the old
+      # 397B-A17B flagship on coding (SWE-bench Verified 77.2 vs 76.2).
+      services.qwen36-27b = {
+        description = "Qwen3.6-27B dense (quality/coding)";
+        model = "/srv/models/Qwen3.6-27B-UD-Q6_K_XL.gguf";
+        port = 8085;
+        ctxSize = 131072; # 131K — leaves headroom alongside the MoE's 200K
+        # NOTE: no draft model. The dense 27B is memory-bandwidth bound
+        # (~8 tok/s raw: Strix Halo reads all 25.6GB of weights per token
+        # over ~256GB/s). Classic speculation would amortize that, BUT the
+        # qwen35 architecture (shared by Qwen3.6 dense + MoE) doesn't support
+        # partial sequence removal on stock llama.cpp — the server logs
+        # "speculative decoding not supported by this context" and ignores
+        # --model-draft. The MoE works around this via the custom fork
+        # (/opt/llama-rocm-qwen35); to give the dense speculation, switch its
+        # `binary` to that fork and mirror the MoE's ctxCheckpoints=0 /
+        # cacheReuse=null / --cache-ram 0 workarounds. Left on stock for now:
+        # simpler, stable, and this is the "quality, slower" tier (the MoE on
+        # :8084 is the fast tier at ~49-129 tok/s).
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        # Qwen3.6 coding-recommended sampling (clients may override per-request).
+        extraFlags = [
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
+          "--min-p"
+          "0.0"
         ];
       };
     };
