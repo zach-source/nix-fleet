@@ -1,7 +1,9 @@
 # GTR-153 — AMD Ryzen AI MAX+ 395 (192.168.3.130)
-# MiniMax M2.7 229B + Judge0 code execution sandbox
+# Qwopus3.5-9B-Coder + Judge0 code execution sandbox
 # 131GB unified VRAM, ROCm (stock lemonade build), gfx1151
 # Note: Judge0 runs via Docker Compose (needs privileged containers for isolate)
+# History: previously hosted MiniMax-M2.7 229B; removed to try DeepSeek
+# V4-Flash, which proved un-runnable on AMD (CUDA/Metal-only dsv4 ops).
 { pkgs, ... }:
 
 {
@@ -25,14 +27,22 @@
 
     modules.llmInference = {
       enable = true;
-      services.minimax = {
-        description = "MiniMax-M2.7 229B-A10B IQ4_XS";
-        model = "/srv/models/minimax-m27/MiniMax-M2.7-UD-IQ4_XS-00001-of-00004.gguf";
+      services.qwopus35-coder = {
+        description = "Qwopus3.5-9B-Coder (qwen35, Q8_0)";
+        # qwen35 arch (Qwen3.5 hybrid). Runs on the stock /opt/llama-rocm
+        # build (its arch table includes qwen35; 9B needs no speculation).
+        model = "/srv/models/qwopus35-9b-coder/Qwopus3.5-9B-coder-Exp-Q8_0.gguf";
         port = 8082;
-        ctxSize = 32768; # VRAM-limited (model is 101GB)
-        noMmap = true;
+        ctxSize = 131072; # 9B is small — plenty of room on the 122GB node
         cacheReuse = 256;
         jinja = true;
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        # mmproj for vision available at
+        # /srv/models/qwopus35-9b-coder/mmproj.gguf — add via extraFlags
+        # (--mmproj) once stock-build multimodal support is confirmed.
       };
     };
 
