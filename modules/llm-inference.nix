@@ -157,10 +157,46 @@ let
           default = 1;
         };
 
-        # Speculation
+        # Speculation (classic draft model)
         draft = mkOption {
           type = types.nullOr draftType;
           default = null;
+        };
+
+        # MTP (Multi-Token Prediction) self-speculation — uses the model's
+        # built-in MTP head instead of a separate draft model. Requires an
+        # MTP GGUF and a build with `--spec-type draft-mtp` (llama.cpp b9180+,
+        # e.g. /opt/llama-rocm-latest). Mutually exclusive with `draft`;
+        # takes precedence if both are set.
+        mtp = mkOption {
+          type = types.nullOr (
+            types.submodule {
+              options = {
+                nMax = mkOption {
+                  type = types.int;
+                  default = 2;
+                  description = "MTP draft tokens per step (--spec-draft-n-max)";
+                };
+                nMin = mkOption {
+                  type = types.int;
+                  default = 0;
+                  description = "Min MTP draft tokens (0 = omit --spec-draft-n-min)";
+                };
+              };
+            }
+          );
+          default = null;
+        };
+
+        # Use the renamed llama.cpp speculation CLI (--spec-draft-n-max /
+        # --spec-draft-n-min) for the classic draft path. Upstream removed
+        # --draft-max/--draft-min. Set true on hosts running the new build
+        # (/opt/llama-rocm-latest); leave false for old-build nodes
+        # (/opt/llama-rocm) that still accept the legacy flags.
+        newCli = mkOption {
+          type = types.bool;
+          default = false;
+          description = "Emit --spec-draft-n-max/-n-min instead of --draft-max/-min";
         };
 
         # Reasoning
@@ -225,13 +261,36 @@ let
       ++ optional svc.embedding "--embedding"
       ++ optional (svc.cacheReuse != null) "--cache-reuse ${toString svc.cacheReuse}"
       ++ optional (svc.ctxCheckpoints != 32) "--ctx-checkpoints ${toString svc.ctxCheckpoints}"
-      ++ optionals (svc.draft != null) [
-        "--model-draft ${svc.draft.model}"
-        "--gpu-layers-draft 99"
-        "--draft-max ${toString svc.draft.max}"
-        "--draft-min ${toString svc.draft.min}"
-        "--draft-p-min ${toString svc.draft.pMin}"
-      ]
+      # MTP self-speculation (new-CLI builds): --spec-type draft-mtp. Takes
+      # precedence over classic draft if both set.
+      ++ optionals (svc.mtp != null) (
+        [
+          "--spec-type draft-mtp"
+          "--spec-draft-n-max ${toString svc.mtp.nMax}"
+        ]
+        ++ optional (svc.mtp.nMin > 0) "--spec-draft-n-min ${toString svc.mtp.nMin}"
+      )
+      # Classic draft model. New-CLI builds renamed --draft-max/-min to
+      # --spec-draft-n-max/-n-min; --draft-p-min is unchanged.
+      ++ optionals (svc.mtp == null && svc.draft != null) (
+        [
+          "--model-draft ${svc.draft.model}"
+          "--gpu-layers-draft 99"
+        ]
+        ++ (
+          if svc.newCli then
+            [
+              "--spec-draft-n-max ${toString svc.draft.max}"
+              "--spec-draft-n-min ${toString svc.draft.min}"
+            ]
+          else
+            [
+              "--draft-max ${toString svc.draft.max}"
+              "--draft-min ${toString svc.draft.min}"
+            ]
+        )
+        ++ [ "--draft-p-min ${toString svc.draft.pMin}" ]
+      )
       ++ optionals (svc.reasoning != null && svc.reasoning.format != "none") [
         "--reasoning-format ${svc.reasoning.format}"
         "--reasoning-budget ${toString svc.reasoning.budget}"
