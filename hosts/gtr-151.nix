@@ -31,7 +31,12 @@
       # Qwen3.6 uses qwen35moe architecture — same hybrid backbone as Qwen3.5, so fork applies.
       services.qwen36-spec = {
         description = "Qwen3.6-35B-A3B + speculation (custom fork)";
-        model = "/srv/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
+        # UD-Q6_K_XL (29.7GB) — bumped from Q4_K_M. MoE quant loss bites
+        # harder than dense (only 3B active to absorb it), and since only the
+        # active experts are read per token the throughput cost of Q6 vs Q4 is
+        # small. Matches the dense's Q6_K_XL. Memory: ~74GB/122GB with both
+        # Qwen3.6 models + drafts loaded.
+        model = "/srv/models/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf";
         binary = "/opt/llama-rocm-qwen35/bin/llama-server";
         ldLibraryPath = "/opt/llama-rocm-qwen35/lib:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8084;
