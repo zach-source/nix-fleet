@@ -1,7 +1,7 @@
 # GTR-151 — AMD Ryzen AI MAX+ 395 (192.168.3.132)
 # The "Qwen3.6" node — both family variants co-hosted:
 #   :8084  Qwen3.6-35B-A3B MoE  + speculation (custom fork)
-#   :8085  Qwen3.6-27B    dense (stock llama.cpp)
+#   :8085  Qwen3.6-27B    dense + speculation (custom fork)
 # 131GB unified VRAM, ROCm 7.13 (TheRock SDK), gfx1151
 { pkgs, ... }:
 
@@ -65,35 +65,43 @@
       };
 
       # Qwen3.6-27B DENSE — the quality/coding counterpart to the 35B-A3B
-      # MoE above. Runs on STOCK llama.cpp (/opt/llama-rocm, the default
-      # binary) — NO fork needed: the dense arch has none of the hybrid
-      # recurrent-memory quirks that forced the custom fork for the MoE.
-      # Co-hosted here so gtr-151 is the single "Qwen3.6" node: MoE on
-      # :8084, dense on :8085. Qwen claims the 27B dense beats the old
+      # MoE above. Co-hosted so gtr-151 is the single "Qwen3.6" node: MoE
+      # on :8084, dense on :8085. Qwen claims the 27B dense beats the old
       # 397B-A17B flagship on coding (SWE-bench Verified 77.2 vs 76.2).
+      #
+      # Runs on the CUSTOM FORK (/opt/llama-rocm-qwen35), same as the MoE.
+      # The dense is qwen35 arch (hybrid DeltaNet+attention), so stock
+      # llama.cpp refuses speculation ("context does not support partial
+      # sequence removal"). The fork's qwen35 speculation fixes apply to the
+      # dense too, giving draft-model speedup on this otherwise bandwidth-
+      # bound model (~8 tok/s raw: reads all 25.6GB/token over ~256GB/s).
+      # Mirrors the MoE's hybrid-memory workarounds.
       services.qwen36-27b = {
-        description = "Qwen3.6-27B dense (quality/coding)";
+        description = "Qwen3.6-27B dense (quality/coding) + speculation (fork)";
         model = "/srv/models/Qwen3.6-27B-UD-Q6_K_XL.gguf";
+        binary = "/opt/llama-rocm-qwen35/bin/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-qwen35/lib:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8085;
         ctxSize = 131072; # 131K — leaves headroom alongside the MoE's 200K
-        # NOTE: no draft model. The dense 27B is memory-bandwidth bound
-        # (~8 tok/s raw: Strix Halo reads all 25.6GB of weights per token
-        # over ~256GB/s). Classic speculation would amortize that, BUT the
-        # qwen35 architecture (shared by Qwen3.6 dense + MoE) doesn't support
-        # partial sequence removal on stock llama.cpp — the server logs
-        # "speculative decoding not supported by this context" and ignores
-        # --model-draft. The MoE works around this via the custom fork
-        # (/opt/llama-rocm-qwen35); to give the dense speculation, switch its
-        # `binary` to that fork and mirror the MoE's ctxCheckpoints=0 /
-        # cacheReuse=null / --cache-ram 0 workarounds. Left on stock for now:
-        # simpler, stable, and this is the "quality, slower" tier (the MoE on
-        # :8084 is the fast tier at ~49-129 tok/s).
+        ctxCheckpoints = 0; # incompatible with hybrid memory (qwen35)
+        cacheReuse = null; # IMROPE doesn't support seq_add
+        draft = {
+          # Qwen3.5-0.8B — vocab-compatible (Qwen3.6 shares the vocab), same
+          # draft the MoE uses. High acceptance on structured/coding output.
+          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
+          max = 4;
+          min = 1;
+          pMin = 0.6;
+        };
         reasoning = {
           format = "deepseek";
           budget = 2048;
         };
-        # Qwen3.6 coding-recommended sampling (clients may override per-request).
+        # --cache-ram 0 dodges the recurrent prompt-cache restore bug (see
+        # MoE note). Plus Qwen3.6 coding-recommended sampling.
         extraFlags = [
+          "--cache-ram"
+          "0"
           "--temp"
           "0.6"
           "--top-p"
