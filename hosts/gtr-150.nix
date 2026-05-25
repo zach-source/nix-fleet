@@ -94,10 +94,11 @@
       };
 
       # Reranker (cross-encoder, for RAG — pairs with the nomic-embed embeddings)
-      # jina-reranker-v2 is the one that produces sane scores under llama.cpp's
-      # --reranking endpoint (bge/Qwen3-Reranker GGUFs return near-zero scores;
-      # see llama.cpp#16407). BERT arch, 1024-token max → ctx 4096 / 4 slots =
-      # 1024 per pair. Not a chat model: jinja off, --pooling rank.
+      # jina-reranker-v2: small (BERT, 1024-token max → ctx 4096 / 4 slots =
+      # 1024 per pair), reliable. Note: the near-zero-score issue with Qwen3-
+      # Reranker (llama.cpp#16407) was broken *community* GGUFs missing the
+      # cls.output.weight classifier; the properly-converted GGUF (qwen3-reranker
+      # below) works. Not a chat model: jinja off, --pooling rank.
       services.reranker = {
         description = "Jina Reranker v2 Base Multilingual (cross-encoder)";
         model = "/srv/models/support/jina-reranker-v2-base-multilingual-Q8_0.gguf";
@@ -110,6 +111,43 @@
           "--pooling rank"
         ];
         rocmEnv = { };
+      };
+
+      # Qwen3-Embedding-8B — SOTA embeddings (#1 MTEB multilingual, 70.6),
+      # 4096-dim, 32K-capable. Added alongside nomic-embed (:8090) so existing
+      # 768-dim RAG collections keep working until re-embedded. Decoder model,
+      # last-token pooling. For non-causal pooling, ubatch must be >= the input
+      # length, so batch/ubatch match the per-slot ctx (16384/4 = 4096).
+      services."qwen3-embedding" = {
+        description = "Qwen3-Embedding-8B (SOTA, 4096-dim)";
+        model = "/srv/models/support/Qwen3-Embedding-8B-Q8_0.gguf";
+        port = 8096;
+        ctxSize = 16384;
+        parallel = 4;
+        batchSize = 4096;
+        ubatchSize = 4096;
+        embedding = true;
+        jinja = false;
+        extraFlags = [ "--pooling last" ];
+      };
+
+      # Qwen3-Reranker-8B — SOTA reranker. Voodisss GGUF (officially converted,
+      # includes the cls.output.weight yes/no classifier). Needs all three:
+      # --reranking --pooling rank AND --embedding (embedding=true).
+      services."qwen3-reranker" = {
+        description = "Qwen3-Reranker-8B (SOTA cross-encoder)";
+        model = "/srv/models/support/Qwen3-Reranker-8B-Q8_0.gguf";
+        port = 8097;
+        ctxSize = 16384;
+        parallel = 4;
+        batchSize = 4096;
+        ubatchSize = 4096;
+        embedding = true;
+        jinja = false;
+        extraFlags = [
+          "--reranking"
+          "--pooling rank"
+        ];
       };
     };
 
