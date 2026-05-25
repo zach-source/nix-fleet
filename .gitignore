@@ -15,6 +15,7 @@ result-*
 
 # Go
 cmd/nixfleet/nixfleet
+/nixfleet
 
 # Secrets (decrypted)
 secrets/**/*.dec
