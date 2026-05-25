@@ -77,6 +77,25 @@
           budget = 2048;
         };
       };
+
+      # Reranker (cross-encoder, for RAG — pairs with the nomic-embed embeddings)
+      # jina-reranker-v2 is the one that produces sane scores under llama.cpp's
+      # --reranking endpoint (bge/Qwen3-Reranker GGUFs return near-zero scores;
+      # see llama.cpp#16407). BERT arch, 1024-token max → ctx 4096 / 4 slots =
+      # 1024 per pair. Not a chat model: jinja off, --pooling rank.
+      services.reranker = {
+        description = "Jina Reranker v2 Base Multilingual (cross-encoder)";
+        model = "/srv/models/support/jina-reranker-v2-base-multilingual-Q8_0.gguf";
+        port = 8095;
+        ctxSize = 4096;
+        parallel = 4;
+        jinja = false;
+        extraFlags = [
+          "--reranking"
+          "--pooling rank"
+        ];
+        rocmEnv = { };
+      };
     };
 
     # Whisper is a separate binary, not llama-server
