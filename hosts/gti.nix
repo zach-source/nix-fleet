@@ -35,6 +35,13 @@
     # ============================================================================
     modules.tpm2Unlock.enable = true;
 
+    # nix-config module is for Determinate-Nix hosts (writes nix.custom.conf).
+    # gti runs vanilla nix (require-sigs=false, connects as the trusted ztaylor
+    # user, nix config in nix.conf.d/99-nixfleet-optimized.conf) — it has no
+    # deploy-trust problem and doesn't `!include nix.custom.conf`, so the module
+    # would be a no-op here. Disable it explicitly.
+    modules.nixConfig.enable = false;
+
     # ============================================================================
     # Kernel tuning for k0s + JuiceFS CSI driver
     # The CSI plugin opens many inotify watchers at startup; Ubuntu's defaults

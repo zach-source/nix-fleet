@@ -28,6 +28,16 @@
       vim
     ];
 
+    # Preserve gtr-153's pre-existing nix system-features (the nix-config
+    # module owns nix.custom.conf, so they'd otherwise be dropped). trusted-users
+    # uses the module default (root @wheel ztaylor deploy).
+    modules.nixConfig.systemFeatures = [
+      "nixos-test"
+      "benchmark"
+      "big-parallel"
+      "kvm"
+    ];
+
     modules.llmInference = {
       enable = true;
       services.qwopus35-coder = {

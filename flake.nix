@@ -15,12 +15,12 @@
   };
 
   outputs =
-    { self
-    , nixpkgs
-    , flake-utils
-    , nix-darwin
-    , nix2container
-    ,
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      nix-darwin,
+      nix2container,
     }:
     let
       # Supported systems for the CLI/tooling
@@ -45,10 +45,10 @@
 
       # Create a NixFleet host configuration (for Ubuntu hosts)
       mkNixFleetConfiguration =
-        { system ? "x86_64-linux"
-        , modules ? [ ]
-        , specialArgs ? { }
-        ,
+        {
+          system ? "x86_64-linux",
+          modules ? [ ],
+          specialArgs ? { },
         }:
         let
           pkgs = nixpkgsFor.${system};
@@ -59,6 +59,10 @@
             modules = [
               # Core NixFleet module
               ./modules/nixfleet
+
+              # Manage /etc/nix/nix.custom.conf (trusted-users) on all Ubuntu
+              # hosts — deploy must be a trusted-user for apply to copy closures.
+              ./modules/nix-config.nix
 
               # Provide pkgs
               { _module.args = { inherit pkgs; }; }
@@ -84,10 +88,10 @@
 
       # Create a NixOS configuration with NixFleet modules
       mkNixOSFleetConfiguration =
-        { system ? "x86_64-linux"
-        , modules ? [ ]
-        , specialArgs ? { }
-        ,
+        {
+          system ? "x86_64-linux",
+          modules ? [ ],
+          specialArgs ? { },
         }:
         nixpkgs.lib.nixosSystem {
           inherit system specialArgs;
@@ -103,10 +107,10 @@
 
       # Create a nix-darwin configuration with NixFleet modules
       mkDarwinFleetConfiguration =
-        { system ? "aarch64-darwin"
-        , modules ? [ ]
-        , specialArgs ? { }
-        ,
+        {
+          system ? "aarch64-darwin",
+          modules ? [ ],
+          specialArgs ? { },
         }:
         nix-darwin.lib.darwinSystem {
           inherit system specialArgs;
@@ -185,11 +189,13 @@
               # Ubuntu installer artifacts (autoinstall configs + scripts)
               installer = pkgs.runCommand "nixfleet-installer" { } ''
                 mkdir -p $out/common
-                ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList (name: cfg: ''
-                  mkdir -p $out/${name}
-                  cp ${cfg}/user-data $out/${name}/
-                  cp ${cfg}/meta-data $out/${name}/
-                '') self.installerConfigs)}
+                ${nixpkgs.lib.concatStringsSep "\n" (
+                  nixpkgs.lib.mapAttrsToList (name: cfg: ''
+                    mkdir -p $out/${name}
+                    cp ${cfg}/user-data $out/${name}/
+                    cp ${cfg}/meta-data $out/${name}/
+                  '') self.installerConfigs
+                )}
                 cp ${./installer/zfs-partition.sh} $out/common/zfs-partition.sh
                 cp ${./installer/nixfleet-late-commands.sh} $out/common/nixfleet-late-commands.sh
               '';
