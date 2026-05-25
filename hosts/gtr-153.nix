@@ -7,7 +7,10 @@
 { pkgs, ... }:
 
 {
-  imports = [ ../modules/llm-inference.nix ];
+  imports = [
+    ../modules/llm-inference.nix
+    ../modules/ufw.nix
+  ];
 
   nixfleet = {
     host = {
@@ -44,6 +47,22 @@
         # /srv/models/qwopus35-9b-coder/mmproj.gguf — add via extraFlags
         # (--mmproj) once stock-build multimodal support is confirmed.
       };
+    };
+
+    # UFW rules — gtr-153 has ufw active (vestigial k0s-node setup, unlike
+    # the other gtr boxes where ufw is inactive). The default-deny incoming
+    # was silently blocking the LiteLLM gateway (SNATs from gti 192.168.3.131)
+    # from reaching the llama-server, so it never appeared routable in the
+    # fleet gateway. Declared here so it survives re-deploys.
+    modules.ufw = {
+      enable = true;
+      rules = [
+        {
+          from = "192.168.0.0/16";
+          port = 8082;
+          comment = "Qwopus llama-server from LAN/cluster (LiteLLM gateway)";
+        }
+      ];
     };
 
     # Judge0 code execution sandbox — deployed via Docker Compose
