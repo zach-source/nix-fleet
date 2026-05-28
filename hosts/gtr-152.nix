@@ -40,6 +40,16 @@
           format = "deepseek";
           budget = 2048;
         };
+        # Widen the default sampling window so client-side diversity params
+        # (temperature, seeds, prompt perturbations) have room to actually
+        # change the trajectory. llama.cpp defaults are min-p=0.05 / top-p=0.95;
+        # we loosen both. For very peaked-logit prompts the model may still
+        # converge — true output diversity often needs structural prompt
+        # variation client-side. See docs/llm-proxy-usage.md.
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
     };
   };
