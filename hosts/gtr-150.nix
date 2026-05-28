@@ -32,6 +32,11 @@
         port = 8080;
         ctxSize = 262144;
         noMmap = true;
+        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
 
       # Embeddings (768-dim, for RAG pipelines)
@@ -63,6 +68,11 @@
         ctxSize = 32768;
         parallel = 4;
         rocmEnv = { };
+        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
 
       # Agent orchestrator
@@ -76,6 +86,11 @@
           format = "deepseek";
           budget = 2048;
         };
+        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
 
       # Reranker (cross-encoder, for RAG — pairs with the nomic-embed embeddings)

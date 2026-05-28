@@ -53,9 +53,14 @@
           format = "deepseek";
           budget = 2048;
         };
+        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
         # mmproj for vision available at
         # /srv/models/qwopus35-9b-coder/mmproj.gguf — add via extraFlags
         # (--mmproj) once stock-build multimodal support is confirmed.
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
     };
 

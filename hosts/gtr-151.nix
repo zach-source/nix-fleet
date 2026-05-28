@@ -67,6 +67,13 @@
           format = "deepseek";
           budget = 2048;
         };
+        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
+        # (qwen36-27b below intentionally KEEPS Qwen's official coding sampling
+        # — temp=0.6 top-k=20 — so don't blanket-nudge it.)
+        extraFlags = [
+          "--min-p 0.01"
+          "--top-p 0.98"
+        ];
       };
 
       # Qwen3.6-27B DENSE — the quality/coding counterpart to the 35B-A3B
