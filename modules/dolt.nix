@@ -157,17 +157,23 @@ in
     nixfleet = {
       packages = [ cfg.package ];
 
-      groups.${cfg.group} = {
-        system = true;
-      };
-
-      users.${cfg.user} = {
-        system = true;
-        group = cfg.group;
-        home = cfg.dataDir;
-        shell = "/usr/sbin/nologin";
-        description = "Dolt server";
-      };
+      # NixFleet's activation runs `directories` BEFORE `users`, so a directory
+      # declared with `owner = cfg.user` would fail with
+      #   chown: invalid user: '<user>:<group>'
+      # on the very first apply. Sidestep by managing the user/group
+      # imperatively in the preActivate hook below — idempotent so subsequent
+      # applies are no-ops, and reusing the same name across module updates
+      # keeps the UID stable.
+      hooks.preActivate = lib.mkBefore ''
+        if ! getent group ${cfg.group} >/dev/null 2>&1; then
+          groupadd --system ${cfg.group}
+        fi
+        if ! getent passwd ${cfg.user} >/dev/null 2>&1; then
+          useradd --system --gid ${cfg.group} \
+                  --home-dir ${cfg.dataDir} --no-create-home \
+                  --shell /usr/sbin/nologin -c "Dolt server" ${cfg.user}
+        fi
+      '';
 
       directories.${cfg.dataDir} = {
         mode = "0750";
