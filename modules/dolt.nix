@@ -157,28 +157,35 @@ in
     nixfleet = {
       packages = [ cfg.package ];
 
-      # NixFleet's activation runs `directories` BEFORE `users`, so a directory
-      # declared with `owner = cfg.user` would fail with
+      # NixFleet's activate script runs Step 2 "directories" BEFORE Step 3/4
+      # "groups"/"users", and there's no pre-activate hook (the schema accepts
+      # one but the activate script never invokes it). So a directory declared
+      # with `owner = cfg.user` would crash Step 2 with
       #   chown: invalid user: '<user>:<group>'
-      # on the very first apply. Sidestep by managing the user/group
-      # imperatively in the preActivate hook below — idempotent so subsequent
-      # applies are no-ops, and reusing the same name across module updates
-      # keeps the UID stable.
-      hooks.preActivate = lib.mkBefore ''
-        if ! getent group ${cfg.group} >/dev/null 2>&1; then
-          groupadd --system ${cfg.group}
-        fi
-        if ! getent passwd ${cfg.user} >/dev/null 2>&1; then
-          useradd --system --gid ${cfg.group} \
-                  --home-dir ${cfg.dataDir} --no-create-home \
-                  --shell /usr/sbin/nologin -c "Dolt server" ${cfg.user}
-        fi
-      '';
+      # and abort the entire activation.
+      #
+      # Work around it by:
+      #   1) leaving the dataDir owner/group at the default root:root so Step 2
+      #      can chown successfully, and
+      #   2) using ExecStartPre=+/bin/chown on the systemd unit (the `+` prefix
+      #      runs as root regardless of User=) to set the right ownership at
+      #      service-start time — by which point Step 4 has created the user.
+      groups.${cfg.group} = {
+        system = true;
+      };
+
+      users.${cfg.user} = {
+        system = true;
+        group = cfg.group;
+        home = cfg.dataDir;
+        shell = "/usr/sbin/nologin";
+        description = "Dolt server";
+      };
 
       directories.${cfg.dataDir} = {
         mode = "0750";
-        owner = cfg.user;
-        group = cfg.group;
+        # owner/group intentionally left at the root:root default — see comment
+        # above. ExecStartPre on dolt-server.service re-chowns at startup.
       };
 
       directories."/etc/dolt" = {
@@ -206,6 +213,11 @@ in
           User=${cfg.user}
           Group=${cfg.group}
           WorkingDirectory=${cfg.dataDir}
+          # ExecStartPre runs as root (+ prefix) to repair dataDir ownership.
+          # The directories step left it root:root because the user didn't
+          # exist yet; by now it does, so this chown succeeds and the main
+          # ExecStart can write as dolt:dolt.
+          ExecStartPre=+/bin/chown -R ${cfg.user}:${cfg.group} ${cfg.dataDir}
           ExecStart=${cfg.package}/bin/dolt sql-server --config /etc/dolt/server.yaml
           Restart=on-failure
           RestartSec=5
