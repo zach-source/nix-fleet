@@ -590,9 +590,21 @@ let
     SECRETS_DIR="${cfg.secrets.secretsDir}"
     CHANGED_SECRETS=""
 
-    # Create secrets directory with restrictive permissions
+    # Create secrets directory.
+    #
+    # Mode 0711 (not 0700): owner=root has full access; group/others get
+    # execute-only (traverse) but NOT read (no directory listing). This lets
+    # secret files that are *owned by another user* (e.g. ztaylor's
+    # dotfiles-deploy-key, perm 0400 ztaylor:ztaylor) actually be readable
+    # by that user — they can access by exact path but can't enumerate
+    # the directory. With 0700 root-only, non-root processes couldn't even
+    # traverse to their own secrets, which silently broke things like the
+    # home-manager git pull (it ran as ztaylor and got "Permission denied"
+    # on the deploy key, so the dotfiles repo never updated and
+    # nixfleet-hm kept failing with stale pnpm/lockfile hashes).
+    # Individual secret files keep their own restrictive perms (0400 etc.).
     mkdir -p "$SECRETS_DIR"
-    chmod 0700 "$SECRETS_DIR"
+    chmod 0711 "$SECRETS_DIR"
 
     # Determine decryption identity based on mode
     SECRETS_MODE="${cfg.secrets.mode}"
