@@ -44,6 +44,7 @@ hosts:
     ssh_user: deploy
     roles:
       - base
+      - k0s-worker
       - llm-inference
       - embeddings
       - safety-filter
@@ -82,6 +83,7 @@ hosts:
     ssh_user: deploy
     roles:
       - base
+      - k0s-worker
       - llm-inference
       - rpc-worker
     services:
@@ -100,6 +102,7 @@ hosts:
     ssh_user: deploy
     roles:
       - base
+      - k0s-worker
       - llm-inference
       - rpc-worker
     services:
@@ -118,6 +121,7 @@ hosts:
     ssh_user: deploy
     roles:
       - base
+      - k0s-worker
       - llm-inference
       - code-sandbox
       - rpc-worker
