@@ -4,36 +4,30 @@
 
 NixFleet is a fleet management CLI tool for deploying Nix configurations to non-NixOS hosts (Ubuntu, macOS). It manages packages, files, users, systemd units, and health checks via SSH.
 
-## Version Control: Use jj (Jujutsu)
+## Version Control: Use git
 
-This repo uses **jj** (Jujutsu) instead of git commands. Always use jj:
+This repo uses **git**. Standard workflow:
 
 ```bash
 # Status and log
-jj status
-jj log --limit 10
+git status
+git log --oneline -10
 
-# Describe current change (like git commit -m)
-jj describe -m "Your commit message"
-
-# Create new empty change on top (finalizes current change)
-jj new
+# Stage and commit
+git add -A
+git commit -m "Add feature X"
 
 # Push to remote
-jj git push
+git push
 
-# Fetch from remote
-jj git fetch
-
-# Common workflow: describe, new, push
-jj describe -m "Add feature X" && jj new && jj git push
+# Fetch / pull from remote
+git fetch
+git pull
 ```
 
-### jj Tips
-- Working copy is always a change in progress - use `jj describe` to set message
-- `jj new` creates a new empty change, effectively "committing" current work
-- Bookmarks are like git branches: `jj bookmark set main -r @-`
-- If bookmark tracking issues: `jj bookmark track main@origin`
+### Tips
+- Don't commit on `main` directly for larger work — branch first (`git switch -c feature/x`), then open a PR.
+- Tags use git directly: `git tag v0.x.x && git push origin v0.x.x`.
 
 ## Project Structure
 
@@ -171,11 +165,10 @@ NixFleet uses [Semantic Versioning](https://semver.org/):
 
 2. **Create and push tag**:
    ```bash
-   jj describe -m "Release v0.x.x" && jj new
-   jj bookmark set main -r @-
-   jj git push
+   git commit -am "Release v0.x.x"
+   git push origin main
 
-   # Create tag (use git for tags)
+   # Create tag
    git tag v0.x.x
    git push origin v0.x.x
    ```

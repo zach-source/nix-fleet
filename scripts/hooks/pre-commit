@@ -5,8 +5,8 @@
 
 set -e
 
-# Find repo root (works with both git and jj)
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || jj workspace root 2>/dev/null)"
+# Find repo root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT/cmd/nixfleet"
 
 echo "Running golangci-lint..."

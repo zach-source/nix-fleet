@@ -8,13 +8,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Detect if using jj or git
-if [ -d "$REPO_ROOT/.jj" ]; then
-    HOOKS_DIR="$REPO_ROOT/.jj/repo/store/git/hooks"
-elif [ -d "$REPO_ROOT/.git" ]; then
+if [ -d "$REPO_ROOT/.git" ]; then
     HOOKS_DIR="$REPO_ROOT/.git/hooks"
 else
-    echo "Error: Not a git or jj repository"
+    echo "Error: Not a git repository"
     exit 1
 fi
 
