@@ -11,6 +11,7 @@
     ../modules/installer.nix
     ../modules/sysctl.nix
     ../modules/ufw.nix
+    ../modules/iscsi.nix
   ];
 
   nixfleet = {
@@ -34,6 +35,9 @@
     # TPM2 auto-unlock for ZFS-on-LUKS keystore
     # ============================================================================
     modules.tpm2Unlock.enable = true;
+
+    # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
+    modules.iscsi.enable = true;
 
     # nix-config module is for Determinate-Nix hosts (writes nix.custom.conf).
     # gti runs vanilla nix (require-sigs=false, connects as the trusted ztaylor

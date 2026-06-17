@@ -10,6 +10,7 @@
   imports = [
     ../modules/llm-inference.nix
     ../modules/ufw.nix
+    ../modules/iscsi.nix
   ];
 
   nixfleet = {
@@ -18,6 +19,9 @@
       base = "ubuntu";
       addr = "192.168.3.130";
     };
+
+    # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
+    modules.iscsi.enable = true;
 
     packages = with pkgs; [
       git
