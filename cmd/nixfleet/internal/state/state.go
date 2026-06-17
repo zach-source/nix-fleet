@@ -218,8 +218,10 @@ func (m *Manager) WriteState(ctx context.Context, client *ssh.Client, state *Hos
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
-	// Write state file
-	writeCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF", StatePath, string(data))
+	// Write state file. Use `tee` rather than a `>` redirect: ExecSudo runs
+	// `sudo <cmd>`, so a redirect would be performed by the (non-root) login
+	// shell and fail on the root-owned state dir; `sudo tee` writes as root.
+	writeCmd := fmt.Sprintf("tee %s > /dev/null << 'EOF'\n%s\nEOF", StatePath, string(data))
 	result, err := client.ExecSudo(ctx, writeCmd)
 	if err != nil {
 		return fmt.Errorf("writing state: %w", err)
