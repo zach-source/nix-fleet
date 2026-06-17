@@ -176,15 +176,27 @@ func (e *Evaluator) getManifestHash(ctx context.Context, storePath string) (stri
 		return "", err
 	}
 
-	var pathInfo []struct {
+	// Newer Nix renders `path-info --json` as an object keyed by store path;
+	// older Nix renders an array. Handle both.
+	var asMap map[string]struct {
 		NarHash string `json:"narHash"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &pathInfo); err != nil {
-		return "", err
+	if err := json.Unmarshal(stdout.Bytes(), &asMap); err == nil && len(asMap) > 0 {
+		if info, ok := asMap[storePath]; ok && info.NarHash != "" {
+			return info.NarHash, nil
+		}
+		for _, info := range asMap {
+			if info.NarHash != "" {
+				return info.NarHash, nil
+			}
+		}
 	}
 
-	if len(pathInfo) > 0 {
-		return pathInfo[0].NarHash, nil
+	var asArray []struct {
+		NarHash string `json:"narHash"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &asArray); err == nil && len(asArray) > 0 {
+		return asArray[0].NarHash, nil
 	}
 
 	return "", nil

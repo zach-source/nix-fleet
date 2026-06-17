@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nixfleet/nixfleet/internal/nix"
@@ -95,11 +98,9 @@ state anyway. Run with --dry-run first to see the drift report.`,
 					skipped++
 					continue
 				}
-				expected, err := expectedManagedFiles(declared)
-				if err != nil {
-					fmt.Printf("  ERROR computing expected file state: %v\n\n", err)
-					skipped++
-					continue
+				expected, unreadable := expectedManagedFiles(declared)
+				if len(unreadable) > 0 {
+					fmt.Printf("  warning: %d file(s) not checked (source unreadable locally): %v\n", len(unreadable), unreadable)
 				}
 
 				// 3. Connect, read current state, report drift.
@@ -183,32 +184,74 @@ state anyway. Run with --dry-run first to see the drift report.`,
 // expectedManagedFiles converts declared files into the FileState map used for
 // drift detection: sha256 of the file content (matching `sha256sum` on the host)
 // plus the declared mode/owner/group. Files with neither text nor source are
-// skipped (nothing to hash).
-func expectedManagedFiles(declared map[string]nix.DeclaredFile) (map[string]state.FileState, error) {
-	out := make(map[string]state.FileState, len(declared))
+// skipped (nothing to hash). Source-backed files whose store path can't be read
+// locally are returned in skipped (non-fatal) so a single unreadable source
+// doesn't abort adoption of the whole host.
+func expectedManagedFiles(declared map[string]nix.DeclaredFile) (files map[string]state.FileState, skipped []string) {
+	files = make(map[string]state.FileState, len(declared))
 	for path, df := range declared {
 		var content []byte
 		switch {
 		case df.Text != nil:
 			content = []byte(*df.Text)
 		case df.Source != nil:
-			b, err := os.ReadFile(*df.Source)
+			b, err := realizeAndRead(*df.Source)
 			if err != nil {
-				return nil, fmt.Errorf("reading source for %s: %w", path, err)
+				skipped = append(skipped, path)
+				continue
 			}
 			content = b
 		default:
 			continue
 		}
 		sum := sha256.Sum256(content)
-		out[path] = state.FileState{
+		files[path] = state.FileState{
 			Path:         path,
 			Hash:         hex.EncodeToString(sum[:]),
-			Mode:         df.Mode,
+			Mode:         normalizeMode(df.Mode),
 			Owner:        df.Owner,
 			Group:        df.Group,
 			RestartUnits: df.RestartUnits,
 		}
 	}
-	return out, nil
+	return files, skipped
+}
+
+// normalizeMode renders a declared mode (e.g. "0644") in the same canonical
+// octal form as `stat -c %a` on the host (e.g. "644", "755", "4755"), so the
+// drift check doesn't report spurious permission changes from the leading zero.
+func normalizeMode(mode string) string {
+	v, err := strconv.ParseUint(strings.TrimSpace(mode), 8, 32)
+	if err != nil {
+		return mode
+	}
+	return strconv.FormatUint(v, 8)
+}
+
+// realizeAndRead reads a file, first trying to realise its /nix/store/<hash>-<name>
+// prefix if the path isn't present locally (source files reference store paths
+// that may not yet be substituted on this machine).
+func realizeAndRead(path string) ([]byte, error) {
+	if b, err := os.ReadFile(path); err == nil {
+		return b, nil
+	}
+	if sp := storePathPrefix(path); sp != "" {
+		// Best-effort; ignore errors and just retry the read.
+		_ = exec.Command("nix-store", "--realise", sp).Run()
+	}
+	return os.ReadFile(path)
+}
+
+// storePathPrefix returns the /nix/store/<hash>-<name> root of a path inside the
+// store, or "" if the path isn't under /nix/store.
+func storePathPrefix(p string) string {
+	const prefix = "/nix/store/"
+	if !strings.HasPrefix(p, prefix) {
+		return ""
+	}
+	rest := p[len(prefix):]
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		return prefix + rest[:i]
+	}
+	return p
 }
