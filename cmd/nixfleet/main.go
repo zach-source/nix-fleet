@@ -112,6 +112,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(agentsCmd())
 	cmd.AddCommand(spireCmd())
 	cmd.AddCommand(juicefsCmd())
+	cmd.AddCommand(stateCmd())
 
 	return cmd
 }

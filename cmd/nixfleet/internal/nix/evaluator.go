@@ -128,6 +128,43 @@ func (e *Evaluator) BuildHost(ctx context.Context, hostName string, base string)
 	}, nil
 }
 
+// DeclaredFile is a file managed by the host config (nixfleet.files.<path>).
+// Either Text or Source is set (the other is null).
+type DeclaredFile struct {
+	Text         *string  `json:"text"`
+	Source       *string  `json:"source"`
+	Mode         string   `json:"mode"`
+	Owner        string   `json:"owner"`
+	Group        string   `json:"group"`
+	RestartUnits []string `json:"restartUnits"`
+}
+
+// EvalManagedFiles returns the files declared by a host's config
+// (config.nixfleet.files), keyed by absolute destination path. Used to
+// compute the expected on-host state when adopting an out-of-band host.
+func (e *Evaluator) EvalManagedFiles(ctx context.Context, hostName string) (map[string]DeclaredFile, error) {
+	attr := fmt.Sprintf("nixfleetConfigurations.%s.config.nixfleet.files", hostName)
+	flakeRef := fmt.Sprintf("%s#%s", e.flakePath, attr)
+
+	cmd := exec.CommandContext(ctx, e.nixBin, "eval", "--json", flakeRef)
+	cmd.Dir = e.flakePath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("nix eval files failed: %w\nstderr: %s", err, stderr.String())
+	}
+
+	var files map[string]DeclaredFile
+	if err := json.Unmarshal(stdout.Bytes(), &files); err != nil {
+		return nil, fmt.Errorf("parsing declared files: %w", err)
+	}
+
+	return files, nil
+}
+
 // getManifestHash calculates a hash for the store path
 func (e *Evaluator) getManifestHash(ctx context.Context, storePath string) (string, error) {
 	cmd := exec.CommandContext(ctx, e.nixBin, "path-info", "--json", storePath)
