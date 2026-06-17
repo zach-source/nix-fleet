@@ -47,18 +47,31 @@ in
     nixfleet.hooks.postActivate = ''
       # --- iSCSI initiator setup (NixFleet iscsi module) ---
       # Distro open-iscsi provides iscsid + iscsiadm + iscsi-iname, integrated
-      # with the host kernel/udev. Install it if it isn't already present.
-      if ! dpkg -l open-iscsi >/dev/null 2>&1; then
+      # with the host kernel/udev. Install it unless it is *fully* installed:
+      # a removed-but-config-remains ("rc") package still appears in `dpkg -l`,
+      # so match the leading "ii" status column to require the installed state.
+      if ! dpkg -l open-iscsi 2>/dev/null | grep -q '^ii'; then
         echo "iscsi: installing open-iscsi"
-        DEBIAN_FRONTEND=noninteractive apt-get install -y open-iscsi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y open-iscsi \
+          || echo "iscsi: WARNING apt-get install open-iscsi failed"
       fi
 
       # Ensure a unique InitiatorName exists (CSI attach needs one per node).
       if [ ! -s /etc/iscsi/initiatorname.iscsi ]; then
-        iname="$(/usr/sbin/iscsi-iname 2>/dev/null || /sbin/iscsi-iname)"
+        iname=""
+        for c in iscsi-iname /usr/sbin/iscsi-iname /sbin/iscsi-iname; do
+          if command -v "$c" >/dev/null 2>&1; then iname="$("$c" 2>/dev/null || true)"; fi
+          [ -n "$iname" ] && break
+        done
+        if [ -z "$iname" ]; then
+          # Fallback IQN if iscsi-iname is unavailable (don't fail activation).
+          iname="iqn.2004-10.com.ubuntu:01:$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          echo "iscsi: WARNING iscsi-iname unavailable, using fallback IQN"
+        fi
+        mkdir -p /etc/iscsi
         install -m 0600 /dev/null /etc/iscsi/initiatorname.iscsi
-        echo "InitiatorName=$iname" > /etc/iscsi/initiatorname.iscsi
-        echo "iscsi: generated InitiatorName=$iname"
+        printf 'InitiatorName=%s\n' "$iname" > /etc/iscsi/initiatorname.iscsi
+        echo "iscsi: set InitiatorName=$iname"
       fi
 
       # Load the transport now (modules-load.d covers subsequent boots).
