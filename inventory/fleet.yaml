@@ -47,6 +47,7 @@ hosts:
       - k0s-worker
       - llm-inference
       - embeddings
+      - reranker
       - safety-filter
       - code-completion
       - agent-orchestrator
@@ -60,9 +61,11 @@ hosts:
       - port: 8090
         model: nomic-embed-text-v2-moe-Q8_0
         role: embeddings
+        notes: "768-dim, kept for back-compat; superseded by qwen3-embedding :8096"
       - port: 8091
         model: shieldgemma-2b-Q8_0
         role: safety
+        notes: "English binary safe/unsafe; superseded by qwen3guard :8098"
       - port: 8092
         model: qwen2.5-coder-1.5b-instruct-q8_0
         role: code-completion
@@ -72,8 +75,24 @@ hosts:
         role: orchestrator
         tok_s: 33
       - port: 8094
-        model: whisper-base-en
+        model: whisper-large-v3-turbo
         role: stt
+        notes: "Upgraded from base.en 2026-06-18 — lower WER, CPU"
+      - port: 8095
+        model: jina-reranker-v2-base-multilingual-Q8_0
+        role: reranker
+      - port: 8096
+        model: Qwen3-Embedding-8B-Q8_0
+        role: embeddings
+        notes: "SOTA 4096-dim, #1 MTEB 70.6, 32K ctx"
+      - port: 8097
+        model: Qwen3-Reranker-8B-Q8_0
+        role: reranker
+        notes: "SOTA cross-encoder, normalized 0-1 scores"
+      - port: 8098
+        model: Qwen3Guard-Gen-4B-Q8_0
+        role: safety
+        notes: "Multilingual safety classifier (added 2026-06-18); additive to :8091"
       - port: 50052
         role: rpc-worker
 
@@ -88,11 +107,16 @@ hosts:
       - rpc-worker
     services:
       - port: 8084
-        model: Qwen3.6-35B-A3B-UD-Q4_K_M (fork + spec)
+        model: Qwen3.6-35B-A3B-UD-Q6_K_XL
         role: primary-llm
-        tok_s: 32-129
+        tok_s: 41-59
         draft: Qwen3.5-0.8B-Q4_K_M
-        notes: "Custom fork (github.com/zach-source/llama.cpp qwen35-speculation) handles qwen35moe arch. Warm ~49 tok/s, cache-hit 129 tok/s."
+        notes: "MoE + classic draft (86-95% accept). Fork retired — clean upstream /opt/llama-rocm-latest (PR #19493). MTP crashes the recurrent MoE."
+      - port: 8085
+        model: Qwen3.6-27B-MTP-UD-Q6_K_XL
+        role: primary-llm
+        tok_s: 16
+        notes: "Dense + MTP self-speculation (no draft model). Quality/coding tier."
       - port: 50052
         role: rpc-worker
 
@@ -127,10 +151,9 @@ hosts:
       - rpc-worker
     services:
       - port: 8082
-        model: MiniMax-M2.7-UD-IQ4_XS (229B)
+        model: Qwopus3.5-9B-coder-Exp-Q8_0
         role: primary-llm
-        tok_s: 23
-        notes: "SOTA 229B model, 10B active MoE"
+        notes: "Coder (qwen35 arch); replaced MiniMax-M2.7"
       - port: 2358
         model: judge0
         role: code-sandbox

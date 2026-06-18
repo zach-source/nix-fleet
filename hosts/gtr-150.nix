@@ -66,6 +66,21 @@
         rocmEnv = { };
       };
 
+      # Modern safety classifier — Qwen3Guard-Gen-4B. Added alongside
+      # ShieldGemma (:8091, English-only, binary safe/unsafe) so existing
+      # safety consumers keep working until migrated. Qwen3Guard-Gen covers
+      # 119 languages with 3-tier severity (safe / controversial / unsafe)
+      # and a richer category taxonomy. The "Gen" variant generates the
+      # verdict via its chat template (jinja on); not a reasoning model.
+      services.guard = {
+        description = "Qwen3Guard-Gen-4B - Safety Classifier (multilingual)";
+        model = "/srv/models/support/Qwen3Guard-Gen-4B.Q8_0.gguf";
+        port = 8098;
+        ctxSize = 16384;
+        parallel = 2;
+        rocmEnv = { };
+      };
+
       # Code completion (FIM)
       services.codecomplete = {
         description = "Qwen2.5-Coder 1.5B - FIM Code Completion";
@@ -157,20 +172,25 @@
       };
     };
 
-    # Whisper is a separate binary, not llama-server
+    # Whisper is a separate binary, not llama-server.
+    # Upgraded base.en → large-v3-turbo: ~809M params / 4 decoder layers,
+    # multilingual, far lower WER than base while staying fast. CPU inference
+    # (no GPU groups on this unit); bumped threads 4→8 to offset the larger
+    # model. GPU offload (Vulkan/ROCm whisper.cpp) is a future option if
+    # CPU latency becomes an issue.
     systemd.units."whisper-server.service" = {
       text = ''
         [Unit]
-        Description=Whisper.cpp Server (Speech-to-Text, CPU)
+        Description=Whisper.cpp Server (large-v3-turbo, Speech-to-Text, CPU)
         After=network.target
 
         [Service]
         Type=simple
         User=deploy
         ExecStart=/opt/build/whisper.cpp/build/bin/whisper-server \
-          --model /srv/models/support/ggml-base.en.bin \
+          --model /srv/models/support/ggml-large-v3-turbo.bin \
           --host 0.0.0.0 --port 8094 \
-          --threads 4
+          --threads 8
         Restart=on-failure
         RestartSec=5
 
