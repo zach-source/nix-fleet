@@ -801,7 +801,14 @@ let
     if [ -n "$UNITS_TO_RESTART" ]; then
       log "Restarting affected units:$UNITS_TO_RESTART"
       for unit in $UNITS_TO_RESTART; do
-        systemctl restart "$unit" 2>/dev/null || log "  Warning: Failed to restart $unit"
+        # --no-block: queue the restart and move on instead of waiting for the
+        # unit to become active. GPU inference units carry a startup-stagger
+        # sleep in ExecStartPre, so a blocking restart serialized across many of
+        # them (e.g. gtr-150's 9 services) holds the activation SSH session open
+        # for minutes until it times out ("remote command exited without exit
+        # status"). Async restart lets the stagger do its job without stalling
+        # activation; post-apply health checks verify the units came up.
+        systemctl restart --no-block "$unit" 2>/dev/null || log "  Warning: Failed to queue restart of $unit"
       done
     fi
 
