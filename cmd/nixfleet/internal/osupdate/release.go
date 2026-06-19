@@ -168,7 +168,12 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 	switch {
 	case info.TargetRelease != "":
 		// do-release-upgrade advertises a target — use it even from an EOL release.
-		upgradeCmd = "DEBIAN_FRONTEND=noninteractive do-release-upgrade -f DistUpgradeViewNonInteractive -m server"
+		// NB: no `-m/--mode server` flag — recent do-release-upgrade has no such
+		// option (it errors "no such option: -m"). The non-interactive frontend
+		// is sufficient. Third-party repos (e.g. the AMD ROCm apt source) are
+		// intentionally left to be auto-disabled (no --allow-third-party): they
+		// have no candidate for the new release and held packages stay installed.
+		upgradeCmd = "DEBIAN_FRONTEND=noninteractive do-release-upgrade -f DistUpgradeViewNonInteractive"
 	case cfg.AllowEOL && info.RunningEOL:
 		// Stranded EOL host: no target offered. Fall back to a sources codename
 		// rewrite + full-upgrade.
@@ -203,11 +208,20 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 	// systemd-run unprivileged (polkit: "Interactive authentication required").
 	// `sudo bash -c '<all of it>'` runs every part as root.
 	logDir := cfg.LogPath[:strings.LastIndex(cfg.LogPath, "/")]
+	exitFile := cfg.LogPath + ".exit"
+	// The transient unit runs with --collect, so it is garbage-collected the
+	// instant it exits and `systemctl show -p ExecMainStatus` is then empty —
+	// reading it would falsely look like success. So the wrapper records the
+	// upgrade's real exit code to a sentinel file we can read after the unit is
+	// gone. The sentinel is removed up front so a stale value from a prior run
+	// can't be mistaken for this run's result.
+	runScript := fmt.Sprintf("rm -f %s; { %s ; } > %s 2>&1; echo $? > %s",
+		shQuote(exitFile), upgradeCmd, shQuote(cfg.LogPath), shQuote(exitFile))
 	inner := fmt.Sprintf(
-		"mkdir -p %s && systemd-run --unit=%s --collect --setenv=DEBIAN_FRONTEND=noninteractive "+
+		"mkdir -p %s && rm -f %s && systemd-run --unit=%s --collect --setenv=DEBIAN_FRONTEND=noninteractive "+
 			"/bin/bash -c %s",
-		shQuote(logDir), shQuote(cfg.Unit),
-		shQuote(fmt.Sprintf("{ %s ; } > %s 2>&1", upgradeCmd, cfg.LogPath)),
+		shQuote(logDir), shQuote(exitFile), shQuote(cfg.Unit),
+		shQuote(runScript),
 	)
 	res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", shQuote(inner)))
 	if err != nil {
@@ -234,9 +248,14 @@ func (u *Updater) ReleaseUpgradeStatus(ctx context.Context, client *ssh.Client, 
 		tail = strings.TrimRight(t.Stdout, "\n")
 	}
 
+	// Read the exit code from the sentinel the wrapper writes (the --collect
+	// unit is gone by now, so ExecMainStatus is unreliable). Absent/unreadable
+	// sentinel → leave exitCode at -1, which callers treat as "not a success"
+	// (and therefore do NOT reboot) — failing safe.
 	exitCode = -1
 	if !running {
-		if s, e := client.Exec(ctx, fmt.Sprintf("systemctl show %s -p ExecMainStatus --value 2>/dev/null || true", shQuote(cfg.Unit))); e == nil {
+		exitFile := cfg.LogPath + ".exit"
+		if s, e := client.Exec(ctx, fmt.Sprintf("cat %s 2>/dev/null || true", shQuote(exitFile))); e == nil {
 			if v, perr := strconv.Atoi(strings.TrimSpace(s.Stdout)); perr == nil {
 				exitCode = v
 			}
