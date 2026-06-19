@@ -1097,6 +1097,7 @@ func osUpdateReleaseUpgradeCmd() *cobra.Command {
 		checkOnly    bool
 		pollEvery    time.Duration
 		waitTimeout  time.Duration
+		minFreeBoot  int64
 	)
 
 	cmd := &cobra.Command{
@@ -1185,8 +1186,11 @@ Always serial — one host at a time — to protect shared services.`,
 				// full-upgrade (new kernel initramfs) before we ever reach the
 				// release upgrade. Better to flag it here than half-configure a kernel.
 				cfgBoot := osupdate.DefaultReleaseUpgradeConfig()
-				if info.FreeBootMB > 0 && info.FreeBootMB < cfgBoot.MinFreeBootMB {
-					fmt.Printf("  SKIP: only %d MiB free on /boot (need ~%d). Remove old kernels or set initramfs MODULES=dep first.\n\n",
+				if minFreeBoot >= 0 {
+					cfgBoot.MinFreeBootMB = minFreeBoot
+				}
+				if cfgBoot.MinFreeBootMB > 0 && info.FreeBootMB > 0 && info.FreeBootMB < cfgBoot.MinFreeBootMB {
+					fmt.Printf("  SKIP: only %d MiB free on /boot (need ~%d). Remove old kernels, set initramfs MODULES=dep, or lower --min-free-boot.\n\n",
 						info.FreeBootMB, cfgBoot.MinFreeBootMB)
 					continue
 				}
@@ -1233,6 +1237,9 @@ Always serial — one host at a time — to protect shared services.`,
 				cfg.NextCodename = nextCodename
 				cfg.PreHook = preHookFull
 				cfg.PostHook = postHook
+				if minFreeBoot >= 0 {
+					cfg.MinFreeBootMB = minFreeBoot
+				}
 
 				fmt.Printf("  Preparing (set prompt, full-upgrade current release)...\n")
 				if err := updater.PrepareRelease(ctx, client); err != nil {
@@ -1318,6 +1325,7 @@ Always serial — one host at a time — to protect shared services.`,
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only report current/target release per host; make no changes")
 	cmd.Flags().DurationVar(&pollEvery, "poll", 30*time.Second, "How often to poll the detached upgrade for progress")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for a host to return after reboot")
+	cmd.Flags().Int64Var(&minFreeBoot, "min-free-boot", -1, "Override required free /boot MiB (-1 = default 350; lower for MODULES=dep nodes)")
 
 	return cmd
 }
