@@ -316,8 +316,12 @@ let
       [Unit]
       Description=${svc.description}
       After=network.target
-      Wants=dev-kfd.device
-      After=dev-kfd.device
+      # NB: deliberately NO Wants/After=dev-kfd.device. The amdkfd device does
+      # not activate as a systemd .device unit (it stays inactive/dead even
+      # though /dev/kfd exists), so an After=dev-kfd.device ordering stalls the
+      # service's start job forever at boot — the unit never auto-starts after a
+      # reboot. GPU readiness is instead handled robustly by the ExecStartPre
+      # below, which polls for /dev/kfd directly.
 
       [Service]
       Type=simple
