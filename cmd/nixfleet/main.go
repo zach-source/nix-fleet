@@ -1247,6 +1247,32 @@ Always serial — one host at a time — to protect shared services.`,
 					continue
 				}
 
+				// do-release-upgrade refuses to run while a reboot is pending
+				// ("you have not rebooted after updating a package which requires
+				// a reboot"). The prepare full-upgrade can install a new kernel, so
+				// reboot into it first, then proceed. Also covers each hop of an
+				// EOL two-hop upgrade.
+				if rr, _ := updater.IsRebootRequired(ctx, client); rr {
+					fmt.Printf("  Reboot required after prepare (new kernel) — rebooting first...\n")
+					preRO := reboot.NewOrchestrator(func() reboot.RebootConfig {
+						c := reboot.DefaultRebootConfig()
+						c.AllowReboot = true
+						if waitTimeout > 0 {
+							c.WaitTimeout = waitTimeout
+						}
+						return c
+					}())
+					if err := preRO.ExecuteReboot(ctx, client, pool, host.Addr, host.SSHPort, host.SSHUser); err != nil {
+						fmt.Printf("  pre-upgrade reboot failed: %v\n\n", err)
+						continue
+					}
+					client, err = pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+					if err != nil {
+						fmt.Printf("  reconnect after pre-upgrade reboot failed: %v\n\n", err)
+						continue
+					}
+				}
+
 				fmt.Printf("  Launching detached release upgrade...\n")
 				if err := updater.StartReleaseUpgrade(ctx, client, info, cfg); err != nil {
 					fmt.Printf("  launch failed: %v\n\n", err)
