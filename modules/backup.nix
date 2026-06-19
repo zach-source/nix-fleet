@@ -1,9 +1,10 @@
 # NixFleet Backup Module
 # Configures SMB personal drive mounts, NFS backup mounts, and ZFS snapshot backups
-{ config
-, pkgs
-, lib
-, ...
+{
+  config,
+  pkgs,
+  lib,
+  ...
 }:
 {
   # ============================================================================
@@ -76,13 +77,6 @@
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
         }
 
-        check_mount() {
-          if ! mountpoint -q "$BACKUP_MOUNT"; then
-            log "ERROR: Backup mount $BACKUP_MOUNT not mounted"
-            exit 1
-          fi
-        }
-
         create_snapshot() {
           local pool=$1
           local snap_name="nixfleet-$(date +%Y%m%d-%H%M%S)"
@@ -114,8 +108,16 @@
           local pool=$1
           log "Cleaning up snapshots older than $RETENTION_DAYS days for $pool"
 
-          zfs list -t snapshot -o name,creation -p "$pool" 2>/dev/null | \
-            grep "nixfleet-" | while read snap creation; do
+          # IMPORTANT: -r is required. Snapshots are created with `zfs snapshot -r`
+          # (recursive over every child dataset), so without -r here we only ever
+          # see/destroy the top-level pool snapshot and the child-dataset
+          # snapshots (e.g. bpool/BOOT/ubuntu_*@nixfleet-...) accumulate forever
+          # until the pool fills — which is exactly how a 1.88 GiB bpool reached
+          # 92% with 178 un-pruned /boot snapshots. Listing recursively and
+          # destroying each enumerated snapshot also cleans up any pre-existing
+          # orphans left by the previous non-recursive logic.
+          zfs list -t snapshot -r -o name,creation -p "$pool" 2>/dev/null | \
+            grep "nixfleet-" | while read -r snap creation; do
               age_days=$(( ($(date +%s) - creation) / 86400 ))
               if [ "$age_days" -gt "$RETENTION_DAYS" ]; then
                 log "Removing old snapshot: $snap"
@@ -132,24 +134,40 @@
         main() {
           log "=== ZFS Backup Started ==="
 
-          check_mount
+          # Local snapshotting + retention must NOT depend on the remote backup
+          # mount being available. Previously main() ran check_mount first and
+          # exited, so when the backup NAS was unreachable nothing ran — but the
+          # bigger hazard is the opposite: if snapshots are created without
+          # cleanup ever running, the pool fills. So we always create + prune
+          # snapshots locally, and only perform the off-host send when the mount
+          # is present.
+          local have_mount=false
+          if mountpoint -q "$BACKUP_MOUNT"; then
+            have_mount=true
+          else
+            log "WARN: backup mount $BACKUP_MOUNT not available — snapshotting locally, skipping off-host send"
+          fi
 
           # Get all ZFS pools
           for pool in $(zpool list -Ho name); do
             log "Processing pool: $pool"
 
-            # Create snapshot
+            # Create snapshot (recursive)
             snap_name=$(create_snapshot "$pool")
 
-            # Backup snapshot
-            backup_snapshot "$pool" "$snap_name"
+            # Send off-host only when the backup mount is present
+            if [ "$have_mount" = true ]; then
+              backup_snapshot "$pool" "$snap_name"
+            fi
 
-            # Cleanup old snapshots
+            # Always prune old snapshots so the pool can't fill
             cleanup_old_snapshots "$pool"
           done
 
-          # Cleanup old backup files
-          cleanup_old_backups
+          # Cleanup old backup files (only meaningful when the mount is present)
+          if [ "$have_mount" = true ]; then
+            cleanup_old_backups
+          fi
 
           log "=== ZFS Backup Completed ==="
         }
