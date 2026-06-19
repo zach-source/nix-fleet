@@ -147,6 +147,12 @@ let
   # Generate health checks JSON
   healthChecksData = builtins.toJSON cfg.healthChecks;
 
+  # Declarative apt package state (Ubuntu native packages)
+  aptData = builtins.toJSON {
+    inherit (cfg.apt) packages absent hold;
+  };
+  aptManaged = cfg.apt.packages != [ ] || cfg.apt.absent != [ ] || cfg.apt.hold != [ ];
+
   # Generate secrets payload (encrypted .age files)
   secretsPayload = pkgs.runCommand "nixfleet-secrets" { } ''
     mkdir -p $out
@@ -503,6 +509,9 @@ let
       mode = secretCfg.mode;
     }) cfg.secrets.items;
     secretsMode = cfg.secrets.mode;
+    apt = {
+      inherit (cfg.apt) packages absent hold;
+    };
   };
 
   manifestHash = builtins.hashString "sha256" manifestInputs;
@@ -796,6 +805,45 @@ let
       done
     fi
 
+    # Step 9b: Reconcile declarative apt packages
+    #
+    # Drift-only: we never run a blanket upgrade here (that's `nixfleet
+    # os-update`). We only act when a declared package is missing, present but
+    # should be absent, or not yet held. Holds are applied first so any install
+    # that follows respects them.
+    ${optionalString aptManaged ''
+      log "Reconciling declarative apt packages..."
+      export DEBIAN_FRONTEND=noninteractive
+
+      ${concatMapStringsSep "\n" (p: ''
+        if ! apt-mark showhold 2>/dev/null | grep -qx "${p}"; then
+          log "  Holding apt package: ${p}"
+          apt-mark hold "${p}" >/dev/null 2>&1 || log "    Warning: failed to hold ${p}"
+        fi
+      '') cfg.apt.hold}
+
+      APT_MISSING=""
+      ${concatMapStringsSep "\n" (p: ''
+        if ! dpkg -s "${p}" 2>/dev/null | grep -q "^Status: install ok installed"; then
+          APT_MISSING="$APT_MISSING ${p}"
+        fi
+      '') cfg.apt.packages}
+      if [ -n "$APT_MISSING" ]; then
+        log "  Installing missing apt packages:$APT_MISSING"
+        apt-get update -qq 2>/dev/null || log "    Warning: apt-get update failed; trying cached lists"
+        # shellcheck disable=SC2086
+        apt-get install -y --no-install-recommends $APT_MISSING \
+          || log "    Warning: apt-get install failed for:$APT_MISSING"
+      fi
+
+      ${concatMapStringsSep "\n" (p: ''
+        if dpkg -s "${p}" 2>/dev/null | grep -q "^Status: install ok installed"; then
+          log "  Removing apt package: ${p}"
+          apt-get remove -y "${p}" || log "    Warning: apt-get remove failed for ${p}"
+        fi
+      '') cfg.apt.absent}
+    ''}
+
     # Step 10: Install/update pull mode (if enabled)
     ${optionalString pullModeEnabled ''
       log "Installing pull mode..."
@@ -943,6 +991,7 @@ in
           echo '${directoriesData}' > $out/directories.json
           echo '${healthChecksData}' > $out/health-checks.json
           echo '${secretsMetadata}' > $out/secrets.json
+          echo '${aptData}' > $out/apt.json
           echo '${manifestHash}' > $out/manifest-hash
 
           # Create bin symlinks for convenience

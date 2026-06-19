@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -98,6 +99,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(rollbackCmd())
 	cmd.AddCommand(statusCmd())
 	cmd.AddCommand(osUpdateCmd())
+	cmd.AddCommand(nixCmd())
 	cmd.AddCommand(rebootCmd())
 	cmd.AddCommand(cacheCmd())
 	cmd.AddCommand(secretsCmd())
@@ -662,6 +664,7 @@ Subcommands:
 	cmd.AddCommand(osUpdatePolicyCmd())
 	cmd.AddCommand(osUpdateHoldCmd())
 	cmd.AddCommand(osUpdateUnholdCmd())
+	cmd.AddCommand(osUpdateReleaseUpgradeCmd())
 
 	return cmd
 }
@@ -1078,6 +1081,427 @@ func osUpdateUnholdCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func osUpdateReleaseUpgradeCmd() *cobra.Command {
+	var (
+		only         string
+		target       string
+		allowEOL     bool
+		nextCodename string
+		stopUnits    []string
+		preHook      string
+		postHook     string
+		noReboot     bool
+		assumeYes    bool
+		checkOnly    bool
+		pollEvery    time.Duration
+		waitTimeout  time.Duration
+		minFreeBoot  int64
+	)
+
+	cmd := &cobra.Command{
+		Use:   "release-upgrade",
+		Short: "Upgrade Ubuntu hosts to a new distro release (e.g. 26.04 LTS)",
+		Long: `Orchestrate a serial, per-host Ubuntu release upgrade (do-release-upgrade).
+
+For each Ubuntu host, in turn:
+  1. check the available release + free disk
+  2. (unless --check) run pre-hook (stop --stop-units, drain, ...), fully patch
+     the current release, then launch the upgrade DETACHED under a transient
+     systemd unit (survives SSH drops) and stream progress
+  3. reboot and wait for the host to return
+  4. verify the new release and run the post-hook (uncordon, ...)
+
+EOL releases cannot use do-release-upgrade; pass --allow-eol together with
+--next-codename to instead rewrite the apt sources codename and full-upgrade.
+Always serial — one host at a time — to protect shared services.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+			hosts = filterUbuntuHosts(hosts)
+			if only != "" {
+				var sel []*inventory.Host
+				for _, h := range hosts {
+					if h.Name == only {
+						sel = append(sel, h)
+					}
+				}
+				if len(sel) == 0 {
+					return fmt.Errorf("host %q not found among Ubuntu hosts", only)
+				}
+				hosts = sel
+			}
+			if len(hosts) == 0 {
+				fmt.Println("No Ubuntu hosts found")
+				return nil
+			}
+
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+			updater := osupdate.NewUpdater()
+
+			preHookFull := preHook
+			if len(stopUnits) > 0 {
+				stop := fmt.Sprintf("systemctl stop %s || true", strings.Join(stopUnits, " "))
+				if preHookFull != "" {
+					preHookFull = stop + "; " + preHookFull
+				} else {
+					preHookFull = stop
+				}
+			}
+
+			fmt.Printf("Release-upgrade plan for %d host(s) [serial]:\n\n", len(hosts))
+
+			for _, host := range hosts {
+				fmt.Printf("=== %s (%s) ===\n", host.Name, host.Addr)
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  connection failed: %v\n\n", err)
+					continue
+				}
+
+				info, err := updater.CheckReleaseInfo(ctx, client)
+				if err != nil {
+					fmt.Printf("  check failed: %v\n\n", err)
+					continue
+				}
+				eolNote := ""
+				if info.RunningEOL {
+					eolNote = " [running release is EOL]"
+				}
+				fmt.Printf("  current: %s (%s)%s  free /: %d MiB  free /boot: %d MiB  target: %q\n",
+					info.CurrentVersion, info.Codename, eolNote, info.FreeRootMB, info.FreeBootMB, info.TargetRelease)
+
+				if checkOnly {
+					fmt.Println()
+					continue
+				}
+
+				// /boot preflight up front — a too-small /boot breaks the prepare
+				// full-upgrade (new kernel initramfs) before we ever reach the
+				// release upgrade. Better to flag it here than half-configure a kernel.
+				cfgBoot := osupdate.DefaultReleaseUpgradeConfig()
+				if minFreeBoot >= 0 {
+					cfgBoot.MinFreeBootMB = minFreeBoot
+				}
+				if cfgBoot.MinFreeBootMB > 0 && info.FreeBootMB > 0 && info.FreeBootMB < cfgBoot.MinFreeBootMB {
+					fmt.Printf("  SKIP: only %d MiB free on /boot (need ~%d). Remove old kernels, set initramfs MODULES=dep, or lower --min-free-boot.\n\n",
+						info.FreeBootMB, cfgBoot.MinFreeBootMB)
+					continue
+				}
+
+				// Decision: a target from do-release-upgrade drives the supported
+				// path (works even from an EOL release). Only a stranded EOL host
+				// (no target) needs the --allow-eol codename-rewrite fallback.
+				if info.TargetRelease == "" {
+					if info.RunningEOL {
+						if !allowEOL || nextCodename == "" {
+							fmt.Printf("  SKIP: EOL with no upgrade target; pass --allow-eol --next-codename <name>\n\n")
+							continue
+						}
+					} else {
+						fmt.Printf("  SKIP: already on the latest available release\n\n")
+						continue
+					}
+				}
+
+				// Determine the version we expect to land on, for verification.
+				wantVer := target
+				if wantVer == "" {
+					if m := regexp.MustCompile(`(\d+\.\d+)`).FindStringSubmatch(info.TargetRelease); m != nil {
+						wantVer = m[1]
+					}
+				}
+
+				if !assumeYes {
+					dest := info.TargetRelease
+					if dest == "" && info.RunningEOL {
+						dest = "codename " + nextCodename + " (EOL sources rewrite)"
+					}
+					fmt.Printf("  Proceed with upgrade of %s → %s? [y/N]: ", host.Name, dest)
+					var resp string
+					fmt.Scanln(&resp)
+					if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp)), "y") {
+						fmt.Printf("  skipped by operator\n\n")
+						continue
+					}
+				}
+
+				cfg := osupdate.DefaultReleaseUpgradeConfig()
+				cfg.AllowEOL = allowEOL
+				cfg.NextCodename = nextCodename
+				cfg.PreHook = preHookFull
+				cfg.PostHook = postHook
+				if minFreeBoot >= 0 {
+					cfg.MinFreeBootMB = minFreeBoot
+				}
+
+				fmt.Printf("  Preparing (set prompt, full-upgrade current release)...\n")
+				if err := updater.PrepareRelease(ctx, client); err != nil {
+					fmt.Printf("  prepare failed: %v\n\n", err)
+					continue
+				}
+
+				// do-release-upgrade refuses to run while a reboot is pending
+				// ("you have not rebooted after updating a package which requires
+				// a reboot"). The prepare full-upgrade can install a new kernel, so
+				// reboot into it first, then proceed. Also covers each hop of an
+				// EOL two-hop upgrade.
+				if rr, _ := updater.IsRebootRequired(ctx, client); rr {
+					fmt.Printf("  Reboot required after prepare (new kernel) — rebooting first...\n")
+					preRO := reboot.NewOrchestrator(func() reboot.RebootConfig {
+						c := reboot.DefaultRebootConfig()
+						c.AllowReboot = true
+						if waitTimeout > 0 {
+							c.WaitTimeout = waitTimeout
+						}
+						return c
+					}())
+					if err := preRO.ExecuteReboot(ctx, client, pool, host.Addr, host.SSHPort, host.SSHUser); err != nil {
+						fmt.Printf("  pre-upgrade reboot failed: %v\n\n", err)
+						continue
+					}
+					client, err = pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+					if err != nil {
+						fmt.Printf("  reconnect after pre-upgrade reboot failed: %v\n\n", err)
+						continue
+					}
+				}
+
+				fmt.Printf("  Launching detached release upgrade...\n")
+				if err := updater.StartReleaseUpgrade(ctx, client, info, cfg); err != nil {
+					fmt.Printf("  launch failed: %v\n\n", err)
+					continue
+				}
+
+				exit, err := updater.WaitForReleaseUpgrade(ctx, client, cfg, pollEvery, func(tail string) {
+					last := tail
+					if i := strings.LastIndex(tail, "\n"); i >= 0 {
+						last = tail[i+1:]
+					}
+					fmt.Printf("    … %s\n", last)
+				})
+				if err != nil {
+					fmt.Printf("  upgrade wait failed: %v (check %s on host)\n\n", err, cfg.LogPath)
+					continue
+				}
+				if exit != 0 {
+					fmt.Printf("  UPGRADE FAILED (exit %d) — host NOT rebooted. Inspect %s\n\n", exit, cfg.LogPath)
+					continue
+				}
+				fmt.Printf("  Upgrade process completed.\n")
+
+				if noReboot {
+					fmt.Printf("  --no-reboot set; reboot %s manually then verify.\n\n", host.Name)
+					continue
+				}
+
+				fmt.Printf("  Rebooting and waiting for host...\n")
+				rebootOrch := reboot.NewOrchestrator(func() reboot.RebootConfig {
+					c := reboot.DefaultRebootConfig()
+					c.AllowReboot = true
+					if waitTimeout > 0 {
+						c.WaitTimeout = waitTimeout
+					}
+					return c
+				}())
+				if err := rebootOrch.ExecuteReboot(ctx, client, pool, host.Addr, host.SSHPort, host.SSHUser); err != nil {
+					fmt.Printf("  reboot/wait failed: %v\n\n", err)
+					continue
+				}
+
+				client, err = pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  reconnect after reboot failed: %v\n\n", err)
+					continue
+				}
+				ok, got, _ := updater.VerifyRelease(ctx, client, wantVer)
+				if ok {
+					fmt.Printf("  VERIFIED: now on %s\n", got)
+				} else {
+					fmt.Printf("  WARNING: expected %s, host reports %s\n", wantVer, got)
+				}
+
+				if postHook != "" {
+					if _, err := client.ExecSudo(ctx, postHook); err != nil {
+						fmt.Printf("  post-hook warning: %v\n", err)
+					}
+				}
+				fmt.Printf("  %s done.\n\n", host.Name)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&only, "only", "", "Upgrade just this host (by inventory name)")
+	cmd.Flags().StringVar(&target, "target", "", "Expected resulting version for verification (e.g. 26.04); auto-detected if empty")
+	cmd.Flags().BoolVar(&allowEOL, "allow-eol", false, "Allow upgrading an EOL release via apt sources codename rewrite")
+	cmd.Flags().StringVar(&nextCodename, "next-codename", "", "Next release codename for the EOL path (e.g. questing)")
+	cmd.Flags().StringSliceVar(&stopUnits, "stop-units", nil, "Systemd units to stop before upgrading (e.g. llama-rocm-foo.service)")
+	cmd.Flags().StringVar(&preHook, "pre-hook", "", "Extra sudo command to run before the upgrade (e.g. k0s drain)")
+	cmd.Flags().StringVar(&postHook, "post-hook", "", "Sudo command to run after verify (e.g. k0s uncordon)")
+	cmd.Flags().BoolVar(&noReboot, "no-reboot", false, "Do not reboot after the upgrade completes")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Do not prompt for per-host confirmation")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only report current/target release per host; make no changes")
+	cmd.Flags().DurationVar(&pollEvery, "poll", 30*time.Second, "How often to poll the detached upgrade for progress")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for a host to return after reboot")
+	cmd.Flags().Int64Var(&minFreeBoot, "min-free-boot", -1, "Override required free /boot MiB (-1 = default 350; lower for MODULES=dep nodes)")
+
+	return cmd
+}
+
+func nixCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "nix",
+		Short: "Manage the Nix flake inputs (nixpkgs) for the fleet",
+		Long:  `Update and deploy the Nix package set the fleet is built from.`,
+	}
+	cmd.AddCommand(nixUpdateCmd())
+	return cmd
+}
+
+func nixUpdateCmd() *cobra.Command {
+	var (
+		doApply    bool
+		skipVerify bool
+		skipState  bool
+		inputs     []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update flake.lock (nixpkgs) and optionally deploy",
+		Long: `Run 'nix flake update' to refresh flake.lock, verify every host still
+evaluates with the new package set, and optionally build + deploy the result.
+
+By default only the 'nixpkgs' input is updated. Pass --input to target others
+(repeatable), or --input "" semantics are not supported — omit the flag to keep
+the default. Use --apply to roll the new closures out to all inventory hosts.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			flake, err := nix.ResolveFlakePath(flakePath)
+			if err != nil {
+				return err
+			}
+			evaluator, err := nix.NewEvaluator(flake)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Updating flake inputs: %s\n", strings.Join(inputs, ", "))
+			out, err := evaluator.FlakeUpdate(ctx, inputs...)
+			if out != "" {
+				fmt.Println(strings.TrimRight(out, "\n"))
+			}
+			if err != nil {
+				return err
+			}
+
+			if !strings.Contains(out, "Updated input") {
+				fmt.Println("\nflake.lock already up to date — nothing to do.")
+				return nil
+			}
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Verify every host still evaluates before we consider deploying.
+			if !skipVerify {
+				fmt.Printf("\nVerifying %d host(s) still evaluate...\n", len(hosts))
+				var broken []string
+				for _, host := range hosts {
+					if _, err := evaluator.EvalHost(ctx, host.Name, host.Base); err != nil {
+						fmt.Printf("  %s: EVAL FAILED - %v\n", host.Name, err)
+						broken = append(broken, host.Name)
+					} else if verbose {
+						fmt.Printf("  %s: ok\n", host.Name)
+					}
+				}
+				if len(broken) > 0 {
+					return fmt.Errorf("%d host(s) fail to evaluate with updated nixpkgs: %s (flake.lock left updated; fix or `git checkout flake.lock`)", len(broken), strings.Join(broken, ", "))
+				}
+				fmt.Printf("All %d host(s) evaluate cleanly.\n", len(hosts))
+			}
+
+			if !doApply {
+				fmt.Println("\nflake.lock updated. Run `nixfleet apply` (or re-run with --apply) to deploy.")
+				return nil
+			}
+
+			// Deploy: build + copy + activate each host. This intentionally does
+			// not run preflight/PKI (see `nixfleet apply` for the full pipeline);
+			// a package-set bump only needs the closure rolled out.
+			deployer := nix.NewDeployer(evaluator)
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+			stateMgr := state.NewManager()
+
+			fmt.Printf("\nDeploying updated closures to %d host(s)...\n\n", len(hosts))
+			success, failed := 0, 0
+			for _, host := range hosts {
+				fmt.Printf("Deploying to %s...\n", host.Name)
+				startTime := time.Now()
+
+				closure, err := evaluator.BuildHost(ctx, host.Name, host.Base)
+				if err != nil {
+					fmt.Printf("  Build failed: %v\n", err)
+					failed++
+					continue
+				}
+				if err := deployer.CopyToHost(ctx, closure, host); err != nil {
+					fmt.Printf("  Copy failed: %v\n", err)
+					failed++
+					continue
+				}
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  Connection failed: %v\n", err)
+					failed++
+					continue
+				}
+				switch host.Base {
+				case "ubuntu":
+					err = deployer.ActivateUbuntu(ctx, client, closure)
+				case "nixos":
+					err = deployer.ActivateNixOS(ctx, client, closure, "switch")
+				}
+				if err != nil {
+					fmt.Printf("  Activation failed: %v\n", err)
+					failed++
+					continue
+				}
+				if !skipState {
+					gen, _, _ := deployer.GetCurrentGeneration(ctx, client, host.Base)
+					if err := stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, time.Since(startTime)); err != nil {
+						fmt.Printf("  Warning: failed to update state - %v\n", err)
+					}
+				}
+				fmt.Printf("  Done! (%s)\n\n", time.Since(startTime).Round(time.Second))
+				success++
+			}
+			fmt.Printf("Summary: %d succeeded, %d failed\n", success, failed)
+			if failed > 0 {
+				return fmt.Errorf("%d host(s) failed to deploy", failed)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&doApply, "apply", false, "Build and deploy updated closures to all hosts after updating")
+	cmd.Flags().BoolVar(&skipVerify, "skip-verify", false, "Skip re-evaluating all hosts after the lock update")
+	cmd.Flags().BoolVar(&skipState, "skip-state", false, "Skip updating host state after deploy (with --apply)")
+	cmd.Flags().StringSliceVar(&inputs, "input", []string{"nixpkgs"}, "Flake inputs to update (repeatable)")
+
+	return cmd
 }
 
 func rebootCmd() *cobra.Command {

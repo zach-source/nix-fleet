@@ -348,6 +348,40 @@ in
       description = "Packages to install via Nix profile";
     };
 
+    # Declarative APT package management (Ubuntu hosts only).
+    #
+    # Complements nixfleet.packages (Nix profile) for things that must live in
+    # the host's native package set — kernel/DKMS modules, GPU userspace (ROCm),
+    # drivers, anything that has to integrate with the distro. The Ubuntu backend
+    # reconciles these in the activation script; the NixOS/Darwin backends ignore
+    # them. Reconciliation is drift-only: apt is touched solely when a declared
+    # package is missing/present-but-should-be-absent/not-held.
+    apt = {
+      packages = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [
+          "nfs-common"
+          "rocm-smi"
+        ];
+        description = "APT packages to ensure are installed.";
+      };
+
+      absent = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "snapd" ];
+        description = "APT packages to ensure are removed.";
+      };
+
+      hold = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "linux-image-generic" ];
+        description = "APT packages to mark held (apt-mark hold) so upgrades skip them.";
+      };
+    };
+
     # Managed files
     files = mkOption {
       type = types.attrsOf fileType;

@@ -257,6 +257,27 @@ func (e *Evaluator) FlakePath() string {
 	return e.flakePath
 }
 
+// FlakeUpdate runs `nix flake update [inputs...]` against the flake, refreshing
+// flake.lock. With no inputs it updates every input; otherwise only the named
+// ones (e.g. "nixpkgs"). Returns the combined nix output, which on a real
+// change includes the "Updated input ...: 'old' → 'new'" lines.
+func (e *Evaluator) FlakeUpdate(ctx context.Context, inputs ...string) (string, error) {
+	args := []string{"flake", "update"}
+	args = append(args, inputs...)
+	// nix flake update operates on the flake in the current dir; point it at ours.
+	cmd := exec.CommandContext(ctx, e.nixBin, args...)
+	cmd.Dir = e.flakePath
+
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+
+	if err := cmd.Run(); err != nil {
+		return combined.String(), fmt.Errorf("nix flake update failed: %w", err)
+	}
+	return combined.String(), nil
+}
+
 // ResolveFlakePath resolves a potentially relative flake path
 func ResolveFlakePath(path string) (string, error) {
 	if filepath.IsAbs(path) {
