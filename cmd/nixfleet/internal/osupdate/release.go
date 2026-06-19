@@ -152,7 +152,10 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 	}
 
 	if cfg.PreHook != "" {
-		res, err := client.ExecSudo(ctx, cfg.PreHook)
+		// bash -c wrap so a compound hook (e.g. "systemctl stop a b || true; drain")
+		// runs entirely as root, not just its first command (ExecSudo only sudo's
+		// the leading token).
+		res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", shQuote(cfg.PreHook)))
 		if err != nil {
 			return fmt.Errorf("pre-upgrade hook failed: %w", err)
 		}
@@ -194,14 +197,19 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 
 	// Detach via systemd-run so the long upgrade outlives our SSH session, with
 	// all output captured to LogPath for polling/forensics.
+	//
+	// The whole launch is wrapped in `bash -c` because ExecSudo only prepends a
+	// single `sudo` token: an unwrapped `mkdir && systemd-run` would run
+	// systemd-run unprivileged (polkit: "Interactive authentication required").
+	// `sudo bash -c '<all of it>'` runs every part as root.
 	logDir := cfg.LogPath[:strings.LastIndex(cfg.LogPath, "/")]
-	launch := fmt.Sprintf(
+	inner := fmt.Sprintf(
 		"mkdir -p %s && systemd-run --unit=%s --collect --setenv=DEBIAN_FRONTEND=noninteractive "+
 			"/bin/bash -c %s",
 		shQuote(logDir), shQuote(cfg.Unit),
 		shQuote(fmt.Sprintf("{ %s ; } > %s 2>&1", upgradeCmd, cfg.LogPath)),
 	)
-	res, err := client.ExecSudo(ctx, launch)
+	res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", shQuote(inner)))
 	if err != nil {
 		return fmt.Errorf("launching detached upgrade: %w", err)
 	}
