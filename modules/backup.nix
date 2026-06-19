@@ -334,8 +334,12 @@
       text = ''
         [Unit]
         Description=ZFS snapshot backup to NFS
+        # Wants, not Requires: the script snapshots + prunes locally regardless of
+        # the backup mount (only the off-host send needs it). A hard Requires meant
+        # that when the backup NAS was unreachable the service never ran at all, so
+        # nothing pruned and the pools filled. After= keeps ordering when present.
         After=mnt-backup.mount
-        Requires=mnt-backup.mount
+        Wants=mnt-backup.mount
 
         [Service]
         Type=oneshot
