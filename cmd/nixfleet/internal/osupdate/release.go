@@ -28,6 +28,7 @@ type ReleaseInfo struct {
 	RunningEOL     bool
 	ToolAvailable  bool  // do-release-upgrade present
 	FreeRootMB     int64 // free space on / in MiB
+	FreeBootMB     int64 // free space on /boot in MiB (often a small separate partition)
 	RebootRequired bool
 }
 
@@ -47,6 +48,9 @@ type ReleaseUpgradeConfig struct {
 	PostHook string
 	// MinFreeRootMB aborts the upgrade if / has less free space than this.
 	MinFreeRootMB int64
+	// MinFreeBootMB aborts the upgrade if /boot has less free space than this.
+	// A new kernel + (MODULES=most) initramfs needs ~200-350 MiB of /boot.
+	MinFreeBootMB int64
 	// LogPath is the host-side log for the detached upgrade.
 	LogPath string
 	// Unit is the transient systemd unit name the upgrade runs under.
@@ -57,6 +61,7 @@ type ReleaseUpgradeConfig struct {
 func DefaultReleaseUpgradeConfig() ReleaseUpgradeConfig {
 	return ReleaseUpgradeConfig{
 		MinFreeRootMB: 8192, // ~8 GiB headroom for downloaded+unpacked packages
+		MinFreeBootMB: 350,  // one new kernel + initramfs (MODULES=most) + headroom
 		LogPath:       "/var/log/nixfleet/release-upgrade.log",
 		Unit:          "nixfleet-release-upgrade",
 	}
@@ -97,6 +102,12 @@ func (u *Updater) CheckReleaseInfo(ctx context.Context, client *ssh.Client) (*Re
 	if df, err := client.Exec(ctx, "df -Pm / | awk 'NR==2{print $4}'"); err == nil {
 		info.FreeRootMB, _ = strconv.ParseInt(strings.TrimSpace(df.Stdout), 10, 64)
 	}
+	// /boot is frequently a small dedicated partition (or a ZFS bpool); a release
+	// upgrade installs a new kernel + initramfs there, so it must be checked
+	// separately from /. A too-small /boot is a classic upgrade-blocker.
+	if df, err := client.Exec(ctx, "df -Pm /boot | awk 'NR==2{print $4}'"); err == nil {
+		info.FreeBootMB, _ = strconv.ParseInt(strings.TrimSpace(df.Stdout), 10, 64)
+	}
 	info.RebootRequired, _ = u.IsRebootRequired(ctx, client)
 
 	return info, nil
@@ -135,6 +146,9 @@ func (u *Updater) PrepareRelease(ctx context.Context, client *ssh.Client) error 
 func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, info *ReleaseInfo, cfg ReleaseUpgradeConfig) error {
 	if cfg.MinFreeRootMB > 0 && info.FreeRootMB > 0 && info.FreeRootMB < cfg.MinFreeRootMB {
 		return fmt.Errorf("insufficient free space on /: %d MiB < required %d MiB", info.FreeRootMB, cfg.MinFreeRootMB)
+	}
+	if cfg.MinFreeBootMB > 0 && info.FreeBootMB > 0 && info.FreeBootMB < cfg.MinFreeBootMB {
+		return fmt.Errorf("insufficient free space on /boot: %d MiB < required %d MiB (remove old kernels or slim the initramfs)", info.FreeBootMB, cfg.MinFreeBootMB)
 	}
 
 	if cfg.PreHook != "" {

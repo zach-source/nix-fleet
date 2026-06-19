@@ -1173,11 +1173,21 @@ Always serial — one host at a time — to protect shared services.`,
 				if info.RunningEOL {
 					eolNote = " [running release is EOL]"
 				}
-				fmt.Printf("  current: %s (%s)%s  free /: %d MiB  target: %q\n",
-					info.CurrentVersion, info.Codename, eolNote, info.FreeRootMB, info.TargetRelease)
+				fmt.Printf("  current: %s (%s)%s  free /: %d MiB  free /boot: %d MiB  target: %q\n",
+					info.CurrentVersion, info.Codename, eolNote, info.FreeRootMB, info.FreeBootMB, info.TargetRelease)
 
 				if checkOnly {
 					fmt.Println()
+					continue
+				}
+
+				// /boot preflight up front — a too-small /boot breaks the prepare
+				// full-upgrade (new kernel initramfs) before we ever reach the
+				// release upgrade. Better to flag it here than half-configure a kernel.
+				cfgBoot := osupdate.DefaultReleaseUpgradeConfig()
+				if info.FreeBootMB > 0 && info.FreeBootMB < cfgBoot.MinFreeBootMB {
+					fmt.Printf("  SKIP: only %d MiB free on /boot (need ~%d). Remove old kernels or set initramfs MODULES=dep first.\n\n",
+						info.FreeBootMB, cfgBoot.MinFreeBootMB)
 					continue
 				}
 
