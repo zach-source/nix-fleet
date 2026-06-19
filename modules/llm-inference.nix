@@ -299,29 +299,42 @@ let
     in
     "${svc.binary} \\\n  ${concatStringsSep " \\\n  " flags}";
 
-  # Generate systemd unit text
-  mkUnit = name: svc: ''
-    [Unit]
-    Description=${svc.description}
-    After=network.target
-    Wants=dev-kfd.device
-    After=dev-kfd.device
+  # Generate systemd unit text.
+  #
+  # `index` is this service's position among the host's inference services and
+  # drives a startup stagger: multiple llama-server processes hitting the ROCm
+  # allocator at the same instant (e.g. all cold-starting on boot, or all
+  # restarting on apply) race and SEGV during model load on the shared iGPU.
+  # A per-service `sleep (index * startStaggerSec)` spreads their inits apart so
+  # the GPU memory allocations don't collide. index 0 gets no delay.
+  mkUnit =
+    name: svc: index:
+    let
+      staggerSec = index * cfg.startStaggerSec;
+    in
+    ''
+      [Unit]
+      Description=${svc.description}
+      After=network.target
+      Wants=dev-kfd.device
+      After=dev-kfd.device
 
-    [Service]
-    Type=simple
-    User=deploy
-    SupplementaryGroups=render video
-    Environment=LD_LIBRARY_PATH=${svc.ldLibraryPath}
-    ${concatStringsSep "\n" (mapAttrsToList (k: v: "Environment=${k}=${v}") svc.rocmEnv)}
-    ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/kfd ] && exit 0; sleep 1; done; echo "WARNING: /dev/kfd not found after 30s"'
-    ExecStart=${mkExecStart name svc}
-    Restart=on-failure
-    RestartSec=10
-    LimitMEMLOCK=infinity
+      [Service]
+      Type=simple
+      User=deploy
+      SupplementaryGroups=render video
+      Environment=LD_LIBRARY_PATH=${svc.ldLibraryPath}
+      ${concatStringsSep "\n" (mapAttrsToList (k: v: "Environment=${k}=${v}") svc.rocmEnv)}
+      ${optionalString (staggerSec > 0) "ExecStartPre=/bin/sleep ${toString staggerSec}"}
+      ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/kfd ] && exit 0; sleep 1; done; echo "WARNING: /dev/kfd not found after 30s"'
+      ExecStart=${mkExecStart name svc}
+      Restart=on-failure
+      RestartSec=10
+      LimitMEMLOCK=infinity
 
-    [Install]
-    WantedBy=multi-user.target
-  '';
+      [Install]
+      WantedBy=multi-user.target
+    '';
 
 in
 {
@@ -334,6 +347,18 @@ in
       description = "Path to ROCm-enabled llama.cpp libs";
     };
 
+    startStaggerSec = mkOption {
+      type = types.int;
+      default = 15;
+      description = ''
+        Seconds to stagger each successive inference service's start, so that
+        multiple llama-server processes do not initialise the shared iGPU
+        (ROCm allocator) at the same instant and SEGV during model load. The
+        Nth service (by sorted name) sleeps N*startStaggerSec before launching.
+        Set to 0 to disable staggering.
+      '';
+    };
+
     services = mkOption {
       type = types.attrsOf serviceType;
       default = { };
@@ -342,12 +367,16 @@ in
   };
 
   config = mkIf cfg.enable {
-    nixfleet.systemd.units = mapAttrs' (
-      name: svc:
-      nameValuePair "llama-rocm-${name}.service" {
-        text = mkUnit name svc;
-        enabled = svc.enable;
-      }
-    ) cfg.services;
+    # imap0 over the sorted service names gives each a stable index for the
+    # startup stagger (see mkUnit).
+    nixfleet.systemd.units = listToAttrs (
+      imap0 (
+        index: name:
+        nameValuePair "llama-rocm-${name}.service" {
+          text = mkUnit name cfg.services.${name} index;
+          enabled = cfg.services.${name}.enable;
+        }
+      ) (attrNames cfg.services)
+    );
   };
 }
