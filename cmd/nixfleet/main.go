@@ -98,6 +98,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(rollbackCmd())
 	cmd.AddCommand(statusCmd())
 	cmd.AddCommand(osUpdateCmd())
+	cmd.AddCommand(nixCmd())
 	cmd.AddCommand(rebootCmd())
 	cmd.AddCommand(cacheCmd())
 	cmd.AddCommand(secretsCmd())
@@ -1078,6 +1079,154 @@ func osUpdateUnholdCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func nixCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "nix",
+		Short: "Manage the Nix flake inputs (nixpkgs) for the fleet",
+		Long:  `Update and deploy the Nix package set the fleet is built from.`,
+	}
+	cmd.AddCommand(nixUpdateCmd())
+	return cmd
+}
+
+func nixUpdateCmd() *cobra.Command {
+	var (
+		doApply    bool
+		skipVerify bool
+		skipState  bool
+		inputs     []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update flake.lock (nixpkgs) and optionally deploy",
+		Long: `Run 'nix flake update' to refresh flake.lock, verify every host still
+evaluates with the new package set, and optionally build + deploy the result.
+
+By default only the 'nixpkgs' input is updated. Pass --input to target others
+(repeatable), or --input "" semantics are not supported — omit the flag to keep
+the default. Use --apply to roll the new closures out to all inventory hosts.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			flake, err := nix.ResolveFlakePath(flakePath)
+			if err != nil {
+				return err
+			}
+			evaluator, err := nix.NewEvaluator(flake)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Updating flake inputs: %s\n", strings.Join(inputs, ", "))
+			out, err := evaluator.FlakeUpdate(ctx, inputs...)
+			if out != "" {
+				fmt.Println(strings.TrimRight(out, "\n"))
+			}
+			if err != nil {
+				return err
+			}
+
+			if !strings.Contains(out, "Updated input") {
+				fmt.Println("\nflake.lock already up to date — nothing to do.")
+				return nil
+			}
+
+			_, hosts, err := loadInventoryAndHosts(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Verify every host still evaluates before we consider deploying.
+			if !skipVerify {
+				fmt.Printf("\nVerifying %d host(s) still evaluate...\n", len(hosts))
+				var broken []string
+				for _, host := range hosts {
+					if _, err := evaluator.EvalHost(ctx, host.Name, host.Base); err != nil {
+						fmt.Printf("  %s: EVAL FAILED - %v\n", host.Name, err)
+						broken = append(broken, host.Name)
+					} else if verbose {
+						fmt.Printf("  %s: ok\n", host.Name)
+					}
+				}
+				if len(broken) > 0 {
+					return fmt.Errorf("%d host(s) fail to evaluate with updated nixpkgs: %s (flake.lock left updated; fix or `git checkout flake.lock`)", len(broken), strings.Join(broken, ", "))
+				}
+				fmt.Printf("All %d host(s) evaluate cleanly.\n", len(hosts))
+			}
+
+			if !doApply {
+				fmt.Println("\nflake.lock updated. Run `nixfleet apply` (or re-run with --apply) to deploy.")
+				return nil
+			}
+
+			// Deploy: build + copy + activate each host. This intentionally does
+			// not run preflight/PKI (see `nixfleet apply` for the full pipeline);
+			// a package-set bump only needs the closure rolled out.
+			deployer := nix.NewDeployer(evaluator)
+			pool := ssh.NewPool(nil)
+			defer pool.Close()
+			stateMgr := state.NewManager()
+
+			fmt.Printf("\nDeploying updated closures to %d host(s)...\n\n", len(hosts))
+			success, failed := 0, 0
+			for _, host := range hosts {
+				fmt.Printf("Deploying to %s...\n", host.Name)
+				startTime := time.Now()
+
+				closure, err := evaluator.BuildHost(ctx, host.Name, host.Base)
+				if err != nil {
+					fmt.Printf("  Build failed: %v\n", err)
+					failed++
+					continue
+				}
+				if err := deployer.CopyToHost(ctx, closure, host); err != nil {
+					fmt.Printf("  Copy failed: %v\n", err)
+					failed++
+					continue
+				}
+				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
+				if err != nil {
+					fmt.Printf("  Connection failed: %v\n", err)
+					failed++
+					continue
+				}
+				switch host.Base {
+				case "ubuntu":
+					err = deployer.ActivateUbuntu(ctx, client, closure)
+				case "nixos":
+					err = deployer.ActivateNixOS(ctx, client, closure, "switch")
+				}
+				if err != nil {
+					fmt.Printf("  Activation failed: %v\n", err)
+					failed++
+					continue
+				}
+				if !skipState {
+					gen, _, _ := deployer.GetCurrentGeneration(ctx, client, host.Base)
+					if err := stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, time.Since(startTime)); err != nil {
+						fmt.Printf("  Warning: failed to update state - %v\n", err)
+					}
+				}
+				fmt.Printf("  Done! (%s)\n\n", time.Since(startTime).Round(time.Second))
+				success++
+			}
+			fmt.Printf("Summary: %d succeeded, %d failed\n", success, failed)
+			if failed > 0 {
+				return fmt.Errorf("%d host(s) failed to deploy", failed)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&doApply, "apply", false, "Build and deploy updated closures to all hosts after updating")
+	cmd.Flags().BoolVar(&skipVerify, "skip-verify", false, "Skip re-evaluating all hosts after the lock update")
+	cmd.Flags().BoolVar(&skipState, "skip-state", false, "Skip updating host state after deploy (with --apply)")
+	cmd.Flags().StringSliceVar(&inputs, "input", []string{"nixpkgs"}, "Flake inputs to update (repeatable)")
+
+	return cmd
 }
 
 func rebootCmd() *cobra.Command {
