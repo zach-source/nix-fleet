@@ -334,6 +334,11 @@ let
       ExecStart=${mkExecStart name svc}
       Restart=on-failure
       RestartSec=10
+      # TimeoutStartSec must exceed the stagger sleep (which runs in ExecStartPre
+      # and counts toward the start timeout) plus the /dev/kfd poll, or the
+      # higher-index services get killed mid-stagger with result 'timeout' and
+      # crash-loop. systemd's 90s default is too small once the stagger grows.
+      TimeoutStartSec=${toString (staggerSec + 120)}
       LimitMEMLOCK=infinity
 
       [Install]
