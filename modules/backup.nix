@@ -1,18 +1,24 @@
 # NixFleet Backup Module
-# Configures SMB personal drive mounts, NFS backup mounts, and ZFS snapshot backups
+# Mounts the Synology NFS backup share and ships ZFS snapshots to it.
 {
   config,
   pkgs,
   lib,
   ...
 }:
+let
+  # Synology NFS backup target. The share is on the 192.168.1.x management
+  # subnet (the gtr/gti hosts route to it). NOTE: the export is currently `*`
+  # (allow-all) on the NAS — tighten it to the host source IPs on the Synology.
+  nfsServer = "192.168.1.67";
+  nfsExport = "/volume1/k0s-gti";
+in
 {
   # ============================================================================
   # Packages required for backup operations
   # ============================================================================
   nixfleet.packages = with pkgs; [
-    cifs-utils # SMB/CIFS mounting
-    # nfs-utils # NFS mounting (not needed, using SMB)
+    nfs-utils # NFS mounting (mount.nfs / showmount)
     pv # Progress viewer for zfs send
     mbuffer # Buffer for network transfers
   ];
@@ -21,12 +27,6 @@
   # Mount directories
   # ============================================================================
   nixfleet.directories = {
-    # SMB mount point for personal drives
-    "/mnt/personal" = {
-      mode = "0755";
-      owner = "root";
-      group = "root";
-    };
     # NFS mount point for backups
     "/mnt/backup" = {
       mode = "0755";
@@ -41,18 +41,7 @@
     };
   };
 
-  # ============================================================================
-  # SMB credentials file (decrypted from age secret)
-  # ============================================================================
   nixfleet.files = {
-    "/etc/nixfleet/smb-credentials" = {
-      mode = "0600";
-      owner = "root";
-      group = "root";
-      # This will be populated by secrets deployment
-      text = "# Placeholder - deploy with: nixfleet secrets deploy";
-    };
-
     # ============================================================================
     # ZFS Snapshot Backup Script
     # ============================================================================
@@ -73,8 +62,11 @@
         LOG_FILE="/var/log/zfs-backup.log"
         RETENTION_DAYS=30
 
+        # Log to stderr (and the file), NOT stdout: create_snapshot's result is
+        # captured via $(...), so any log output on stdout would be slurped into
+        # the snapshot name ("invalid character '[' in name").
         log() {
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" >&2
         }
 
         create_snapshot() {
@@ -175,136 +167,28 @@
         main "$@"
       '';
     };
-
-    # ============================================================================
-    # Mount Script (handles both SMB and NFS)
-    # ============================================================================
-    "/usr/local/bin/nixfleet-mount" = {
-      mode = "0755";
-      owner = "root";
-      group = "root";
-      text = ''
-        #!/bin/bash
-        set -euo pipefail
-
-        # Mount SMB personal drive
-        mount_smb() {
-          local mount_point="/mnt/personal"
-          local smb_server="192.168.3.95"
-          local smb_share="Personal-Drive"
-          local creds_file="/etc/nixfleet/smb-credentials"
-
-          if mountpoint -q "$mount_point"; then
-            echo "SMB already mounted at $mount_point"
-            return 0
-          fi
-
-          if [ ! -f "$creds_file" ]; then
-            echo "ERROR: SMB credentials not found at $creds_file"
-            echo "Deploy secrets with: nixfleet secrets deploy"
-            return 1
-          fi
-
-          echo "Mounting SMB share //$smb_server/$smb_share to $mount_point"
-          mount -t cifs "//$smb_server/$smb_share" "$mount_point" \
-            -o credentials="$creds_file",uid=1000,gid=1000,file_mode=0644,dir_mode=0755
-        }
-
-        # Mount SMB backup drive
-        mount_backup() {
-          local mount_point="/mnt/backup"
-          local smb_server="192.168.3.95"
-          local smb_share="NFS_Drive"
-          local creds_file="/etc/nixfleet/smb-credentials"
-
-          if mountpoint -q "$mount_point"; then
-            echo "Backup already mounted at $mount_point"
-            return 0
-          fi
-
-          if [ ! -f "$creds_file" ]; then
-            echo "ERROR: SMB credentials not found at $creds_file"
-            return 1
-          fi
-
-          echo "Mounting SMB share //$smb_server/$smb_share to $mount_point"
-          mount -t cifs "//$smb_server/$smb_share" "$mount_point" \
-            -o credentials="$creds_file",uid=1000,gid=1000,file_mode=0644,dir_mode=0755
-        }
-
-        # Unmount all
-        unmount_all() {
-          echo "Unmounting all NixFleet mounts..."
-          umount /mnt/personal 2>/dev/null || true
-          umount /mnt/backup 2>/dev/null || true
-        }
-
-        case "''${1:-all}" in
-          personal)
-            mount_smb
-            ;;
-          backup)
-            mount_backup
-            ;;
-          all)
-            mount_smb
-            mount_backup
-            ;;
-          unmount|umount)
-            unmount_all
-            ;;
-          status)
-            echo "=== Mount Status ==="
-            mountpoint -q /mnt/personal && echo "Personal (SMB): mounted" || echo "Personal (SMB): not mounted"
-            mountpoint -q /mnt/backup && echo "Backup (SMB): mounted" || echo "Backup (SMB): not mounted"
-            ;;
-          *)
-            echo "Usage: $0 {personal|backup|all|unmount|status}"
-            exit 1
-            ;;
-        esac
-      '';
-    };
   };
 
   # ============================================================================
   # Systemd units for automatic mounting and backup
   # ============================================================================
   nixfleet.systemd.units = {
-    # SMB mount service
-    "mnt-personal.mount" = {
-      enabled = true;
-      text = ''
-        [Unit]
-        Description=SMB mount for personal drive
-        After=network-online.target
-        Wants=network-online.target
-
-        [Mount]
-        What=//192.168.3.95/Personal-Drive
-        Where=/mnt/personal
-        Type=cifs
-        Options=credentials=/etc/nixfleet/smb-credentials,uid=1000,gid=1000,file_mode=0644,dir_mode=0755,_netdev,nofail
-
-        [Install]
-        WantedBy=multi-user.target
-      '';
-    };
-
-    # SMB backup mount service
+    # NFS backup mount (Synology)
     "mnt-backup.mount" = {
       enabled = true;
       text = ''
         [Unit]
-        Description=SMB mount for backups
+        Description=NFS mount for backups (Synology ${nfsServer})
         After=network-online.target
         Wants=network-online.target
 
         [Mount]
-        What=//192.168.3.95/NFS_Drive
+        What=${nfsServer}:${nfsExport}
         Where=/mnt/backup
-        Type=cifs
-        Options=credentials=/etc/nixfleet/smb-credentials,uid=1000,gid=1000,file_mode=0644,dir_mode=0755,_netdev,nofail
+        Type=nfs
+        # nofail/_netdev: don't block boot if the NAS is unreachable. hard: retry
+        # rather than error out on transient NAS hiccups during a long zfs send.
+        Options=rw,hard,nofail,_netdev,noatime
 
         [Install]
         WantedBy=multi-user.target
@@ -354,12 +238,7 @@
   # Health checks
   # ============================================================================
   nixfleet.healthChecks = {
-    smb-mount = {
-      type = "command";
-      command = "mountpoint -q /mnt/personal";
-      timeout = 5;
-    };
-    nfs-mount = {
+    nfs-backup-mount = {
       type = "command";
       command = "mountpoint -q /mnt/backup";
       timeout = 5;

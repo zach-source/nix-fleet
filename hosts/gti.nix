@@ -12,6 +12,7 @@
     ../modules/sysctl.nix
     ../modules/ufw.nix
     ../modules/iscsi.nix
+    ../modules/backup.nix
   ];
 
   nixfleet = {
