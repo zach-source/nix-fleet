@@ -115,6 +115,7 @@ It provides Ansible-like UX for:
 	cmd.AddCommand(spireCmd())
 	cmd.AddCommand(juicefsCmd())
 	cmd.AddCommand(stateCmd())
+	cmd.AddCommand(synologyCmd())
 
 	return cmd
 }

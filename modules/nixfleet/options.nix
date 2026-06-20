@@ -331,8 +331,9 @@ in
         type = types.enum [
           "ubuntu"
           "nixos"
+          "synology"
         ];
-        description = "Base OS type";
+        description = "Base OS type. 'synology' hosts are managed via the DSM API (Model B), not SSH.";
       };
 
       addr = mkOption {
