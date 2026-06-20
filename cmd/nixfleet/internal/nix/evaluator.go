@@ -81,6 +81,24 @@ func (e *Evaluator) EvalHost(ctx context.Context, hostName string, base string) 
 	}, nil
 }
 
+// EvalAttrJSON evaluates an arbitrary flake attribute to JSON (e.g.
+// "nixfleetConfigurations.znas.synology"). Used by API-driven backends that
+// reconcile a declarative spec rather than building/copying a closure.
+func (e *Evaluator) EvalAttrJSON(ctx context.Context, attr string) ([]byte, error) {
+	flakeRef := fmt.Sprintf("%s#%s", e.flakePath, attr)
+	cmd := exec.CommandContext(ctx, e.nixBin, "eval", "--json", flakeRef)
+	cmd.Dir = e.flakePath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("nix eval %s failed: %w\nstderr: %s", attr, err, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}
+
 // BuildHost builds a host configuration and returns the store path
 func (e *Evaluator) BuildHost(ctx context.Context, hostName string, base string) (*HostClosure, error) {
 	var attr string

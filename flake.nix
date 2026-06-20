@@ -84,6 +84,11 @@
           manifestHash = evaluated.config.nixfleet.ubuntu.manifestHash;
           hostName = evaluated.config.nixfleet.host.name;
           base = evaluated.config.nixfleet.host.base;
+
+          # Declarative Synology DSM state (Model B) — reconciled by the CLI over
+          # the DSM API. Lazy: only forced by `nix eval … .synology`, so ubuntu
+          # hosts never build it.
+          synology = evaluated.config.nixfleet.synology;
         };
 
       # Create a NixOS configuration with NixFleet modules
@@ -276,6 +281,10 @@
         };
         gtr-153 = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr-153.nix ];
+        };
+        # Synology NAS — managed via the DSM API (Model B), not SSH.
+        znas = mkNixFleetConfiguration {
+          modules = [ ./hosts/znas.nix ];
         };
       };
 

@@ -9,6 +9,7 @@
 {
   imports = [
     ./options.nix
+    ./synology.nix
     ../../backends/ubuntu/compile.nix
   ];
 
