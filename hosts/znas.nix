@@ -29,17 +29,20 @@
     iscsiLuns = [ ];
 
     # NFS exports. k0s-gti (/volume1/k0s-gti) is the cluster backup target the
-    # zfs/k0s backups write to (see modules/backup.nix). Adjust the client rule
-    # to match reality after the first `synology status`.
+    # zfs/k0s backups write to (see modules/backup.nix). These rules MATCH the
+    # live export (client "*", verified via `synology status`), so reconcile is
+    # a no-op. TODO security: tighten client "*" to the real mount source subnet
+    # once the node→.67 source IPs are confirmed (don't break the backup mount).
     nfsExports = [
       {
         name = "k0s-gti";
         rules = [
           {
-            client = "192.168.3.0/24";
+            client = "*";
             access = "rw";
             squash = "root_squash";
             secure = false;
+            async = true;
           }
         ];
       }

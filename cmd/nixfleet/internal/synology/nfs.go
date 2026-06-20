@@ -5,28 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
-// ActualShare is a shared folder as reported by DSM, including its NFS rules.
+// ActualShare is a shared folder as reported by SYNO.Core.Share list.
 type ActualShare struct {
-	Name     string          `json:"name"`
-	VolPath  string          `json:"vol_path"` // e.g. /volume1
-	NFSRules json.RawMessage `json:"nfs_rule"` // raw; schema varies by DSM version
+	Name    string `json:"name"`
+	VolPath string `json:"vol_path"` // e.g. /volume1
 }
 
-// HasNFS reports whether the share has any NFS rules configured.
-func (s ActualShare) HasNFS() bool {
-	t := strings.TrimSpace(string(s.NFSRules))
-	return t != "" && t != "null" && t != "[]"
-}
-
-// ListShares returns all shared folders with their NFS rules.
+// ListShares returns all shared folders.
 func (c *Client) ListShares(ctx context.Context) ([]ActualShare, error) {
-	q := url.Values{
-		// request the nfs_rule + volume info in the listing
-		"additional": {`["nfs_rule","vol_path"]`},
-	}
+	q := url.Values{"additional": {`["vol_path"]`}}
 	raw, err := c.get(ctx, "SYNO.Core.Share", "list", 1, q)
 	if err != nil {
 		return nil, fmt.Errorf("list shares: %w", err)
@@ -40,63 +31,112 @@ func (c *Client) ListShares(ctx context.Context) ([]ActualShare, error) {
 	return data.Shares, nil
 }
 
-// nfsRulePayload is DSM's per-client NFS rule. Field names follow DSM 7.x; if a
-// future DSM rejects this, capture the schema via `synology status --raw-nfs`
-// from an existing export and adjust.
-type nfsRulePayload struct {
-	Client      string `json:"client"`
-	Privilege   string `json:"privilege"` // "rw" | "ro"
-	Squash      string `json:"squash"`    // "root_squash" | "all_squash" | "no_mapping"
-	Security    string `json:"security"`  // "sys"
-	EnableAsync bool   `json:"enable_async"`
-	AllowSubdir bool   `json:"is_allow_subfolder"`
-	NonPrivPort bool   `json:"is_allow_nonprivileged_port"` // inverse of "secure"
+// DSMNFSRule is one NFS client rule as stored by DSM. Schema confirmed live
+// against SYNO.Core.FileServ.NFS.SharePrivilege (load/save, v1).
+type DSMNFSRule struct {
+	Client     string `json:"client"`
+	Privilege  string `json:"privilege"`   // "rw" | "ro"
+	RootSquash string `json:"root_squash"` // "root" | "all" | "no"
+	Async      bool   `json:"async"`
+	Insecure   bool   `json:"insecure"` // inverse of NFSRule.secure
+	Crossmnt   bool   `json:"crossmnt"` // allow subfolder mounts
+	Security   struct {
+		Sys               bool `json:"sys"`
+		Kerberos          bool `json:"kerberos"`
+		KerberosIntegrity bool `json:"kerberos_integrity"`
+		KerberosPrivacy   bool `json:"kerberos_privacy"`
+	} `json:"security_flavor"`
 }
 
-func (r NFSRule) toPayload() nfsRulePayload {
+const nfsPrivAPI = "SYNO.Core.FileServ.NFS.SharePrivilege"
+
+// LoadNFSRules returns the NFS rules for a share (nil if NFS isn't configured).
+func (c *Client) LoadNFSRules(ctx context.Context, shareName string) ([]DSMNFSRule, error) {
+	q := url.Values{"share_name": {shareName}, "clear": {"false"}}
+	raw, err := c.get(ctx, nfsPrivAPI, "load", 1, q)
+	if err != nil {
+		return nil, fmt.Errorf("load NFS rules for %q: %w", shareName, err)
+	}
+	var data struct {
+		Rule []DSMNFSRule `json:"rule"`
+	}
+	if err := unmarshalData(raw, &data); err != nil {
+		return nil, fmt.Errorf("decode NFS rules for %q: %w", shareName, err)
+	}
+	return data.Rule, nil
+}
+
+// SaveNFSRules sets the NFS rule list on a share (the declared set replaces
+// what's there). Destructive → caller gates on --apply. Confirmed via a no-op
+// round-trip; rules round-trip identically.
+func (c *Client) SaveNFSRules(ctx context.Context, shareName string, rules []DSMNFSRule) error {
+	b, err := json.Marshal(rules)
+	if err != nil {
+		return err
+	}
+	q := url.Values{"share_name": {shareName}, "clear": {"false"}, "rule": {string(b)}}
+	if _, err := c.get(ctx, nfsPrivAPI, "save", 1, q); err != nil {
+		return fmt.Errorf("save NFS rules on %q: %w", shareName, err)
+	}
+	return nil
+}
+
+// toDSM maps a declared NFSRule to the DSM schema. Fields not exposed in Nix get
+// sensible defaults (crossmnt on, sys security).
+func (r NFSRule) toDSM() DSMNFSRule {
 	priv := strings.ToLower(r.Access)
 	if priv != "ro" {
 		priv = "rw"
 	}
-	sq := r.Squash
+	sq := map[string]string{"root_squash": "root", "all_squash": "all", "no_mapping": "no"}[r.Squash]
 	if sq == "" {
-		sq = "root_squash"
+		sq = "root"
 	}
-	return nfsRulePayload{
-		Client:      r.Client,
-		Privilege:   priv,
-		Squash:      sq,
-		Security:    "sys",
-		EnableAsync: r.Async,
-		AllowSubdir: true,
-		NonPrivPort: !r.Secure,
+	d := DSMNFSRule{
+		Client:     r.Client,
+		Privilege:  priv,
+		RootSquash: sq,
+		Async:      r.Async,
+		Insecure:   !r.Secure,
+		Crossmnt:   true,
 	}
+	d.Security.Sys = true
+	return d
 }
 
-// SetNFSRules sets the NFS rule list on an existing share.
-//
-// NOTE: live probing showed per-share NFS rules are NOT under SYNO.Core.Share
-// (it returns only share metadata). They live under the internal
-// SYNO.Core.FileServ.NFS.SharePrivilege API (method "load"/set), whose exact
-// params we haven't pinned yet (returns 2301). Until then, configure NFS share
-// rules via the generic escape hatch (nixfleet.synology.settings) once the
-// SharePrivilege params are confirmed, or set them in the DSM UI. This call is
-// left as the typed target and will be repointed at SharePrivilege.
-func (c *Client) SetNFSRules(ctx context.Context, share string, rules []NFSRule) error {
-	payload := make([]nfsRulePayload, 0, len(rules))
-	for _, r := range rules {
-		payload = append(payload, r.toPayload())
+// key is a stable comparison key for a rule (ignores ordering).
+func (d DSMNFSRule) key() string {
+	return fmt.Sprintf("%s|%s|%s|%t|%t|%t|%t", d.Client, d.Privilege, d.RootSquash, d.Async, d.Insecure, d.Crossmnt, d.Security.Sys)
+}
+
+// NFSRulesMatch reports whether the actual DSM rules already equal the declared
+// set (order-insensitive on the fields nixfleet manages).
+func NFSRulesMatch(declared []NFSRule, actual []DSMNFSRule) bool {
+	if len(declared) != len(actual) {
+		return false
 	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
+	want := make([]string, 0, len(declared))
+	for _, r := range declared {
+		want = append(want, r.toDSM().key())
 	}
-	q := url.Values{
-		"name":     {share},
-		"nfs_rule": {string(b)},
+	got := make([]string, 0, len(actual))
+	for _, a := range actual {
+		// normalise: only the fields we manage participate in the key
+		na := a
+		na.Security = struct {
+			Sys               bool `json:"sys"`
+			Kerberos          bool `json:"kerberos"`
+			KerberosIntegrity bool `json:"kerberos_integrity"`
+			KerberosPrivacy   bool `json:"kerberos_privacy"`
+		}{Sys: a.Security.Sys}
+		got = append(got, na.key())
 	}
-	if _, err := c.get(ctx, "SYNO.Core.Share", "set", 1, q); err != nil {
-		return fmt.Errorf("set NFS rules on %q: %w", share, err)
+	sort.Strings(want)
+	sort.Strings(got)
+	for i := range want {
+		if want[i] != got[i] {
+			return false
+		}
 	}
-	return nil
+	return true
 }

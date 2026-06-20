@@ -202,10 +202,14 @@ func synologyStatusCmd() *cobra.Command {
 			fmt.Printf("\nShares (%d):\n", len(shares))
 			for _, s := range shares {
 				nfs := "—"
-				if s.HasNFS() {
-					nfs = "NFS"
+				if rules, err := cl.LoadNFSRules(ctx, s.Name); err == nil && len(rules) > 0 {
+					clients := make([]string, 0, len(rules))
+					for _, r := range rules {
+						clients = append(clients, fmt.Sprintf("%s(%s)", r.Client, r.Privilege))
+					}
+					nfs = "NFS: " + strings.Join(clients, ", ")
 				}
-				fmt.Printf("  %-28s %-12s %s\n", s.Name, s.VolPath, nfs)
+				fmt.Printf("  %-22s %-10s %s\n", s.Name, s.VolPath, nfs)
 			}
 			return nil
 		},

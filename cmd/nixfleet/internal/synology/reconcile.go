@@ -76,10 +76,16 @@ func ComputePlan(ctx context.Context, c *Client, cfg *Config) (*Plan, error) {
 		shareSet[s.Name] = true
 	}
 	for _, e := range cfg.NFSExports {
-		if shareSet[e.Name] {
-			p.NFSSet = append(p.NFSSet, e)
-		} else {
+		if !shareSet[e.Name] {
 			p.NFSNoShare = append(p.NFSNoShare, e)
+			continue
+		}
+		actual, err := c.LoadNFSRules(ctx, e.Name)
+		if err != nil {
+			return nil, err
+		}
+		if !NFSRulesMatch(e.Rules, actual) {
+			p.NFSSet = append(p.NFSSet, e) // drift → rules will be (re)written
 		}
 	}
 
@@ -126,7 +132,11 @@ func (p *Plan) Apply(ctx context.Context, c *Client, opts ApplyOpts) *ApplyResul
 		}
 	}
 	for _, e := range p.NFSSet {
-		if err := c.SetNFSRules(ctx, e.Name, e.Rules); err != nil {
+		rules := make([]DSMNFSRule, 0, len(e.Rules))
+		for _, rule := range e.Rules {
+			rules = append(rules, rule.toDSM())
+		}
+		if err := c.SaveNFSRules(ctx, e.Name, rules); err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("set NFS %s: %v", e.Name, err))
 			continue
 		}
