@@ -14,6 +14,7 @@ type Plan struct {
 	LUNExtra   []ActualLUN // on the NAS, not declared (prune candidates)
 	NFSSet     []NFSExport // declared exports whose share exists → rules will be set
 	NFSNoShare []NFSExport // declared export but no matching share (manual create needed)
+	Settings   []Setting   // generic DSM settings to apply (idempotent set calls)
 }
 
 // LUNResize captures a size delta for an existing LUN.
@@ -25,7 +26,7 @@ type LUNResize struct {
 
 // Empty reports whether the plan would change anything.
 func (p Plan) Empty() bool {
-	return len(p.LUNCreate) == 0 && len(p.LUNGrow) == 0 && len(p.NFSSet) == 0
+	return len(p.LUNCreate) == 0 && len(p.LUNGrow) == 0 && len(p.NFSSet) == 0 && len(p.Settings) == 0
 }
 
 // ComputePlan diffs the declared config against live DSM state.
@@ -81,6 +82,10 @@ func ComputePlan(ctx context.Context, c *Client, cfg *Config) (*Plan, error) {
 			p.NFSNoShare = append(p.NFSNoShare, e)
 		}
 	}
+
+	// Generic settings are applied as declared (DSM set calls are idempotent;
+	// we don't diff them since each api's get-shape differs).
+	p.Settings = cfg.Settings
 	return p, nil
 }
 
@@ -92,11 +97,12 @@ type ApplyOpts struct {
 
 // ApplyResult records what Apply did.
 type ApplyResult struct {
-	Created []string
-	Grown   []string
-	Deleted []string
-	NFSSet  []string
-	Errors  []string
+	Created  []string
+	Grown    []string
+	Deleted  []string
+	NFSSet   []string
+	Settings []string
+	Errors   []string
 }
 
 // Apply executes the plan. Caller is responsible for confirming intent (the CLI
@@ -125,6 +131,13 @@ func (p *Plan) Apply(ctx context.Context, c *Client, opts ApplyOpts) *ApplyResul
 			continue
 		}
 		r.NFSSet = append(r.NFSSet, e.Name)
+	}
+	for _, s := range p.Settings {
+		if err := c.ApplySetting(ctx, s); err != nil {
+			r.Errors = append(r.Errors, err.Error())
+			continue
+		}
+		r.Settings = append(r.Settings, s.String())
 	}
 	if opts.Prune {
 		for _, a := range p.LUNExtra {
@@ -159,6 +172,9 @@ func (p Plan) Render() string {
 	}
 	for _, e := range p.NFSNoShare {
 		line("!", fmt.Sprintf("NFS export %q has no matching share — create the shared folder first", e.Name))
+	}
+	for _, s := range p.Settings {
+		line("+", fmt.Sprintf("apply setting %s", s))
 	}
 	if b.Len() == 0 {
 		return "  (no changes — NAS matches declared state)\n"

@@ -73,10 +73,15 @@ func (r NFSRule) toPayload() nfsRulePayload {
 	}
 }
 
-// SetNFSRules sets the NFS rule list on an existing share (idempotent — the
-// declared rule set replaces what's there). Destructive enough to require
-// --apply. The share itself must already exist (we don't auto-create folders
-// in this slice).
+// SetNFSRules sets the NFS rule list on an existing share.
+//
+// NOTE: live probing showed per-share NFS rules are NOT under SYNO.Core.Share
+// (it returns only share metadata). They live under the internal
+// SYNO.Core.FileServ.NFS.SharePrivilege API (method "load"/set), whose exact
+// params we haven't pinned yet (returns 2301). Until then, configure NFS share
+// rules via the generic escape hatch (nixfleet.synology.settings) once the
+// SharePrivilege params are confirmed, or set them in the DSM UI. This call is
+// left as the typed target and will be repointed at SharePrivilege.
 func (c *Client) SetNFSRules(ctx context.Context, share string, rules []NFSRule) error {
 	payload := make([]nfsRulePayload, 0, len(rules))
 	for _, r := range rules {

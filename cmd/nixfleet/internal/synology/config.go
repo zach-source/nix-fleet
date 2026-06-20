@@ -20,6 +20,7 @@ type Config struct {
 	User       string      `json:"user"`
 	ISCSILUNs  []LUN       `json:"iscsiLuns"`
 	NFSExports []NFSExport `json:"nfsExports"`
+	Settings   []Setting   `json:"settings"` // generic DSM api/method/params calls
 }
 
 // LUN is a declared iSCSI LUN.

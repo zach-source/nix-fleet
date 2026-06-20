@@ -36,6 +36,59 @@ Examples:
 		"Command whose stdout is the DSM password (falls back to $SYNOLOGY_PASSWORD)")
 	cmd.AddCommand(synologyStatusCmd())
 	cmd.AddCommand(synologyReconcileCmd())
+	cmd.AddCommand(synologyGetCmd())
+	return cmd
+}
+
+// synologyGetCmd is a generic DSM API reader — useful for discovering the shape
+// of any setting before declaring it under nixfleet.synology.settings.
+func synologyGetCmd() *cobra.Command {
+	var version int
+	var params []string
+	cmd := &cobra.Command{
+		Use:   "get <host> <api> [method]",
+		Short: "Read any DSM API (e.g. SYNO.Core.FileServ.NFS get)",
+		Long: `Generic DSM API read. Examples:
+  nixfleet synology get znas SYNO.Core.FileServ.NFS get
+  nixfleet synology get znas SYNO.Core.Network get --version 2
+  nixfleet synology get znas SYNO.Core.Share list --param 'additional=["vol_path"]'`,
+		Args: cobra.RangeArgs(2, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			host, api := args[0], args[1]
+			method := "get"
+			if len(args) == 3 {
+				method = args[2]
+			}
+			pm := map[string]string{}
+			for _, kv := range params {
+				k, v, ok := strings.Cut(kv, "=")
+				if !ok {
+					return fmt.Errorf("bad --param %q (want key=value)", kv)
+				}
+				pm[k] = v
+			}
+			cl, _, err := synologyConnect(ctx, cmd, host)
+			if err != nil {
+				return err
+			}
+			defer cl.Logout(ctx)
+			raw, err := cl.Call(ctx, api, method, version, pm)
+			if err != nil {
+				return err
+			}
+			var pretty any
+			if json.Unmarshal(raw, &pretty) == nil {
+				b, _ := json.MarshalIndent(pretty, "", "  ")
+				fmt.Println(string(b))
+			} else {
+				fmt.Println(string(raw))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&version, "version", 1, "API version")
+	cmd.Flags().StringArrayVar(&params, "param", nil, "Query param key=value (repeatable)")
 	return cmd
 }
 

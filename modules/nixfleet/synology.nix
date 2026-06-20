@@ -106,6 +106,31 @@ let
       };
     };
   };
+
+  settingType = types.submodule {
+    options = {
+      api = mkOption {
+        type = types.str;
+        example = "SYNO.Core.FileServ.NFS";
+        description = "DSM API name.";
+      };
+      method = mkOption {
+        type = types.str;
+        default = "set";
+        description = "API method (usually 'set').";
+      };
+      version = mkOption {
+        type = types.int;
+        default = 1;
+        description = "API version.";
+      };
+      params = mkOption {
+        type = types.attrsOf types.str;
+        default = { };
+        description = "Query parameters (values are strings; use \"true\"/\"false\" for bools).";
+      };
+    };
+  };
 in
 {
   options.nixfleet.synology = {
@@ -144,6 +169,27 @@ in
       type = types.listOf nfsExportType;
       default = [ ];
       description = "Declared NFS exports (e.g. the k0s/backup share).";
+    };
+    settings = mkOption {
+      type = types.listOf settingType;
+      default = [ ];
+      example = [
+        {
+          api = "SYNO.Core.FileServ.NFS";
+          method = "set";
+          version = 1;
+          params = {
+            enable_nfs = "true";
+            enable_nfs_v4 = "true";
+          };
+        }
+      ];
+      description = ''
+        Generic DSM API settings calls — the escape hatch for configuring any
+        SYNO.Core.* setting not yet covered by a typed option. The whole DSM
+        settings surface (FileServ.NFS/SMB, Network, System, Service, SNMP, …)
+        uses the same entry.cgi get/set shape. Applied idempotently on --apply.
+      '';
     };
   };
 }
