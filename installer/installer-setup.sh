@@ -10,7 +10,10 @@
 
 set -euo pipefail
 
-UBUNTU_VERSION="24.04.2"
+# Ubuntu 24.04 LTS (Noble) point release. Override with UBUNTU_VERSION=24.04.x
+# (the fleet installs the LTS; nodes are NOT reinstalled to interim releases —
+# 26.04 was an in-place do-release-upgrade, see osupdate/release.go).
+UBUNTU_VERSION="${UBUNTU_VERSION:-24.04.4}"
 ISO_URL="${ISO_URL:-https://releases.ubuntu.com/${UBUNTU_VERSION}/ubuntu-${UBUNTU_VERSION}-live-server-amd64.iso}"
 DEST="${DEST:-/srv/installer/boot}"
 ISO_CACHE="/var/cache/nixfleet"
