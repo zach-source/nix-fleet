@@ -11,6 +11,7 @@
   imports = [
     ../modules/llm-inference.nix
     ../modules/iscsi.nix
+    ../modules/k0s.nix
   ];
 
   nixfleet = {
@@ -19,6 +20,10 @@
       base = "ubuntu";
       addr = "192.168.3.132";
     };
+
+    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
+    # allocatable (was an out-of-band 98Gi/24Gi); 78Gi stays for inference.
+    k0s.worker.enable = true;
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
