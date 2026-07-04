@@ -123,6 +123,42 @@
           "0.0"
         ];
       };
+
+      # Ornith-1.0-35B-MoE (deepreinforce-ai) — SOTA open coding-agent model,
+      # post-trained on Qwen3.6-35B-A3B, so it runs on the same latest-upstream
+      # build + shares the Qwen3.5-0.8B draft (100% accept on predictable ctx).
+      # Tuned 2026-07-04: classic draft n-max 8 / p-min 0.5 → ~78 tok/s on
+      # predictable context, ~42 on realistic code (localmaxxing Q4-no-draft ~58).
+      services.ornith = {
+        description = "Ornith-1.0-35B-MoE coding agent (Qwen3.6-35B post-train) + classic draft";
+        model = "/srv/models/ornith-1.0-35b-Q6_K.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8086;
+        ctxSize = 65536;
+        batchSize = 512;
+        ubatchSize = 512;
+        newCli = true;
+        draft = {
+          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
+          max = 8;
+          min = 1;
+          pMin = 0.5;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        # Ornith/Qwen coding-recommended sampling (clients may override).
+        extraFlags = [
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
+        ];
+      };
     };
   };
 }
