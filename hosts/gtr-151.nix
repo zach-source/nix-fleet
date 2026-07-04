@@ -70,9 +70,11 @@
         # cache-reuse=256).
         draft = {
           model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
-          max = 4;
+          # n-max 4->6 + pMin 0.6->0.5: benchmarked +8.5% (62.8 -> 68.1 tok/s) on
+          # gfx1151 via deeper draft (accept 138 -> 217). 2026-07-04.
+          max = 6;
           min = 1;
-          pMin = 0.6;
+          pMin = 0.5;
         };
         reasoning = {
           format = "deepseek";
