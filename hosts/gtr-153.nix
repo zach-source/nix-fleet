@@ -61,7 +61,10 @@
         jinja = true;
         reasoning = {
           format = "deepseek";
-          budget = 2048;
+          # 512 (was 2048): 2048 thinking tokens at ~25 tok/s made every turn
+          # ~80s+, blowing agent-chain timeouts. 512 keeps qwopus usable
+          # interactively.
+          budget = 512;
         };
         # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
         # mmproj for vision available at
