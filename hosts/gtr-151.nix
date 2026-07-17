@@ -89,40 +89,12 @@
         ];
       };
 
-      # Qwen3.6-27B DENSE — the quality/coding counterpart to the 35B-A3B
-      # MoE above. Co-hosted so gtr-151 is the single "Qwen3.6" node: MoE
-      # on :8084, dense on :8085. Qwen claims the 27B dense beats the old
-      # 397B-A17B flagship on coding (SWE-bench Verified 77.2 vs 76.2).
-      # Same latest-upstream build; uses MTP self-speculation (pure 3.6, no
-      # draft model) — the dense is the quality tier so its lower MTP
-      # throughput is an acceptable trade for a draft-free 3.6-only setup.
-      services.qwen36-27b = {
-        description = "Qwen3.6-27B dense (quality/coding) + MTP self-speculation";
-        # MTP GGUF (UD-Q6_K_XL, 24.2GB).
-        model = "/srv/models/Qwen3.6-27B-MTP-UD-Q6_K_XL.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
-        port = 8085;
-        ctxSize = 131072; # 131K — leaves headroom alongside the MoE's 200K
-        mtp = {
-          nMax = 2;
-        };
-        reasoning = {
-          format = "deepseek";
-          budget = 2048;
-        };
-        # Qwen3.6 coding-recommended sampling (clients may override per-request).
-        extraFlags = [
-          "--temp"
-          "0.6"
-          "--top-p"
-          "0.95"
-          "--top-k"
-          "20"
-          "--min-p"
-          "0.0"
-        ];
-      };
+      # Qwen3.6-27B DENSE — MOVED to gtr-153 (2026-07-17) to relieve GPU
+      # contention here: gtr-151 was pegged at 100% GPU with three big models
+      # (35B-A3B MoE + 27B + ornith) sharing one gfx1151, which spiked ornith's
+      # latency. The 27B now runs on gtr-153's otherwise-idle GPU
+      # (hosts/gtr-153.nix), and ornith's freed headroom goes to a larger
+      # context (65K -> 200K) below. See docs/llm-proxy-usage.md.
 
       # Ornith-1.0-35B-MoE (deepreinforce-ai) — SOTA open coding-agent model,
       # post-trained on Qwen3.6-35B-A3B, so it runs on the same latest-upstream
@@ -135,7 +107,11 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        ctxSize = 65536;
+        # 200K context — bumped from 65K after the 27B moved off this box
+        # (2026-07-17). ornith is the same 35B-A3B arch as :8084 (which runs
+        # 200K), and the freed ~40GB (27B weights + KV) easily covers the extra
+        # q4_0 KV. Gives the coding agent far more room for skills + code context.
+        ctxSize = 200000;
         batchSize = 512;
         ubatchSize = 512;
         newCli = true;

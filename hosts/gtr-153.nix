@@ -72,6 +72,37 @@
           "--top-p 0.98"
         ];
       };
+
+      # Qwen3.6-27B DENSE — MOVED here from gtr-151 (2026-07-17) to use this
+      # node's otherwise-idle GPU and relieve gtr-151's 3-model contention.
+      # Needs the latest-upstream gfx1151 build (/opt/llama-rocm-latest) + its
+      # pinned /opt/rocm-sdk, both staged onto gtr-153 alongside the 25GB MTP
+      # GGUF. MTP self-speculation (pure 3.6, no draft model).
+      services.qwen36-27b = {
+        description = "Qwen3.6-27B dense (quality/coding) + MTP self-speculation";
+        model = "/srv/models/Qwen3.6-27B-MTP-UD-Q6_K_XL.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8085;
+        ctxSize = 131072;
+        mtp = {
+          nMax = 2;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        extraFlags = [
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
+          "--min-p"
+          "0.0"
+        ];
+      };
     };
 
     # UFW rules — gtr-153 has ufw active (vestigial k0s-node setup, unlike
@@ -86,6 +117,11 @@
           from = "192.168.0.0/16";
           port = 8082;
           comment = "Qwopus llama-server from LAN/cluster (LiteLLM gateway)";
+        }
+        {
+          from = "192.168.0.0/16";
+          port = 8085;
+          comment = "Qwen3.6-27B llama-server from LAN/cluster (moved from gtr-151)";
         }
       ];
     };
