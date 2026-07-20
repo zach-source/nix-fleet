@@ -58,6 +58,28 @@ let
       read_only = cfg.readOnly;
     };
   };
+
+  # Make the remotes-API actually usable. Clients (`dolt clone|push`, `bd dolt
+  # push`) authenticate to the remotesapi as SQL user `root` with no password
+  # (the passwordless-LAN posture above). A remote connection matches
+  # `root@'%'`, but the config `user:` block only ever creates `root@'localhost'`
+  # — so `root@'%'` doesn't exist, and even the config superuser lacks the
+  # *dynamic* CLONE_ADMIN privilege that clone/fetch/pull require. Without this,
+  # every remote op fails `PermissionDenied: root has not been granted
+  # CLONE_ADMIN`. Provision `root@'%'` + grants offline (server not yet up, no
+  # lock) before each start. Idempotent. Non-fatal so a hiccup never takes the
+  # DB down. NOTE: this makes any LAN host able to clone/push/pull — acceptable
+  # only under the same firewall boundary the passwordless server already relies
+  # on; set `password` and use authenticated users if that boundary isn't trusted.
+  grantScript = pkgs.writeShellScript "dolt-ensure-remote-grants" ''
+    export HOME=${cfg.dataDir}
+    cd ${cfg.dataDir}
+    ${cfg.package}/bin/dolt --data-dir ${cfg.dataDir} sql -q "
+      CREATE USER IF NOT EXISTS 'root'@'%';
+      GRANT CLONE_ADMIN ON *.* TO 'root'@'%';
+      GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+    " || echo "dolt: remotesapi grant provisioning failed (non-fatal)" >&2
+  '';
 in
 {
   options.nixfleet.modules.dolt = {
@@ -218,6 +240,10 @@ in
           # exist yet; by now it does, so this chown succeeds and the main
           # ExecStart can write as dolt:dolt.
           ExecStartPre=+/bin/chown -R ${cfg.user}:${cfg.group} ${cfg.dataDir}
+          # Ensure remotesapi grants exist (see grantScript). Runs as ${cfg.user}
+          # (no + prefix); server isn't started yet, so the offline `dolt sql`
+          # writes privileges.db without a lock conflict.
+          ExecStartPre=${grantScript}
           ExecStart=${cfg.package}/bin/dolt sql-server --config /etc/dolt/server.yaml
           Restart=on-failure
           RestartSec=5
