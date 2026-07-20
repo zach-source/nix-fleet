@@ -205,7 +205,16 @@ in
       };
 
       directories.${cfg.dataDir} = {
-        mode = "0750";
+        # 0751 (not 0750): every `nixfleet apply` re-asserts this dir as its
+        # declared owner (root:root, per the workaround above) BEFORE the
+        # ExecStartPre chown can restore dolt ownership — and if the unit didn't
+        # change, dolt-server isn't restarted at all, so the chown never runs.
+        # A root-owned 0750 dir is untraversable by the dolt process, which
+        # locks it out of its own databases (remotesapi returns HTTP 500,
+        # "permission denied" on .dolt/noms/*). The extra o+x lets dolt traverse
+        # in regardless of the ownership race; data files stay 0600-dolt, so the
+        # dir being world-traversable does not expose secrets.
+        mode = "0751";
         # owner/group intentionally left at the root:root default — see comment
         # above. ExecStartPre on dolt-server.service re-chowns at startup.
       };
