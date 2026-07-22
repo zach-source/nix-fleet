@@ -119,6 +119,11 @@
           comment = "konnectivity-agent → server from pod CIDR";
         }
         {
+          from = "10.244.0.0/16";
+          port = 18080;
+          comment = "archive-v6-proxy: pods → node-local apt IPv6-egress proxy";
+        }
+        {
           from = "192.168.0.0/16";
           port = 8132;
           comment = "konnectivity-agent → server from LAN (multi-node future)";

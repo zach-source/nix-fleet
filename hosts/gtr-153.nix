@@ -126,6 +126,11 @@
           port = 8085;
           comment = "Qwen3.6-27B llama-server from LAN/cluster (moved from gtr-151)";
         }
+        {
+          from = "10.244.0.0/16";
+          port = 18080;
+          comment = "archive-v6-proxy: pods → node-local apt IPv6-egress proxy";
+        }
       ];
     };
 
