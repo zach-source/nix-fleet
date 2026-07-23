@@ -39,6 +39,10 @@ type IntermediateCAConfig struct {
 	CommonName   string
 	Organization string
 	Validity     time.Duration
+	// MaxPathLen: 0 (default) = leaf-only intermediate (gateway/TLS certs).
+	// Set 1 for an intermediate that must itself sign a CA (e.g. a SPIRE
+	// upstream, where SPIRE mints its own server CA beneath it).
+	MaxPathLen int
 }
 
 // DefaultIntermediateCAConfig returns sensible defaults for an intermediate CA
@@ -93,8 +97,11 @@ func InitCA(cfg *CAConfig) (*CA, error) {
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLen:            1,
-		MaxPathLenZero:        false,
+		// pathlen:2 so the chain root -> intermediate -> SPIRE upstream CA ->
+		// SPIRE server CA -> SVID validates (SPIRE mints its own CA under the
+		// intermediate, which pathlen:1 forbade). Leaf-only intermediates stay 0.
+		MaxPathLen:     2,
+		MaxPathLenZero: false,
 	}
 
 	// Self-sign the CA certificate
@@ -200,8 +207,8 @@ func (ca *CA) InitIntermediateCA(cfg *IntermediateCAConfig) (*IntermediateCA, er
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLen:            0,    // Can only sign end-entity certs
-		MaxPathLenZero:        true, // MaxPathLen=0 is intentional
+		MaxPathLen:            cfg.MaxPathLen,
+		MaxPathLenZero:        cfg.MaxPathLen == 0, // pathlen:0 = leaf-only
 	}
 
 	// Sign with root CA
