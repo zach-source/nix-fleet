@@ -30,6 +30,22 @@ in
 {
   options.nixfleet.modules.iscsi = {
     enable = lib.mkEnableOption "iSCSI initiator (open-iscsi) for CSI-attached volumes";
+
+    replacementTimeout = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 120;
+      description = ''
+        iSCSI node.session.timeo.replacement_timeout in seconds — how long the
+        initiator waits for a stalled target before failing in-flight I/O. On
+        single-path nodes raise this above the expected worst-case target stall
+        so a transient Synology DSM hiccup makes I/O hang-and-resume instead of
+        escalating to SCSI-offline → btrfs forced-readonly (the 2026-07-23
+        gastown outage, nix-fleet-hosts-k3x). Applied to iscsid.conf and to
+        existing node records on activation; it takes effect on the next session
+        login/reboot — activation deliberately does NOT force a re-login, which
+        would drop live CSI PVCs. Default 120 preserves upstream behaviour.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -81,6 +97,31 @@ in
       systemctl enable --now iscsid.service 2>/dev/null || true
       systemctl enable --now open-iscsi.service 2>/dev/null || true
       echo "iscsi: iscsid is $(systemctl is-active iscsid.service 2>/dev/null)"
+
+      # --- session recovery timeout (NixFleet iscsi module) ---
+      # replacement_timeout bounds how long the initiator waits for a stalled
+      # target before failing I/O. The 120s default let a ~292s Synology DSM
+      # stall on 2026-07-23 escalate to SCSI-offline → btrfs forced-readonly on
+      # the gastown LUNs (nix-fleet-hosts-k3x). A larger value makes I/O hang and
+      # resume when the target returns rather than erroring the filesystem RO.
+      RT=${toString cfg.replacementTimeout}
+      conf=/etc/iscsi/iscsid.conf
+      if [ -f "$conf" ]; then
+        if grep -qE '^[#[:space:]]*node\.session\.timeo\.replacement_timeout' "$conf"; then
+          sed -i -E "s|^[#[:space:]]*node\.session\.timeo\.replacement_timeout.*|node.session.timeo.replacement_timeout = $RT|" "$conf"
+        else
+          printf 'node.session.timeo.replacement_timeout = %s\n' "$RT" >> "$conf"
+        fi
+        echo "iscsi: iscsid.conf replacement_timeout=$RT (new sessions)"
+      fi
+      # Update existing node records so the value takes effect on next login.
+      # Deliberately NOT re-logging-in here — that would drop live CSI PVCs; the
+      # value activates on the next session (re)establishment (pod roll / reboot).
+      if command -v iscsiadm >/dev/null 2>&1; then
+        iscsiadm -m node -o update -n node.session.timeo.replacement_timeout -v "$RT" 2>/dev/null \
+          && echo "iscsi: node records replacement_timeout=$RT (active on next login/reboot)" \
+          || true
+      fi
     '';
 
     nixfleet.healthChecks.iscsid = {

@@ -40,6 +40,13 @@
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
 
+    # Raise iSCSI session-recovery timeout well above the observed worst-case
+    # Synology DSM stall (~292s on 2026-07-23) so a transient target hiccup makes
+    # I/O hang-and-resume instead of escalating to btrfs forced-readonly on the
+    # gastown LUNs. Single-path single-node: fast failover buys nothing here.
+    # See nix-fleet-hosts-k3x. Takes effect on next iSCSI login (pod roll/reboot).
+    modules.iscsi.replacementTimeout = 600;
+
     # nix-config module is for Determinate-Nix hosts (writes nix.custom.conf).
     # gti runs vanilla nix (require-sigs=false, connects as the trusted ztaylor
     # user, nix config in nix.conf.d/99-nixfleet-optimized.conf) — it has no
