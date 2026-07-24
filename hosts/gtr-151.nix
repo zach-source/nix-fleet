@@ -112,11 +112,14 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # 384K context (up from 200K). TIGHTEST node: co-hosts the 200K 35B-A3B
-        # MoE (:8084); measured ~94G/122G at 2x200K, so +~12G KV here lands ~106G
-        # (~16G free). If it OOMs at boot, drop this to 262144 — gtr-152/153 have
-        # more headroom. q4_0 KV + flash-attn (module defaults) keep KV compact.
-        ctxSize = 393216;
+        # ctx-size is the TOTAL KV budget, split across --parallel slots: 524288
+        # / 2 = 256K per concurrent request. parallel=2 lets each backend serve 2
+        # requests at once (the pool bottlenecked at 1 slot/backend in load
+        # testing). TIGHTEST node (co-hosts the 200K 35B-A3B MoE :8084): 512K KV
+        # is ~1.33x the old 384K; if this OOMs at boot, drop ctxSize to 393216
+        # (192K/req) or 262144. q4_0 KV + flash-attn keep it compact.
+        ctxSize = 524288;
+        parallel = 2;
         batchSize = 512;
         ubatchSize = 512;
         newCli = true;

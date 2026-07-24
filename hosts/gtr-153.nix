@@ -64,8 +64,11 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # 256K — no YaRN in this GGUF, native ceiling ~262K.
-        ctxSize = 262144;
+        # 524288 total KV / --parallel 2 = 262144 (256K) per slot — exactly this
+        # GGUF's native ceiling (no YaRN), so each of the 2 concurrent slots runs
+        # at full context. Co-tenants the 27B; verify no OOM (Q8_0 is 37.8G).
+        ctxSize = 524288;
+        parallel = 2;
         newCli = true;
         draft = {
           model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";

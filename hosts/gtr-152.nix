@@ -51,9 +51,11 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # 384K — Ornith is the only big model here now (Qwen3-Coder evicted), so
-        # ~54G leaves plenty of the 122G node free.
-        ctxSize = 393216;
+        # 524288 total KV / --parallel 2 = 256K per concurrent request (2 slots).
+        # Ornith is the only ROCm model here (Qwen3-Coder evicted; abliterated
+        # :8083 co-tenants), so the ~1.33x KV bump fits comfortably.
+        ctxSize = 524288;
+        parallel = 2;
         newCli = true;
         mtp = {
           nMax = 3;
