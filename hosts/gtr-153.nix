@@ -144,6 +144,20 @@
           port = 8085;
           comment = "Qwen3.6-27B llama-server from LAN/cluster (moved from gtr-151)";
         }
+        # The LiteLLM pod egresses to this node WITHOUT SNAT (arrives with the
+        # k8s pod-CIDR source, not the node IP), so the LAN rules above don't
+        # match it and default-deny drops it. Allow the pod CIDR explicitly for
+        # both inference ports (same pattern as :18080 below).
+        {
+          from = "10.244.0.0/16";
+          port = 8086;
+          comment = "Ornith llama-server from k8s pod CIDR (LiteLLM)";
+        }
+        {
+          from = "10.244.0.0/16";
+          port = 8085;
+          comment = "Qwen3.6-27B llama-server from k8s pod CIDR (LiteLLM)";
+        }
         {
           from = "10.244.0.0/16";
           port = 18080;
