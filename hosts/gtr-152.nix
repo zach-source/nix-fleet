@@ -74,59 +74,10 @@
       };
     };
 
-    # Two extra models on the VULKAN backend (separate /usr/local/bin/llama-server
-    # build + radeon Vulkan ICD), previously hand-installed out-of-band at
-    # /etc/systemd/system. Declared here verbatim so NixFleet manages them; kept
-    # off the llmInference module because that module is ROCm-specific (binary,
-    # LD_LIBRARY_PATH, HIP env all differ). opus is ordered after gemma so the two
-    # don't initialise the iGPU simultaneously.
-    systemd.units = {
-      "llama-server.service" = {
-        enabled = true;
-        text = ''
-          [Unit]
-          Description=llama.cpp Server (Gemma 4 31B - Vulkan GPU)
-          After=network.target
-
-          [Service]
-          Type=simple
-          User=deploy
-          Group=deploy
-          SupplementaryGroups=render video
-          Environment=LD_LIBRARY_PATH=/usr/local/lib
-          Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
-          ExecStart=/usr/local/bin/llama-server --model /srv/models/gemma-4-31B-it-Q8_0.gguf --host 0.0.0.0 --port 8080 --ctx-size 32768 --threads 16 --gpu-layers 999 --parallel 2
-          Restart=on-failure
-          RestartSec=10
-          LimitNOFILE=65536
-
-          [Install]
-          WantedBy=multi-user.target
-        '';
-      };
-
-      "llama-server-opus-distilled.service" = {
-        enabled = true;
-        text = ''
-          [Unit]
-          Description=llama.cpp Server (Qwen 27B Opus Distilled - Vulkan GPU)
-          After=network.target llama-server.service
-
-          [Service]
-          Type=simple
-          User=deploy
-          SupplementaryGroups=render video
-          Environment=LD_LIBRARY_PATH=/usr/local/lib
-          Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
-          ExecStart=/usr/local/bin/llama-server --model /srv/models/Qwen3.5-27B-Opus-Distilled-Q8_0.gguf --host 0.0.0.0 --port 8081 --ctx-size 32768 --threads 8 --gpu-layers 999 --parallel 2
-          Restart=on-failure
-          RestartSec=10
-          LimitNOFILE=65536
-
-          [Install]
-          WantedBy=multi-user.target
-        '';
-      };
-    };
+    # The two Vulkan-backend models that used to live here (Gemma-4-31B :8080,
+    # Qwen3.5-27B-Opus-Distilled :8081) were EVICTED 2026-07-23 to free GPU for
+    # Ornith #2 above — neither was referenced by the LiteLLM proxy or any agent.
+    # The abliterated Qwen3.6-35B (:8083, an imperative unit, the fleet's
+    # `qwen36-35b-abliterated` tier) STAYS; Ornith co-tenants with it (~83G/122G).
   };
 }
