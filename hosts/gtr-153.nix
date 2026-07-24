@@ -78,7 +78,13 @@
           budget = 2048;
         };
         # Ornith/Qwen coding-recommended sampling (clients may override).
+        # --fit off: gtr-153's /srv is ZFS; the new build's auto memory-fit step
+        # re-reads the whole GGUF to measure (observed 65GB read for the 37.8G
+        # Q8_0, ~8min cold load). We already pin -ngl 99 with ~75G GPU free, so
+        # skip the fitting pass entirely — loads in seconds like the ext4 nodes.
         extraFlags = [
+          "--fit"
+          "off"
           "--temp"
           "0.6"
           "--top-p"
