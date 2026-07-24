@@ -103,15 +103,20 @@
       # predictable context, ~42 on realistic code (localmaxxing Q4-no-draft ~58).
       services.ornith = {
         description = "Ornith-1.0-35B-MoE coding agent (Qwen3.6-35B post-train) + classic draft";
-        model = "/srv/models/ornith-1.0-35b-Q6_K.gguf";
+        # 1M-YaRN GGUF (satgeze): YaRN factor-4 metadata (native 262K -> 1M
+        # ceiling, applied automatically, no rope flags) + a grafted MTP head.
+        # We run CLASSIC draft here (proven ~78 tok/s) and leave the MTP head
+        # unused — the gtr-152 instance is the MTP trial. One of 3 load-balanced
+        # Orniths (gtr-151/152/153); see nix-fleet-hosts litellm/config.yaml.
+        model = "/srv/models/ornith-1.0-35b-1M-MTP-Q6_K.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # 200K context — bumped from 65K after the 27B moved off this box
-        # (2026-07-17). ornith is the same 35B-A3B arch as :8084 (which runs
-        # 200K), and the freed ~40GB (27B weights + KV) easily covers the extra
-        # q4_0 KV. Gives the coding agent far more room for skills + code context.
-        ctxSize = 200000;
+        # 384K context (up from 200K). TIGHTEST node: co-hosts the 200K 35B-A3B
+        # MoE (:8084); measured ~94G/122G at 2x200K, so +~12G KV here lands ~106G
+        # (~16G free). If it OOMs at boot, drop this to 262144 — gtr-152/153 have
+        # more headroom. q4_0 KV + flash-attn (module defaults) keep KV compact.
+        ctxSize = 393216;
         batchSize = 512;
         ubatchSize = 512;
         newCli = true;

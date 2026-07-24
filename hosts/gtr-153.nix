@@ -50,29 +50,41 @@
 
     modules.llmInference = {
       enable = true;
-      services.qwopus35-coder = {
-        description = "Qwopus3.5-9B-Coder (qwen35, Q8_0)";
-        # qwen35 arch (Qwen3.5 hybrid). Runs on the stock /opt/llama-rocm
-        # build (its arch table includes qwen35; 9B needs no speculation).
-        model = "/srv/models/qwopus35-9b-coder/Qwopus3.5-9B-coder-Exp-Q8_0.gguf";
-        port = 8082;
-        ctxSize = 131072; # 9B is small — plenty of room on the 122GB node
-        cacheReuse = 256;
-        jinja = true;
+      # Ornith #3: the ABLITERATED (uncensored / refusal-removed) AEON variant,
+      # exposed as its own `ornith-abliterated` tier in LiteLLM (NOT in the
+      # gtr-151/152 `ornith` round-robin pool) — mirrors the qwen36-35b vs
+      # qwen36-35b-abliterated split. Kept separate because this GGUF has NO
+      # 1M-YaRN (caps ~256K vs the pool's 384K), so pooling would break long-ctx
+      # requests routed here. CLASSIC draft (the GGUF's MTP head is unused; the
+      # author measured MTP at ~half speed on this arch). Replaced Qwopus-9B; the
+      # 27B dense below STAYS. Q8_0 (37.8G) + 256K KV ~= 55G + 27B ~34G ~= 89G/122G.
+      services.ornith = {
+        description = "Ornith-1.0-35B AEON abliterated (uncensored) coding agent + classic draft";
+        model = "/srv/models/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q8_0.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8086;
+        # 256K — no YaRN in this GGUF, native ceiling ~262K.
+        ctxSize = 262144;
+        newCli = true;
+        draft = {
+          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
+          max = 8;
+          min = 1;
+          pMin = 0.5;
+        };
         reasoning = {
           format = "deepseek";
-          # 512 (was 2048): 2048 thinking tokens at ~25 tok/s made every turn
-          # ~80s+, blowing agent-chain timeouts. 512 keeps qwopus usable
-          # interactively.
-          budget = 512;
+          budget = 2048;
         };
-        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
-        # mmproj for vision available at
-        # /srv/models/qwopus35-9b-coder/mmproj.gguf — add via extraFlags
-        # (--mmproj) once stock-build multimodal support is confirmed.
+        # Ornith/Qwen coding-recommended sampling (clients may override).
         extraFlags = [
-          "--min-p 0.01"
-          "--top-p 0.98"
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
         ];
       };
 
@@ -118,8 +130,8 @@
       rules = [
         {
           from = "192.168.0.0/16";
-          port = 8082;
-          comment = "Qwopus llama-server from LAN/cluster (LiteLLM gateway)";
+          port = 8086;
+          comment = "Ornith llama-server from LAN/cluster (LiteLLM gateway)";
         }
         {
           from = "192.168.0.0/16";

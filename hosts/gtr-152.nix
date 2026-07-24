@@ -35,31 +35,41 @@
 
     modules.llmInference = {
       enable = true;
-      services.qwen3-coder = {
-        description = "Qwen3-Coder-30B-A3B + speculative draft";
-        model = "/srv/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf";
-        port = 8082;
-        ctxSize = 262144;
-        mlock = true;
-        draft = {
-          model = "/srv/models/Qwen3-0.6B-Q4_K_M.gguf";
-          max = 8;
-          min = 2;
-          pMin = 0.6;
+      # Ornith #2 of 3 (load-balanced pool gtr-151/152/153). This is the MTP
+      # TRIAL instance: it uses the 1M-YaRN GGUF's grafted MTP head for self-
+      # speculation (--spec-type draft-mtp) instead of a classic draft model.
+      # MTP historically CRASHED the recurrent 35B-A3B MoE on gfx1151 warmup
+      # ("ROCm unspecified launch failure"), which is why gtr-151/153 stay on
+      # classic draft — so watch this one's startup logs on first deploy. If it
+      # wedges, remove the `mtp` block and add the classic draft (Qwen3.5-0.8B)
+      # used on gtr-151. Replaced Qwen3-Coder-30B (weaker coder) to free the GPU.
+      # Needs the latest-upstream build + pinned rocm-sdk (staged onto this box
+      # alongside gtr-151/153); the stock lemonade build can't run qwen35moe.
+      services.ornith = {
+        description = "Ornith-1.0-35B-MoE coding agent + MTP self-speculation (trial)";
+        model = "/srv/models/ornith-1.0-35b-1M-MTP-Q6_K.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8086;
+        # 384K — Ornith is the only big model here now (Qwen3-Coder evicted), so
+        # ~54G leaves plenty of the 122G node free.
+        ctxSize = 393216;
+        newCli = true;
+        mtp = {
+          nMax = 3;
         };
         reasoning = {
           format = "deepseek";
           budget = 2048;
         };
-        # Widen the default sampling window so client-side diversity params
-        # (temperature, seeds, prompt perturbations) have room to actually
-        # change the trajectory. llama.cpp defaults are min-p=0.05 / top-p=0.95;
-        # we loosen both. For very peaked-logit prompts the model may still
-        # converge — true output diversity often needs structural prompt
-        # variation client-side. See docs/llm-proxy-usage.md.
+        # Ornith/Qwen coding-recommended sampling (clients may override).
         extraFlags = [
-          "--min-p 0.01"
-          "--top-p 0.98"
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
         ];
       };
     };
