@@ -12,6 +12,7 @@
     ../modules/sysctl.nix
     ../modules/ufw.nix
     ../modules/iscsi.nix
+    ../modules/multipath.nix
     ../modules/backup.nix
   ];
 
@@ -46,6 +47,14 @@
     # gastown LUNs. Single-path single-node: fast failover buys nothing here.
     # See nix-fleet-hosts-k3x. Takes effect on next iSCSI login (pod roll/reboot).
     modules.iscsi.replacementTimeout = 600;
+
+    # Blacklist Synology LUNs from Linux dm-multipath auto-claim — DSM
+    # exposes each LUN at two SCSI LUN-numbers per session, which multipathd
+    # claims independently of synology-csi's own multipath handling, causing
+    # a raw single-path mount to fail with a misleading "already mounted or
+    # busy" error. See modules/multipath.nix and the
+    # gastown-readonly-multipath-2026-07-25 incident.
+    modules.multipath.enable = true;
 
     # nix-config module is for Determinate-Nix hosts (writes nix.custom.conf).
     # gti runs vanilla nix (require-sigs=false, connects as the trusted ztaylor

@@ -7,6 +7,7 @@
   imports = [
     ../modules/llm-inference.nix
     ../modules/iscsi.nix
+    ../modules/multipath.nix
     ../modules/k0s.nix
   ];
 
@@ -23,6 +24,11 @@
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
+
+    # Blacklist Synology LUNs from dm-multipath auto-claim — see
+    # modules/multipath.nix (2026-07-25 gastown-town readonly incident, this
+    # node is where it happened).
+    modules.multipath.enable = true;
 
     packages = with pkgs; [
       git
