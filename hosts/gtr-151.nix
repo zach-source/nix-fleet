@@ -103,16 +103,18 @@
 
       # Ornith-1.0-35B-MoE (deepreinforce-ai) — SOTA open coding-agent model,
       # post-trained on Qwen3.6-35B-A3B, so it runs on the same latest-upstream
-      # build + shares the Qwen3.5-0.8B draft (100% accept on predictable ctx).
-      # Tuned 2026-07-04: classic draft n-max 8 / p-min 0.5 → ~78 tok/s on
-      # predictable context, ~42 on realistic code (localmaxxing Q4-no-draft ~58).
+      # build + shares the same 1M-YaRN/MTP GGUF as gtr-152.
+      # 2026-07-26: SWITCHED classic draft -> MTP trial (mirrors gtr-152),
+      # to A/B MTP across two identical gfx1151 nodes. Classic draft proved
+      # ~78 tok/s predictable / ~42 realistic (2026-07-04); if MTP crashes
+      # here (qwen35moe MTP has a documented ROCm "unspecified launch
+      # failure" history — see :8084 above), revert this block to the old
+      # `draft = { model = ".../Qwen3.5-0.8B-Q4_K_M.gguf"; max = 8; min = 1;
+      # pMin = 0.5; }` and drop `mtp`.
       services.ornith = {
-        description = "Ornith-1.0-35B-MoE coding agent (Qwen3.6-35B post-train) + classic draft";
+        description = "Ornith-1.0-35B-MoE coding agent (Qwen3.6-35B post-train) + MTP trial";
         # 1M-YaRN GGUF (satgeze): YaRN factor-4 metadata (native 262K -> 1M
         # ceiling, applied automatically, no rope flags) + a grafted MTP head.
-        # We run CLASSIC draft here (proven ~78 tok/s) and leave the MTP head
-        # unused — the gtr-152 instance is the MTP trial. One of 3 load-balanced
-        # Orniths (gtr-151/152/153); see nix-fleet-hosts litellm/config.yaml.
         model = "/srv/models/ornith-1.0-35b-1M-MTP-Q6_K.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
@@ -128,11 +130,8 @@
         batchSize = 512;
         ubatchSize = 512;
         newCli = true;
-        draft = {
-          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
-          max = 8;
-          min = 1;
-          pMin = 0.5;
+        mtp = {
+          nMax = 3;
         };
         reasoning = {
           format = "deepseek";
