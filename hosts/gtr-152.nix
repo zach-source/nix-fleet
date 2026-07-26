@@ -96,7 +96,11 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8083;
-        ctxSize = 131072;
+        # Bumped 128K -> 262144 (256K, the model's native ceiling per its HF
+        # card — no YaRN needed). 2026-07-26: gtr-152 had ~34Gi available
+        # (unified mem) with both models loaded at 128K; watch for OOM/swap
+        # on apply, revert to 131072 if it wedges.
+        ctxSize = 262144;
         newCli = true;
         mtp = {
           nMax = 2;
