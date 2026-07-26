@@ -102,7 +102,12 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        ctxSize = 131072;
+        # Bumped 128K -> 262144 (256K native ceiling), mirrors gtr-152. RISK:
+        # gtr-153 was already showing swap pressure (5.9Gi used) with both
+        # models at 128K before this change — watch closely, revert to
+        # 131072 if it OOMs or wedges (see the 2026-07-12 "-fit stalls on a
+        # memory-pressured node" gotcha — same failure class, different flag).
+        ctxSize = 262144;
         newCli = true;
         mtp = {
           nMax = 2;
