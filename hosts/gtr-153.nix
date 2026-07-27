@@ -102,12 +102,12 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # Bumped 128K -> 262144 (256K native ceiling), mirrors gtr-152. RISK:
-        # gtr-153 was already showing swap pressure (5.9Gi used) with both
-        # models at 128K before this change — watch closely, revert to
-        # 131072 if it OOMs or wedges (see the 2026-07-12 "-fit stalls on a
-        # memory-pressured node" gotcha — same failure class, different flag).
-        ctxSize = 262144;
+        # REVERTED 262144 -> 131072 (2026-07-26): the 256K bump pushed this
+        # node's swap to fully maxed (8.0Gi/8.0Gi) alongside qwen36-27b, with
+        # only ~14Gi system memory left. gtr-152 (more headroom) stays at
+        # 256K. If gtr-153 needs 256K again, free memory some other way
+        # first (see gtr-inference-fleet memory for options weighed).
+        ctxSize = 131072;
         newCli = true;
         mtp = {
           nMax = 2;
