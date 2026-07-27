@@ -63,7 +63,12 @@
       # Needs the latest-upstream gfx1151 build (/opt/llama-rocm-latest) + its
       # pinned /opt/rocm-sdk, both staged onto gtr-153 alongside the 25GB MTP
       # GGUF. MTP self-speculation (pure 3.6, no draft model).
+      #
+      # DISABLED 2026-07-27: stopped to free memory for hauhaucs-uncensored
+      # (co-tenant on this node was thrashing swap). Config kept for a quick
+      # re-enable; flip `enable = true` + `nixfleet apply -H gtr-153` to restore.
       services.qwen36-27b = {
+        enable = false;
         description = "Qwen3.6-27B dense (quality/coding) + MTP self-speculation";
         model = "/srv/models/Qwen3.6-27B-MTP-UD-Q6_K_XL.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
