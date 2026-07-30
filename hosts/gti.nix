@@ -92,6 +92,20 @@
         # consistent on cold boot before k0scontroller starts.
         "net.ipv4.ip_forward" = 1;
         "net.ipv6.conf.all.forwarding" = 1;
+        # ...but enabling IPv6 forwarding makes the kernel IGNORE Router
+        # Advertisements unless accept_ra=2 ("accept even when forwarding").
+        # gti therefore had no IPv6 default route at all, while the gtr workers
+        # kept theirs (NetworkManager does RA in userspace there; gti's NM
+        # profile is ipv6.method=ignore, so nothing was doing RA). That killed
+        # apt egress fleet-wide: archive-v6-proxy is AAAA-only by design
+        # (Canonical's v4 prefixes blackhole in Cogent transit), so on gti every
+        # upstream connect returned ENETUNREACH — and the fleet-heartbeat pod,
+        # which prefers the control-plane, read that as "apt is down" and failed
+        # every CI job over to Depot. Scoped to the uplink on purpose: `default`
+        # would also enable RA on the cilium/lxc veths, where a stray RA could
+        # install bogus routes. systemd's udev rule (99-systemd.rules) reapplies
+        # per-interface sysctls as devices appear, so this survives reboot.
+        "net.ipv6.conf.enp174s0f1.accept_ra" = 2;
       };
     };
 
