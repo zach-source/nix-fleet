@@ -79,12 +79,49 @@
           "20"
         ];
       };
+
+      # 2026-07-26: replaces the old qwen3.6-35b-abliterated (huihui) imperative
+      # unit at the same port. New uncensored fine-tune: HauhauCS-Aggressive
+      # (wang-yang's MTP-grafted Q6_K_P — the upstream HauhauCS repo only ships
+      # classic quants; wang-yang transplanted a real nextn/MTP head from a
+      # stock Qwen3.6-35B-A3B GGUF, byte-exact, no requantization). Upstream's
+      # own Apple M3 Metal benchmark found n_max=1-2 the best operating point
+      # (~+27% over no-spec); n_max=2 chosen to match gtr-153's sibling deploy
+      # and gtr-153's qwen36-27b precedent. UNVERIFIED on our gfx1151/ROCm
+      # hardware — watch startup logs (qwen35moe + MTP has crashed here before,
+      # see :8084 on gtr-151) and benchmark once live.
+      services.hauhaucs-uncensored = {
+        description = "Qwen3.6-35B-A3B Uncensored (HauhauCS-Aggressive) + MTP";
+        model = "/srv/models/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P-MTP.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8083;
+        # Bumped 128K -> 262144 (256K, the model's native ceiling per its HF
+        # card — no YaRN needed). 2026-07-26: gtr-152 had ~34Gi available
+        # (unified mem) with both models loaded at 128K; watch for OOM/swap
+        # on apply, revert to 131072 if it wedges.
+        ctxSize = 262144;
+        newCli = true;
+        mtp = {
+          nMax = 2;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        extraFlags = [
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
+        ];
+      };
     };
 
     # The two Vulkan-backend models that used to live here (Gemma-4-31B :8080,
     # Qwen3.5-27B-Opus-Distilled :8081) were EVICTED 2026-07-23 to free GPU for
     # Ornith #2 above — neither was referenced by the LiteLLM proxy or any agent.
-    # The abliterated Qwen3.6-35B (:8083, an imperative unit, the fleet's
-    # `qwen36-35b-abliterated` tier) STAYS; Ornith co-tenants with it (~83G/122G).
   };
 }

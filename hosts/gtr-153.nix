@@ -55,59 +55,20 @@
 
     modules.llmInference = {
       enable = true;
-      # Ornith #3: the ABLITERATED (uncensored / refusal-removed) AEON variant,
-      # exposed as its own `ornith-abliterated` tier in LiteLLM (NOT in the
-      # gtr-151/152 `ornith` round-robin pool) — mirrors the qwen36-35b vs
-      # qwen36-35b-abliterated split. Kept separate because this GGUF has NO
-      # 1M-YaRN (caps ~256K vs the pool's 384K), so pooling would break long-ctx
-      # requests routed here. CLASSIC draft (the GGUF's MTP head is unused; the
-      # author measured MTP at ~half speed on this arch). Replaced Qwopus-9B; the
-      # 27B dense below STAYS. Q8_0 (37.8G) + 256K KV ~= 55G + 27B ~34G ~= 89G/122G.
-      services.ornith = {
-        description = "Ornith-1.0-35B AEON abliterated (uncensored) coding agent + classic draft";
-        model = "/srv/models/Ornith-1.0-35B-AEON-Ultimate-Uncensored-MTP-Q8_0.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
-        port = 8086;
-        # 524288 total KV / --parallel 2 = 262144 (256K) per slot — exactly this
-        # GGUF's native ceiling (no YaRN), so each of the 2 concurrent slots runs
-        # at full context. Co-tenants the 27B; verify no OOM (Q8_0 is 37.8G).
-        ctxSize = 524288;
-        parallel = 2;
-        newCli = true;
-        draft = {
-          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
-          max = 8;
-          min = 1;
-          pMin = 0.5;
-        };
-        reasoning = {
-          format = "deepseek";
-          budget = 2048;
-        };
-        # Ornith/Qwen coding-recommended sampling (clients may override).
-        # --fit off: gtr-153's /srv is ZFS; the new build's auto memory-fit step
-        # re-reads the whole GGUF to measure (observed 65GB read for the 37.8G
-        # Q8_0, ~8min cold load). We already pin -ngl 99 with ~75G GPU free, so
-        # skip the fitting pass entirely — loads in seconds like the ext4 nodes.
-        extraFlags = [
-          "--fit"
-          "off"
-          "--temp"
-          "0.6"
-          "--top-p"
-          "0.95"
-          "--top-k"
-          "20"
-        ];
-      };
+      # 2026-07-26: Ornith-AEON abliterated REMOVED (was here) — replaced by
+      # HauhauCS-Aggressive-MTP (see below), deployed on this node + gtr-152.
 
       # Qwen3.6-27B DENSE — MOVED here from gtr-151 (2026-07-17) to use this
       # node's otherwise-idle GPU and relieve gtr-151's 3-model contention.
       # Needs the latest-upstream gfx1151 build (/opt/llama-rocm-latest) + its
       # pinned /opt/rocm-sdk, both staged onto gtr-153 alongside the 25GB MTP
       # GGUF. MTP self-speculation (pure 3.6, no draft model).
+      #
+      # DISABLED 2026-07-27: stopped to free memory for hauhaucs-uncensored
+      # (co-tenant on this node was thrashing swap). Config kept for a quick
+      # re-enable; flip `enable = true` + `nixfleet apply -H gtr-153` to restore.
       services.qwen36-27b = {
+        enable = false;
         description = "Qwen3.6-27B dense (quality/coding) + MTP self-speculation";
         model = "/srv/models/Qwen3.6-27B-MTP-UD-Q6_K_XL.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
@@ -130,6 +91,49 @@
           "20"
           "--min-p"
           "0.0"
+        ];
+      };
+
+      # 2026-07-26: replaces the removed Ornith-AEON-abliterated service at
+      # the same port. New uncensored fine-tune: HauhauCS-Aggressive
+      # (wang-yang's MTP-grafted Q6_K_P — see gtr-152's sibling deploy for
+      # provenance). n_max=2 matches gtr-152 + this node's own qwen36-27b
+      # precedent (upstream benchmarked n_max=1-2 as the best operating
+      # point). UNVERIFIED on our gfx1151/ROCm hardware — watch startup logs,
+      # benchmark once live.
+      services.hauhaucs-uncensored = {
+        description = "Qwen3.6-35B-A3B Uncensored (HauhauCS-Aggressive) + MTP";
+        model = "/srv/models/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P-MTP.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        port = 8086;
+        # REVERTED 262144 -> 131072 (2026-07-26): the 256K bump pushed this
+        # node's swap to fully maxed (8.0Gi/8.0Gi) alongside qwen36-27b, with
+        # only ~14Gi system memory left. gtr-152 (more headroom) stays at
+        # 256K. If gtr-153 needs 256K again, free memory some other way
+        # first (see gtr-inference-fleet memory for options weighed).
+        ctxSize = 131072;
+        newCli = true;
+        mtp = {
+          nMax = 2;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        # --fit off: gtr-153's /srv is ZFS; the auto memory-fit step re-reads
+        # the whole GGUF to measure (~8min cold load observed on the old
+        # Q8_0 Ornith AEON deploy here). Skip it — -ngl 99 with known-free
+        # GPU memory loads in seconds instead.
+        extraFlags = [
+          "--fit"
+          "off"
+          "--temp"
+          "0.6"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
         ];
       };
     };
