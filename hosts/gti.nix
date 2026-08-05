@@ -151,6 +151,39 @@
           port = 8132;
           comment = "konnectivity-agent → server from LAN (multi-node future)";
         }
+
+        # Dolt (modules.dolt). These two pod-CIDR rules already existed on the
+        # host but had been added by hand and were never declared here, so a
+        # re-deploy could silently drop them and cut the whole town off from
+        # beads. Declared now so they survive.
+        {
+          from = "10.244.0.0/16";
+          port = 3306;
+          comment = "Dolt SQL from k0s pods";
+        }
+        {
+          from = "10.244.0.0/16";
+          port = 50051;
+          comment = "Dolt remotes API from k0s pods";
+        }
+
+        # Workstation access for `bd dolt push/pull`. Deliberately scoped to the
+        # workstation segment rather than 192.168.0.0/16: the dolt server runs
+        # passwordless-root on the LAN, so every host covered here gets
+        # unauthenticated root over every bead database. Keep this as narrow as
+        # the designated-migrator model needs — exactly one machine may apply bd
+        # schema migrations, and it must be able to push afterwards or the
+        # schema forks silently (bd #4259).
+        {
+          from = "192.168.7.0/24";
+          port = 3306;
+          comment = "Dolt SQL from workstation segment — bd dolt push/pull";
+        }
+        {
+          from = "192.168.7.0/24";
+          port = 50051;
+          comment = "Dolt remotes API from workstation segment — bd dolt push/pull";
+        }
       ];
     };
 
