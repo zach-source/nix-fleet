@@ -3,12 +3,17 @@
 # the USB installer ISOs but using the NixOS netboot module instead.
 #
 # Produces: system.build.kernel, system.build.netbootRamdisk, system.build.squashfsStore
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  modulesPath,
+  ...
+}:
 
 {
   imports = [
     # NixOS netboot module — provides kernel, initrd, and squashfs store builds
-    <nixpkgs/nixos/modules/installer/netboot/netboot.nix>
+    (modulesPath + "/installer/netboot/netboot.nix")
   ];
 
   # Use zstd for squashfs — fast decompression on the client

@@ -457,23 +457,23 @@ func hashContent(content []byte) string {
 func (s *HostState) GetHostSummary() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Host: %s (%s)\n", s.Hostname, s.Base))
-	sb.WriteString(fmt.Sprintf("Generation: %d\n", s.CurrentGeneration))
-	sb.WriteString(fmt.Sprintf("Last Apply: %s\n", s.LastApply.Format(time.RFC3339)))
+	fmt.Fprintf(&sb, "Host: %s (%s)\n", s.Hostname, s.Base)
+	fmt.Fprintf(&sb, "Generation: %d\n", s.CurrentGeneration)
+	fmt.Fprintf(&sb, "Last Apply: %s\n", s.LastApply.Format(time.RFC3339))
 
 	if s.RebootRequired {
 		sb.WriteString("Reboot Required: YES\n")
 		if len(s.RebootPackages) > 0 {
-			sb.WriteString(fmt.Sprintf("  Packages: %s\n", strings.Join(s.RebootPackages, ", ")))
+			fmt.Fprintf(&sb, "  Packages: %s\n", strings.Join(s.RebootPackages, ", "))
 		}
 	}
 
 	if s.PendingUpdates > 0 {
-		sb.WriteString(fmt.Sprintf("Pending Updates: %d (%d security)\n", s.PendingUpdates, s.SecurityUpdates))
+		fmt.Fprintf(&sb, "Pending Updates: %d (%d security)\n", s.PendingUpdates, s.SecurityUpdates)
 	}
 
 	if s.DriftDetected {
-		sb.WriteString(fmt.Sprintf("Drift Detected: %d files\n", len(s.DriftFiles)))
+		fmt.Fprintf(&sb, "Drift Detected: %d files\n", len(s.DriftFiles))
 	}
 
 	// Service health summary
@@ -487,7 +487,7 @@ func (s *HostState) GetHostSummary() string {
 		}
 	}
 	if len(s.ServiceHealth) > 0 {
-		sb.WriteString(fmt.Sprintf("Services: %d healthy, %d unhealthy\n", healthy, unhealthy))
+		fmt.Fprintf(&sb, "Services: %d healthy, %d unhealthy\n", healthy, unhealthy)
 	}
 
 	return sb.String()
@@ -535,36 +535,36 @@ func (p *PlanDiff) Summary() string {
 	}
 
 	if len(p.FilesAdded) > 0 {
-		sb.WriteString(fmt.Sprintf("Files to add: %d\n", len(p.FilesAdded)))
+		fmt.Fprintf(&sb, "Files to add: %d\n", len(p.FilesAdded))
 		for _, f := range p.FilesAdded {
-			sb.WriteString(fmt.Sprintf("  + %s\n", f))
+			fmt.Fprintf(&sb, "  + %s\n", f)
 		}
 	}
 
 	if len(p.FilesChanged) > 0 {
-		sb.WriteString(fmt.Sprintf("Files to modify: %d\n", len(p.FilesChanged)))
+		fmt.Fprintf(&sb, "Files to modify: %d\n", len(p.FilesChanged))
 		for _, f := range p.FilesChanged {
-			sb.WriteString(fmt.Sprintf("  ~ %s\n", f.Path))
+			fmt.Fprintf(&sb, "  ~ %s\n", f.Path)
 		}
 	}
 
 	if len(p.FilesRemoved) > 0 {
-		sb.WriteString(fmt.Sprintf("Files to remove: %d\n", len(p.FilesRemoved)))
+		fmt.Fprintf(&sb, "Files to remove: %d\n", len(p.FilesRemoved))
 		for _, f := range p.FilesRemoved {
-			sb.WriteString(fmt.Sprintf("  - %s\n", f))
+			fmt.Fprintf(&sb, "  - %s\n", f)
 		}
 	}
 
 	if len(p.PackagesToAdd) > 0 {
-		sb.WriteString(fmt.Sprintf("Packages to add: %s\n", strings.Join(p.PackagesToAdd, ", ")))
+		fmt.Fprintf(&sb, "Packages to add: %s\n", strings.Join(p.PackagesToAdd, ", "))
 	}
 
 	if len(p.PackagesToRemove) > 0 {
-		sb.WriteString(fmt.Sprintf("Packages to remove: %s\n", strings.Join(p.PackagesToRemove, ", ")))
+		fmt.Fprintf(&sb, "Packages to remove: %s\n", strings.Join(p.PackagesToRemove, ", "))
 	}
 
 	if len(p.UnitsToRestart) > 0 {
-		sb.WriteString(fmt.Sprintf("Units to restart: %s\n", strings.Join(p.UnitsToRestart, ", ")))
+		fmt.Fprintf(&sb, "Units to restart: %s\n", strings.Join(p.UnitsToRestart, ", "))
 	}
 
 	if p.RebootRequired {

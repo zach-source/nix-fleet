@@ -1226,7 +1226,7 @@ Always serial — one host at a time — to protect shared services.`,
 					}
 					fmt.Printf("  Proceed with upgrade of %s → %s? [y/N]: ", host.Name, dest)
 					var resp string
-					fmt.Scanln(&resp)
+					_, _ = fmt.Scanln(&resp)
 					if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp)), "y") {
 						fmt.Printf("  skipped by operator\n\n")
 						continue
@@ -6095,7 +6095,7 @@ func formatYAMLList(items []string, indent int) string {
 	var sb strings.Builder
 	prefix := strings.Repeat(" ", indent)
 	for _, item := range items {
-		sb.WriteString(fmt.Sprintf("%s- %s\n", prefix, item))
+		fmt.Fprintf(&sb, "%s- %s\n", prefix, item)
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
 }
@@ -6104,7 +6104,7 @@ func formatNixList(items []string, indent int) string {
 	var sb strings.Builder
 	prefix := strings.Repeat(" ", indent)
 	for _, item := range items {
-		sb.WriteString(fmt.Sprintf("%s\"%s\"\n", prefix, item))
+		fmt.Fprintf(&sb, "%s\"%s\"\n", prefix, item)
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
 }
