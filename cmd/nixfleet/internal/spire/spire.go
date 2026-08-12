@@ -227,7 +227,7 @@ func StartPortForward(ctx context.Context, localPort string) (*exec.Cmd, error) 
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Process.Signal(syscall.SIGTERM)
 	return nil, fmt.Errorf("port-forward did not become available within 10s")
 }
 
@@ -265,7 +265,7 @@ func BootstrapAgent(ctx context.Context, agentBinary, configPath, joinToken stri
 	for i := 0; i < 30; i++ {
 		select {
 		case <-ctx.Done():
-			cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Process.Signal(syscall.SIGTERM)
 			f.Close()
 			return ctx.Err()
 		default:
@@ -276,15 +276,15 @@ func BootstrapAgent(ctx context.Context, agentBinary, configPath, joinToken stri
 
 		if strings.Contains(logStr, "Node attestation was successful") {
 			// Attestation succeeded — SVID saved to disk, stop the bootstrap agent
-			cmd.Process.Signal(syscall.SIGTERM)
-			cmd.Wait()
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
 			f.Close()
 			return nil
 		}
 
 		if strings.Contains(logStr, "Agent crashed") {
-			cmd.Process.Signal(syscall.SIGTERM)
-			cmd.Wait()
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
 			f.Close()
 			return fmt.Errorf("agent crashed during bootstrap — check %s:\n%s", logFile, lastLines(logStr, 5))
 		}
@@ -292,8 +292,8 @@ func BootstrapAgent(ctx context.Context, agentBinary, configPath, joinToken stri
 		time.Sleep(time.Second)
 	}
 
-	cmd.Process.Signal(syscall.SIGTERM)
-	cmd.Wait()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
 	f.Close()
 	logContent, _ := os.ReadFile(logFile)
 	return fmt.Errorf("attestation did not complete within 30s — check %s:\n%s", logFile, lastLines(string(logContent), 5))
@@ -423,7 +423,7 @@ func StopAgent(keepConfig bool) error {
 			if strings.HasPrefix(line, "\"PID\" = ") {
 				pidStr := strings.TrimSuffix(strings.TrimPrefix(line, "\"PID\" = "), ";")
 				if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
-					syscall.Kill(pid, syscall.SIGTERM)
+					_ = syscall.Kill(pid, syscall.SIGTERM)
 				}
 			}
 		}

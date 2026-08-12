@@ -117,9 +117,9 @@ state anyway. Run with --dry-run first to see the drift report.`,
 				}
 
 				status := "NEW DEPLOYMENT"
-				switch {
-				case current.ManifestHash == "":
-				case current.ManifestHash == closure.ManifestHash:
+				switch current.ManifestHash {
+				case "":
+				case closure.ManifestHash:
 					status = "already recorded (matching hash)"
 				default:
 					status = "recorded at a different hash"
