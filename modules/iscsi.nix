@@ -33,7 +33,7 @@ in
 
     replacementTimeout = lib.mkOption {
       type = lib.types.ints.positive;
-      default = 120;
+      default = 600;
       description = ''
         iSCSI node.session.timeo.replacement_timeout in seconds — how long the
         initiator waits for a stalled target before failing in-flight I/O. On
@@ -43,7 +43,14 @@ in
         gastown outage, nix-fleet-hosts-k3x). Applied to iscsid.conf and to
         existing node records on activation; it takes effect on the next session
         login/reboot — activation deliberately does NOT force a re-login, which
-        would drop live CSI PVCs. Default 120 preserves upstream behaviour.
+        would drop live CSI PVCs.
+
+        Default 600 (not open-iscsi's upstream 120): on the 2026-08-13 znas blip
+        gti at 600 logged "operational after recovery" while gtr-153 at 120 hit
+        "session recovery timed out after 120 secs" and forced the
+        monitoring/prometheus-server btrfs LUN readonly. btrfs never recovers
+        from that in place — it needs a full unmount/remount (pod delete →
+        CSI detach/reattach), so erroring early is strictly worse than hanging.
       '';
     };
   };
