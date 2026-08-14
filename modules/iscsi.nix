@@ -40,10 +40,11 @@ in
         single-path nodes raise this above the expected worst-case target stall
         so a transient Synology DSM hiccup makes I/O hang-and-resume instead of
         escalating to SCSI-offline → btrfs forced-readonly (the 2026-07-23
-        gastown outage, nix-fleet-hosts-k3x). Applied to iscsid.conf and to
-        existing node records on activation; it takes effect on the next session
-        login/reboot — activation deliberately does NOT force a re-login, which
-        would drop live CSI PVCs.
+        gastown outage, nix-fleet-hosts-k3x). Applied on activation to
+        iscsid.conf, to existing node records, and — via each session's
+        recovery_tmo in sysfs — to sessions that are already logged in, so it
+        takes effect immediately without a re-login (a re-login would drop live
+        CSI PVCs, so activation deliberately never forces one).
 
         Default 600 (not open-iscsi's upstream 120): on the 2026-08-13 znas blip
         gti at 600 logged "operational after recovery" while gtr-153 at 120 hit
@@ -122,12 +123,30 @@ in
         echo "iscsi: iscsid.conf replacement_timeout=$RT (new sessions)"
       fi
       # Update existing node records so the value takes effect on next login.
-      # Deliberately NOT re-logging-in here — that would drop live CSI PVCs; the
-      # value activates on the next session (re)establishment (pod roll / reboot).
+      # Deliberately NOT re-logging-in here — that would drop live CSI PVCs.
+      # New sessions pick it up at login; already-live ones are handled below.
       if command -v iscsiadm >/dev/null 2>&1; then
         iscsiadm -m node -o update -n node.session.timeo.replacement_timeout -v "$RT" 2>/dev/null \
-          && echo "iscsi: node records replacement_timeout=$RT (active on next login/reboot)" \
+          && echo "iscsi: node records replacement_timeout=$RT (new logins)" \
           || true
+      fi
+      # Already-logged-in sessions keep the OLD value — which is exactly the
+      # ones holding live PVCs, so without this the new timeout protects
+      # nothing until a reboot. recovery_tmo is the running session's copy of
+      # replacement_timeout and is writable, so set it in place; no re-login,
+      # no I/O interruption. (2026-08-13: had to do this by hand fleet-wide
+      # after raising the default, because activation alone changed nothing.)
+      rtn=0
+      for s in /sys/class/iscsi_session/session*/recovery_tmo; do
+        [ -e "$s" ] || continue
+        if echo "$RT" > "$s" 2>/dev/null; then
+          rtn=$((rtn + 1))
+        else
+          echo "iscsi: WARNING could not set $s=$RT"
+        fi
+      done
+      if [ "$rtn" -gt 0 ]; then
+        echo "iscsi: recovery_tmo=$RT on $rtn live session(s)"
       fi
     '';
 
