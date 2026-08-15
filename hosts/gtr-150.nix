@@ -93,7 +93,14 @@
       };
 
       # Code completion (FIM)
+      #
+      # DISABLED 2026-08-15: unused. Over the preceding 30 days this served
+      # SIX generations total, two of them longer than 20 tokens. gtr-150 is
+      # the fleet's tightest node (~25G free of 122G across 10 services), so
+      # the slot is worth more than the model. Config kept for a quick revert:
+      # flip `enable = true` + `nixfleet apply -H gtr-150`.
       services.codecomplete = {
+        enable = false;
         description = "Qwen2.5-Coder 1.5B - FIM Code Completion";
         model = "/srv/models/support/qwen2.5-coder-1.5b-instruct-q8_0.gguf";
         port = 8092;
@@ -108,7 +115,14 @@
       };
 
       # Agent orchestrator
+      #
+      # DISABLED 2026-08-15: effectively unused. Its request count looks busy
+      # (4,606 generations in 30 days) but 4,590 of those are ONE-token
+      # LiteLLM health probes firing every ~35s — only 15 real generations in
+      # a month. Count generations excluding `prompt eval time` lines before
+      # trusting traffic numbers here. Revert: `enable = true` + apply.
       services.orchestrator = {
+        enable = false;
         description = "Qwen3.5-9B - Agent Orchestrator";
         model = "/srv/models/support/Qwen3.5-9B-Q4_K_M.gguf";
         port = 8093;
