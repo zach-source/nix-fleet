@@ -101,50 +101,85 @@
       # (hosts/gtr-153.nix), and ornith's freed headroom goes to a larger
       # context (65K -> 200K) below. See docs/llm-proxy-usage.md.
 
-      # Ornith-1.0-35B-MoE (deepreinforce-ai) — SOTA open coding-agent model,
-      # post-trained on Qwen3.6-35B-A3B, so it runs on the same latest-upstream
-      # build + shares the same 1M-YaRN/MTP GGUF as gtr-152.
-      # 2026-07-26: SWITCHED classic draft -> MTP trial (mirrors gtr-152),
-      # to A/B MTP across two identical gfx1151 nodes. Classic draft proved
-      # ~78 tok/s predictable / ~42 realistic (2026-07-04); if MTP crashes
-      # here (qwen35moe MTP has a documented ROCm "unspecified launch
-      # failure" history — see :8084 above), revert this block to the old
-      # `draft = { model = ".../Qwen3.5-0.8B-Q4_K_M.gguf"; max = 8; min = 1;
-      # pMin = 0.5; }` and drop `mtp`.
-      services.ornith = {
-        description = "Ornith-1.0-35B-MoE coding agent (Qwen3.6-35B post-train) + MTP trial";
-        # 1M-YaRN GGUF (satgeze): YaRN factor-4 metadata (native 262K -> 1M
-        # ceiling, applied automatically, no rope flags) + a grafted MTP head.
-        model = "/srv/models/ornith-1.0-35b-1M-MTP-Q6_K.gguf";
+      # Qwen3.8-27B dense — REPLACES Ornith-1.0-35B-MoE at this port
+      # (2026-08-15). Ornith was the fleet's coding-agent model; Qwen3.8 beats
+      # it on the agentic/coding evals it was chosen for, and unlike Ornith it
+      # is a dense 27B rather than a 35B-A3B MoE, so it sidesteps the qwen35moe
+      # MTP "unspecified launch failure" history documented on :8084 above.
+      # Ornith's GGUF stays on disk for a one-line revert.
+      #
+      # Q8_0 (29GB) — the highest practical quant, chosen because gtr-151 has
+      # the fleet's most headroom and because gtr-153's Q5_K_XL showed only
+      # 52-62% MTP draft acceptance vs the Qwen3.6-27B's 70-84%. This deploy
+      # tests both suspected causes at once: higher quant, and a single-repo
+      # MTP-merged GGUF instead of gtr-153's cross-repo pairing (unsloth
+      # weights + ggml-org draft head).
+      #
+      # Source is Jackrong/Qwen3.8-27B-MTP-GGUF, whose card claims the MTP head
+      # is bundled in ("No additional draft model is required"). Treat that as
+      # unverified — the card also reports "0.5B params" and architecture
+      # "clip", and its Q8_0 is within 1,696 bytes of unsloth's plain Q8_0
+      # while an MTP head is ~3.16GB. If the load log shows no MTP tensors,
+      # add `--spec-draft-model /srv/models/mtp-Qwen3.8-27B-Q8_0.gguf` to
+      # extraFlags (the gtr-153 pattern).
+      services.qwen38-27b = {
+        description = "Qwen3.8-27B dense Q8_0 (Jackrong MTP-merged) @ 250K ctx";
+        model = "/srv/models/Qwen3.8-27B-MTP-Q8_0.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
-        # ctx-size is the TOTAL KV budget, split across --parallel slots: 524288
-        # / 2 = 256K per concurrent request. parallel=2 lets each backend serve 2
-        # requests at once (the pool bottlenecked at 1 slot/backend in load
-        # testing). TIGHTEST node (co-hosts the 200K 35B-A3B MoE :8084): 512K KV
-        # is ~1.33x the old 384K; if this OOMs at boot, drop ctxSize to 393216
-        # (192K/req) or 262144. q4_0 KV + flash-attn keep it compact.
-        ctxSize = 524288;
-        parallel = 2;
-        batchSize = 512;
-        ubatchSize = 512;
+        # 250K baseline context, and ctx-size is the TOTAL KV budget split
+        # across --parallel slots — so parallel=1 to give a single request the
+        # full 250K (ornith ran 524288/2 for two 256K slots). The hybrid
+        # Gated-DeltaNet arch keeps this affordable: only 16 of 64 layers are
+        # full attention, so 250K of q4_0 KV is ~5G, not the ~20G a dense-
+        # attention 27B would need.
+        ctxSize = 250000;
+        parallel = 1;
+        # 2048 (not ornith's 512) because prefill is this model's real cost
+        # centre — measured 184 t/s at 50K on gtr-153, i.e. TTFT grows fast
+        # with context. Bigger batches buy prefill throughput.
+        batchSize = 2048;
+        ubatchSize = 2048;
         newCli = true;
+        # nMax=2 per Jackrong's card (it benchmarks max-draft 2 at 77.9%
+        # acceptance); also matches the fleet's n_max=1-2 precedent.
         mtp = {
-          nMax = 3;
+          nMax = 2;
         };
+        # Kept so that a client which explicitly re-enables thinking still gets
+        # it parsed into `reasoning_content` and bounded to 2048 tokens. The
+        # default-off switch is `--chat-template-kwargs` in extraFlags below —
+        # NOT this. `--reasoning-budget 0` was tried first and does NOT stop
+        # generation: the model still produced reasoning, llama.cpp merely
+        # split it into the `reasoning_content` field, so the tokens were still
+        # paid for. Verified on this endpoint.
         reasoning = {
           format = "deepseek";
           budget = 2048;
         };
-        # Ornith/Qwen coding-recommended sampling (clients may override).
+        # Qwen3.8 non-thinking ("instruct") sampling from the model card —
+        # temp 0.7 / top_p 0.80 / presence_penalty 1.5, which differs from the
+        # thinking-mode preset (1.0 / 0.95 / 0.0) used on gtr-153:8085.
+        # presence_penalty curbs the repetition non-thinking mode is prone to;
+        # the card warns values above ~2 cause language mixing.
         extraFlags = [
+          # THINKING OFF by default for every caller. Single-quoted so systemd
+          # preserves the inner double quotes — unquoted, systemd strips them
+          # and llama.cpp receives invalid JSON. A client can still opt back in
+          # per-request with chat_template_kwargs.enable_thinking = true.
+          "--chat-template-kwargs"
+          "'{\"enable_thinking\":false}'"
           "--temp"
-          "0.6"
+          "0.7"
           "--top-p"
-          "0.95"
+          "0.80"
           "--top-k"
           "20"
+          "--min-p"
+          "0.0"
+          "--presence-penalty"
+          "1.5"
         ];
       };
     };

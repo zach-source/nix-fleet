@@ -77,10 +77,15 @@
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8085;
         ctxSize = 131072;
-        # Unlike 3.6 (MTP grafted into one GGUF), upstream ships 3.8's MTP head
-        # as a separate file, so --spec-type draft-mtp needs an explicit draft
-        # model path — passed via extraFlags since the module's `mtp` submodule
-        # has no model option.
+        # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
+        # `strings` on the file shows qwen35.nextn_predict_layers and
+        # blk.64.nextn.* tensors. An earlier revision also passed
+        # `--spec-draft-model /srv/models/mtp-Qwen3.8-27B-Q8_0.gguf`, which
+        # overrode that built-in head with ggml-org's Q8_0 one against these
+        # Q5_K_XL weights. Measured draft acceptance was 57% on a code-gen
+        # benchmark, against 81% for gtr-151's single-repo merged-MTP build on
+        # the same workload. The external draft file is now dropped; it stays
+        # on disk but is unused.
         mtp = {
           nMax = 2;
         };
@@ -89,8 +94,6 @@
           budget = 2048;
         };
         extraFlags = [
-          "--spec-draft-model"
-          "/srv/models/mtp-Qwen3.8-27B-Q8_0.gguf"
           # --fit off for the same reason as hauhaucs below: /srv is ZFS and the
           # auto memory-fit step re-reads the whole GGUF to measure.
           "--fit"
