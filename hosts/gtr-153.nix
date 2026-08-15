@@ -58,23 +58,29 @@
       # 2026-07-26: Ornith-AEON abliterated REMOVED (was here) — replaced by
       # HauhauCS-Aggressive-MTP (see below), deployed on this node + gtr-152.
 
-      # Qwen3.6-27B DENSE — MOVED here from gtr-151 (2026-07-17) to use this
-      # node's otherwise-idle GPU and relieve gtr-151's 3-model contention.
-      # Needs the latest-upstream gfx1151 build (/opt/llama-rocm-latest) + its
-      # pinned /opt/rocm-sdk, both staged onto gtr-153 alongside the 25GB MTP
-      # GGUF. MTP self-speculation (pure 3.6, no draft model).
+      # Qwen3.8-27B DENSE — succeeds the Qwen3.6-27B that held this slot
+      # (:8085) from 2026-07-17 until it was disabled 2026-07-27 for memory.
+      # Same GGUF architecture string (`qwen35`) as the 3.6 it replaces, so the
+      # existing /opt/llama-rocm-latest build loads it unchanged; the old 3.6
+      # GGUF stays on disk for a one-line revert.
       #
-      # DISABLED 2026-07-27: stopped to free memory for hauhaucs-uncensored
-      # (co-tenant on this node was thrashing swap). Config kept for a quick
-      # re-enable; flip `enable = true` + `nixfleet apply -H gtr-153` to restore.
-      services.qwen36-27b = {
-        enable = false;
-        description = "Qwen3.6-27B dense (quality/coding) + MTP self-speculation";
-        model = "/srv/models/Qwen3.6-27B-MTP-UD-Q6_K_XL.gguf";
+      # Deliberately Q5_K_XL (20.2GB), not the Q6_K_XL (25.9GB) the 3.6 used:
+      # this node co-hosts hauhaucs-uncensored + k0s pods and was swap-thrashing
+      # at the 26GB size. ctxSize also stays at the slot's proven 131072 even
+      # though 3.8 is natively 262144 — raise it only after watching `free -g`
+      # here, since the hybrid Gated-DeltaNet arch keeps KV cheap (only 16 of 64
+      # layers are full attention) and the headroom may well be there.
+      services.qwen38-27b = {
+        description = "Qwen3.8-27B dense (quality/coding/agentic) + MTP self-speculation";
+        model = "/srv/models/Qwen3.8-27B-UD-Q5_K_XL.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8085;
         ctxSize = 131072;
+        # Unlike 3.6 (MTP grafted into one GGUF), upstream ships 3.8's MTP head
+        # as a separate file, so --spec-type draft-mtp needs an explicit draft
+        # model path — passed via extraFlags since the module's `mtp` submodule
+        # has no model option.
         mtp = {
           nMax = 2;
         };
@@ -83,8 +89,15 @@
           budget = 2048;
         };
         extraFlags = [
+          "--spec-draft-model"
+          "/srv/models/mtp-Qwen3.8-27B-Q8_0.gguf"
+          # --fit off for the same reason as hauhaucs below: /srv is ZFS and the
+          # auto memory-fit step re-reads the whole GGUF to measure.
+          "--fit"
+          "off"
+          # Qwen3.8 model card, thinking mode (3.6 used temp 0.6; 3.8 asks 1.0).
           "--temp"
-          "0.6"
+          "1.0"
           "--top-p"
           "0.95"
           "--top-k"
@@ -154,7 +167,7 @@
         {
           from = "192.168.0.0/16";
           port = 8085;
-          comment = "Qwen3.6-27B llama-server from LAN/cluster (moved from gtr-151)";
+          comment = "Qwen3.8-27B llama-server from LAN/cluster (LiteLLM gateway)";
         }
         # The LiteLLM pod egresses to this node WITHOUT SNAT (arrives with the
         # k8s pod-CIDR source, not the node IP), so the LAN rules above don't
@@ -168,7 +181,7 @@
         {
           from = "10.244.0.0/16";
           port = 8085;
-          comment = "Qwen3.6-27B llama-server from k8s pod CIDR (LiteLLM)";
+          comment = "Qwen3.8-27B llama-server from k8s pod CIDR (LiteLLM)";
         }
         {
           from = "10.244.0.0/16";
