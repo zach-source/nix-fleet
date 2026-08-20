@@ -120,7 +120,7 @@ func (d *Deployer) ActivateDarwin(ctx context.Context, client *ssh.Client, closu
 // GetCurrentGeneration gets the current generation on a host
 func (d *Deployer) GetCurrentGeneration(ctx context.Context, client *ssh.Client, base string) (int, string, error) {
 	var profilePath, storePathCmd string
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "nixos":
 		profilePath = "/nix/var/nix/profiles/system"
 		storePathCmd = "readlink /run/current-system"
@@ -174,7 +174,7 @@ func parseGeneration(linkName string) int {
 
 // Rollback rolls back to a previous generation
 func (d *Deployer) Rollback(ctx context.Context, client *ssh.Client, base string, generation int) error {
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "nixos":
 		return d.rollbackNixOS(ctx, client, generation)
 	case "ubuntu":
@@ -259,7 +259,7 @@ func (d *Deployer) rollbackDarwin(ctx context.Context, client *ssh.Client, gener
 
 // CheckRebootNeeded checks if a host needs to be rebooted
 func (d *Deployer) CheckRebootNeeded(ctx context.Context, client *ssh.Client, base string) (bool, error) {
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "ubuntu":
 		result, err := client.Exec(ctx, "test -f /var/run/reboot-required && echo yes || echo no")
 		if err != nil {

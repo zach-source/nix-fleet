@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nixfleet/nixfleet/internal/inventory"
 )
 
 // Evaluator handles Nix evaluation and builds
@@ -47,7 +49,7 @@ type HostClosure struct {
 // EvalHost evaluates a host configuration and returns its store path
 func (e *Evaluator) EvalHost(ctx context.Context, hostName string, base string) (*HostClosure, error) {
 	var attr string
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "nixos":
 		attr = fmt.Sprintf("nixosConfigurations.%s.config.system.build.toplevel", hostName)
 	case "ubuntu":
@@ -102,7 +104,7 @@ func (e *Evaluator) EvalAttrJSON(ctx context.Context, attr string) ([]byte, erro
 // BuildHost builds a host configuration and returns the store path
 func (e *Evaluator) BuildHost(ctx context.Context, hostName string, base string) (*HostClosure, error) {
 	var attr string
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "nixos":
 		attr = fmt.Sprintf("nixosConfigurations.%s.config.system.build.toplevel", hostName)
 	case "ubuntu":

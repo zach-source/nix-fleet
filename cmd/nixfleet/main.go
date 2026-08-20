@@ -374,7 +374,7 @@ func applyCmd() *cobra.Command {
 					continue
 				}
 
-				switch host.Base {
+				switch inventory.NormalizeBase(host.Base) {
 				case "ubuntu":
 					err = deployer.ActivateUbuntu(ctx, client, closure)
 				case "nixos":
@@ -670,10 +670,19 @@ Subcommands:
 	return cmd
 }
 
+// filterUbuntuHosts returns the hosts the apt-based OS-update orchestrator can
+// drive.
+//
+// This is deliberately an exact "ubuntu" match and NOT inventory.IsAptManaged.
+// DGX hosts are apt-managed and fully deployed by NixFleet, but their updates
+// belong to NVIDIA's tooling — DGX Dashboard, plus fwupdmgr for firmware, which
+// NixFleet cannot drive at all. Because a DGX host's base is "dgx", this strict
+// check is what keeps every os-update subcommand off them without each one
+// having to remember. See inventory.SupportsOSUpdates.
 func filterUbuntuHosts(hosts []*inventory.Host) []*inventory.Host {
 	var ubuntuHosts []*inventory.Host
 	for _, h := range hosts {
-		if h.Base == "ubuntu" {
+		if h.Base == inventory.BaseUbuntu {
 			ubuntuHosts = append(ubuntuHosts, h)
 		}
 	}
@@ -1469,7 +1478,7 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 					failed++
 					continue
 				}
-				switch host.Base {
+				switch inventory.NormalizeBase(host.Base) {
 				case "ubuntu":
 					err = deployer.ActivateUbuntu(ctx, client, closure)
 				case "nixos":
@@ -4339,7 +4348,7 @@ Examples:
 				// Update system trust store if requested
 				if trustSystem {
 					updateCmd := ""
-					switch host.Base {
+					switch inventory.NormalizeBase(host.Base) {
 					case "ubuntu":
 						updateCmd = fmt.Sprintf("sudo cp %s /usr/local/share/ca-certificates/nixfleet-ca.crt && sudo update-ca-certificates", caCertDest)
 					case "nixos", "darwin":

@@ -807,7 +807,7 @@ func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host
 		return
 	}
 
-	switch host.Base {
+	switch inventory.NormalizeBase(host.Base) {
 	case "ubuntu":
 		err = s.deployer.ActivateUbuntu(ctx, client, closure)
 	case "nixos":
@@ -951,7 +951,7 @@ func (s *Server) runApplyAllJob(ctx context.Context, job *Job, hosts []*inventor
 			continue
 		}
 
-		switch host.Base {
+		switch inventory.NormalizeBase(host.Base) {
 		case "ubuntu":
 			err = s.deployer.ActivateUbuntu(ctx, client, closure)
 		case "nixos":
@@ -1131,8 +1131,8 @@ func (s *Server) handleGetAptUpdates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1170,8 +1170,8 @@ func (s *Server) handleAptUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1205,8 +1205,18 @@ func (s *Server) handleAptUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
+		return
+	}
+
+	// Upgrading is the one apt operation DGX does not get. Installing and
+	// removing packages there is fine; upgrading is DGX Dashboard's job, and a
+	// full DGX update also covers firmware via fwupdmgr, which NixFleet has no
+	// way to drive. An apt-only upgrade here would be a partial update racing
+	// the dashboard for the same packages.
+	if !host.SupportsOSUpdates() {
+		s.jsonError(w, "apt upgrade is disabled on "+host.Base+" hosts; update via DGX Dashboard (it also covers firmware)", http.StatusBadRequest)
 		return
 	}
 
@@ -1244,8 +1254,8 @@ func (s *Server) handleGetAptPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1276,8 +1286,8 @@ func (s *Server) handleAptInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1321,8 +1331,8 @@ func (s *Server) handleAptRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1366,8 +1376,8 @@ func (s *Server) handleAptAutoremove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 
@@ -1399,8 +1409,8 @@ func (s *Server) handleAptClean(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if host.Base != "ubuntu" {
-		s.jsonError(w, "apt is only available on Ubuntu hosts", http.StatusBadRequest)
+	if !host.IsAptManaged() {
+		s.jsonError(w, "apt is only available on apt-managed hosts (ubuntu, dgx)", http.StatusBadRequest)
 		return
 	}
 

@@ -247,7 +247,7 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 
 	// Phase 4: Activate
 	log.Printf("[%s] Activating configuration...", host.Name)
-	switch host.Base {
+	switch inventory.NormalizeBase(host.Base) {
 	case "ubuntu":
 		if err := p.deployer.ActivateUbuntu(ctx, client, closure); err != nil {
 			result.Error = fmt.Sprintf("Activation failed: %v", err)

@@ -6,7 +6,7 @@
   mkHost =
     {
       name,
-      base, # "ubuntu" or "nixos"
+      base, # "ubuntu", "nixos" or "dgx"
       addr,
       sshUser ? "deploy",
       roles ? [ ],
@@ -25,7 +25,17 @@
         ;
 
       osUpdates = lib.recursiveUpdate (
-        if base == "ubuntu" then
+        if base == "dgx" then
+          # DGX updates belong to DGX Dashboard (and fwupdmgr for firmware),
+          # not NixFleet. Declared explicitly so a DGX host can never silently
+          # inherit Ubuntu's update defaults; the Go side also filters
+          # base=="dgx" out of every os-update path.
+          {
+            dgx = {
+              mode = "unmanaged";
+            };
+          }
+        else if base == "ubuntu" then
           {
             ubuntu = {
               mode = "manual";
