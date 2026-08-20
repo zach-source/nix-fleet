@@ -56,6 +56,7 @@
     packages = with pkgs; [
       git
       htop
+      iperf3
       curl
       jq
       tmux
