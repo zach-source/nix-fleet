@@ -54,6 +54,28 @@ in
       example = "192.168.8.140/24";
     };
 
+    parentDhcp = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Emit dhcp4/dhcp6 on the parent interface as well as its MTU.
+
+        Leave false when another netplan file already declares the parent's
+        addressing — netplan merges `ethernets` definitions across files, so on
+        the gtr nodes 50-cloud-init.yaml supplies DHCP and this module supplies
+        only the MTU.
+
+        Set true when netplan does NOT own the parent. DGX OS is the case that
+        forced this option to exist: its netplan is an empty
+        `renderer: NetworkManager` stub, and the management address comes from
+        an auto-created NetworkManager "Wired connection" profile. Declaring
+        the parent there with an MTU alone makes that the *entire* definition,
+        NetworkManager replaces its working profile with an address-less one,
+        and the host drops off the network — verified the hard way on
+        spark-7ee2, which needed a deadman rollback to come back.
+      '';
+    };
+
     peer = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -98,21 +120,36 @@ in
       mode = "0600";
       owner = "root";
       group = "root";
-      text = ''
-        # Managed by NixFleet — modules/storage-vlan.nix (do not edit).
-        # VLAN ${toString cfg.id} storage network, jumbo frames.
-        network:
-          version: 2
-          ethernets:
-            ${cfg.interface}:
-              mtu: ${toString cfg.mtu}
-          vlans:
-            ${vlanIface}:
-              id: ${toString cfg.id}
-              link: ${cfg.interface}
-              mtu: ${toString cfg.mtu}
-              addresses: [${cfg.address}]
-      '';
+      # Built line-by-line with explicit indentation rather than as a '' block.
+      # Nix strips the common leading whitespace of an indented string, so a
+      # conditionally-interpolated chunk lands at column 0 and silently yields
+      # YAML whose keys are not nested where they look nested. That is not
+      # hypothetical — the dhcp4/dhcp6 lines below hit it, producing a file that
+      # parsed as garbage. modules/dgx-spark-cluster.nix carries the same note.
+      text = lib.concatStringsSep "\n" (
+        [
+          "# Managed by NixFleet — modules/storage-vlan.nix (do not edit)."
+          "# VLAN ${toString cfg.id} storage network, jumbo frames."
+          "network:"
+          "  version: 2"
+          "  ethernets:"
+          "    ${cfg.interface}:"
+          "      mtu: ${toString cfg.mtu}"
+        ]
+        ++ lib.optionals cfg.parentDhcp [
+          "      dhcp4: true"
+          "      dhcp6: true"
+        ]
+        ++ [
+          "  vlans:"
+          "    ${vlanIface}:"
+          "      id: ${toString cfg.id}"
+          "      link: ${cfg.interface}"
+          "      mtu: ${toString cfg.mtu}"
+          "      addresses: [${cfg.address}]"
+          ""
+        ]
+      );
     };
 
     nixfleet.healthChecks = {

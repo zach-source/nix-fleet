@@ -4,12 +4,37 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 )
+
+// sshOpts builds NIX_SSHOPTS for the openssh that `nix copy` shells out to.
+//
+// Without this, openssh offers every key in the user's agent before any
+// explicit identity. Each rejection counts against the server's MaxAuthTries
+// (6 by default), so a workstation with a few unrelated keys loaded exhausts
+// the budget and the copy dies with "Too many authentication failures" — even
+// though the correct key was sitting right there, never offered.
+//
+// IdentitiesOnly confines openssh to the fleet keys, mirroring the ordering
+// fix in internal/ssh. Missing key files are skipped so this degrades to the
+// agent rather than breaking hosts that rely on it.
+func sshOpts() string {
+	opts := []string{"-o", "IdentitiesOnly=yes"}
+	for _, kf := range ssh.DefaultConfig().KeyFiles {
+		if _, err := os.Stat(kf); err == nil {
+			opts = append(opts, "-i", kf)
+		}
+	}
+	if len(opts) == 2 {
+		return "" // no key files found; leave openssh to its own devices
+	}
+	return strings.Join(opts, " ")
+}
 
 // Deployer handles copying closures and activating on hosts
 type Deployer struct {
@@ -35,6 +60,7 @@ func (d *Deployer) CopyToHost(ctx context.Context, closure *HostClosure, host *i
 
 	// Run nix copy
 	cmd := exec.CommandContext(ctx, d.nixBin, "copy", "--to", sshURI, closure.StorePath)
+	cmd.Env = append(os.Environ(), "NIX_SSHOPTS="+sshOpts())
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

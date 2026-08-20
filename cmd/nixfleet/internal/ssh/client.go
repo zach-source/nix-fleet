@@ -96,17 +96,27 @@ func NewClient(host string, cfg *ClientConfig) (*Client, error) {
 func buildAuthMethods(cfg *ClientConfig) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	// Try SSH agent first
-	if cfg.UseAgent {
-		if agentAuth := sshAgentAuth(); agentAuth != nil {
-			methods = append(methods, agentAuth)
-		}
-	}
-
-	// Then try key files
+	// Dedicated key files come first, the agent second.
+	//
+	// The agent offers every key it holds, and each one the server rejects
+	// counts against sshd's MaxAuthTries (6 by default). A workstation with a
+	// handful of unrelated keys loaded therefore burns through the budget and
+	// the connection is refused before the fleet key is ever offered — which
+	// presents as "unable to authenticate ... no supported methods remain",
+	// naming nothing useful.
+	//
+	// This stayed hidden on established hosts whose authorized_keys happened to
+	// include an agent key, and only appeared on a freshly bootstrapped host
+	// carrying the fleet key alone — i.e. the normal case for every new host.
 	for _, keyFile := range cfg.KeyFiles {
 		if auth, err := publicKeyAuth(keyFile); err == nil {
 			methods = append(methods, auth)
+		}
+	}
+
+	if cfg.UseAgent {
+		if agentAuth := sshAgentAuth(); agentAuth != nil {
+			methods = append(methods, agentAuth)
 		}
 	}
 

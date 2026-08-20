@@ -45,6 +45,10 @@
       enable = true;
       interface = "enP7s7";
       address = "192.168.8.141/24";
+      # DGX OS netplan is an empty `renderer: NetworkManager` stub — nothing
+      # else declares this interface, so the module must carry its addressing
+      # or NetworkManager replaces a working profile with an address-less one.
+      parentDhcp = true;
       peer = "192.168.8.133";
     };
 
