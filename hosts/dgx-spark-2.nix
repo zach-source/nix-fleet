@@ -48,6 +48,9 @@
       peer = "192.168.8.133";
     };
 
+    # Same as rank 0 — the entrypoint and wheel are absent here too.
+    modules.vllm.services.dsv4-flash.enable = false;
+
     healthChecks = {
       gpu-present = {
         type = "command";

@@ -145,6 +145,19 @@ let
   );
 
   # Generate health checks JSON
+  # Write a JSON blob to the store rather than interpolating it into the
+  # builder script.
+  #
+  # These were `echo '<json>' > $out/x.json`, which breaks the moment any value
+  # contains a single quote: it closes the shell string early and the remainder
+  # is parsed as code. A DGX health check of the form
+  #
+  #   test "$(ibdev2netdev | grep -c '(Up)')" -ge 2
+  #
+  # produced `syntax error near unexpected token '('` at build time — the config
+  # was fine, the quoting was not. writeJSON sidesteps shell quoting entirely.
+  writeJSON = name: data: pkgs.writeText name data;
+
   healthChecksData = builtins.toJSON cfg.healthChecks;
 
   # Declarative apt package state (Ubuntu native packages)
@@ -541,17 +554,12 @@ let
     log "Installing system profile..."
     nix-env --profile "$SYSTEM_LINK" --set ${packagesProfile}
 
-    # Step 2: Create directories
-    log "Creating directories..."
-    ${concatStringsSep "\n" (
-      mapAttrsToList (path: dirCfg: ''
-        mkdir -p "${path}"
-        chmod ${dirCfg.mode} "${path}"
-        chown ${dirCfg.owner}:${dirCfg.group} "${path}"
-      '') cfg.directories
-    )}
-
-    # Step 3: Create groups
+    # Step 2: Create groups
+    #
+    # Groups and users precede directories because a directory's owner/group
+    # may be one this activation is about to create. The reverse order chowns
+    # to a principal that does not exist yet, and `chown` fails the whole
+    # activation — there is no `|| true` on it, by design.
     log "Managing groups..."
     ${concatStringsSep "\n" (
       mapAttrsToList (
@@ -569,7 +577,7 @@ let
       ) cfg.groups
     )}
 
-    # Step 4: Create users
+    # Step 3: Create users
     log "Managing users..."
     ${concatStringsSep "\n" (
       mapAttrsToList (
@@ -592,6 +600,16 @@ let
           fi
         ''
       ) cfg.users
+    )}
+
+    # Step 4: Create directories
+    log "Creating directories..."
+    ${concatStringsSep "\n" (
+      mapAttrsToList (path: dirCfg: ''
+        mkdir -p "${path}"
+        chmod ${dirCfg.mode} "${path}"
+        chown ${dirCfg.owner}:${dirCfg.group} "${path}"
+      '') cfg.directories
     )}
 
     # Step 5: Decrypt and deploy secrets
@@ -990,15 +1008,18 @@ in
           cp ${activateScript} $out/activate
           chmod +x $out/activate
 
-          # Write metadata
-          echo '${fileMetadata}' > $out/files.json
-          echo '${unitsMetadata}' > $out/units.json
-          echo '${usersData}' > $out/users.json
-          echo '${groupsData}' > $out/groups.json
-          echo '${directoriesData}' > $out/directories.json
-          echo '${healthChecksData}' > $out/health-checks.json
-          echo '${secretsMetadata}' > $out/secrets.json
-          echo '${aptData}' > $out/apt.json
+          # Write metadata. These go through writeJSON, not an inline echo —
+          # see its definition for why.
+          cp ${writeJSON "files.json" fileMetadata} $out/files.json
+          cp ${writeJSON "units.json" unitsMetadata} $out/units.json
+          cp ${writeJSON "users.json" usersData} $out/users.json
+          cp ${writeJSON "groups.json" groupsData} $out/groups.json
+          cp ${writeJSON "directories.json" directoriesData} $out/directories.json
+          cp ${writeJSON "health-checks.json" healthChecksData} $out/health-checks.json
+          cp ${writeJSON "secrets.json" secretsMetadata} $out/secrets.json
+          cp ${writeJSON "apt.json" aptData} $out/apt.json
+
+          # Safe as an echo: a manifest hash is hex, so it has no metacharacters.
           echo '${manifestHash}' > $out/manifest-hash
 
           # Create bin symlinks for convenience

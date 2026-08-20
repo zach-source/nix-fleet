@@ -81,6 +81,11 @@
     # No apt.hold entries either. NVIDIA's update guide names no metapackages
     # and does not ask you to pin anything, so inventing holds would just fight
     # the dashboard. NixFleet already refuses to upgrade this host.
+    # Declared because it does not exist on a stock DGX OS image (checked on
+    # spark-5267). Activation creates groups before directories, so the chown
+    # below resolves.
+    groups.dgxusers = { };
+
     directories = {
       "/srv/datasets" = {
         mode = "0775";
@@ -88,6 +93,12 @@
         group = "dgxusers";
       };
     };
+
+    # dsv4 stays off until /opt/dsv4/bin/dsv4-vllm-entrypoint and the pinned
+    # vLLM dev wheel are on the box. Neither is packaged by NixFleet and both
+    # were verified ABSENT on this host 2026-08-20, so enabling it now would
+    # only produce a unit that starts, fails, and health-checks red.
+    modules.vllm.services.dsv4-flash.enable = false;
 
     healthChecks = {
       # Confirms the GPU is enumerable. Note `nvidia-smi` on Spark reports
