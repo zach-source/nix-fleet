@@ -183,39 +183,99 @@ Two known-good oddities, neither a fault:
 - DGX Dashboard binds **loopback** on `:11000`. Reach it with
   `ssh -L 11000:localhost:11000 <you>@<spark>` rather than opening a hole.
 
-## 7. Cable and bring up the ConnectX-7 fabric
+## 7. Bring up VLAN 8 and the ConnectX-7 fabric
+
+Applying the config only *writes* `/etc/netplan/40-cx7.yaml` and
+`60-storage-vlan8.yaml`. Nothing takes effect until `netplan apply`, and that is
+the one genuinely dangerous step on a box with no BMC and no reachable KVM.
+
+### Do it behind a deadman
+
+Arm a rollback first, then apply. If the change kills the network, the box
+repairs itself in four minutes instead of needing a drive.
+
+```bash
+# 1. arm
+ssh nixbot@<spark> 'sudo systemd-run --on-active=240 --unit=netplan-deadman --collect \
+  /bin/bash -c "mkdir -p /root/netplan-bak && \
+    mv /etc/netplan/40-cx7.yaml /etc/netplan/60-storage-vlan8.yaml /root/netplan-bak/ 2>/dev/null; \
+    netplan apply"'
+
+# 2. apply, detached — netplan apply drops your SSH session, so run it under
+#    systemd or the disconnect kills it mid-reconfigure
+ssh nixbot@<spark> 'sudo systemd-run --unit=netplan-apply-now --collect --no-block netplan apply'
+
+# 3. verify, then disarm
+ssh nixbot@<spark> 'sudo systemctl stop netplan-deadman.timer && \
+  sudo systemctl reset-failed netplan-deadman.timer netplan-deadman.service'
+```
+
+This is not theoretical. The first attempt on spark-7ee2 took the box off the
+network for ~104 seconds until the deadman restored it. See below for why.
+
+### Why the first attempt failed: DGX OS is NetworkManager
+
+`/etc/netplan/00-installer-config.yaml` on a Spark is an empty stub:
+
+```yaml
+network:
+  version: 2
+  renderer: NetworkManager
+```
+
+It declares **no interfaces at all**. The management address comes from an
+auto-created NetworkManager profile ("Wired connection 3", `ipv4.method: auto`),
+entirely outside netplan.
+
+The gtr nodes work differently: `50-cloud-init.yaml` declares the parent's
+addressing, and netplan **merges** `ethernets` definitions across files, so a
+second file supplying only `mtu:` is additive.
+
+On a Spark there is nothing to merge with. A parent declared with only an MTU
+becomes the *entire* definition, NetworkManager swaps its working profile for an
+address-less one, and the host vanishes. Hence
+`modules.storageVlan.parentDhcp = true`, which emits `dhcp4`/`dhcp6` alongside
+the MTU. Set it on any host where netplan does not already own the parent.
+
+Note the MTU itself was never the problem — `enP7s7` reports `maxmtu 9194` and
+stayed reachable at 9000 throughout.
+
+### Cabling
 
 Two rules from NVIDIA's playbook, neither enforceable from Nix:
 
-1. Cable the **same physical port** on both machines.
-2. Use the **same username** on both — `discover-sparks` assumes `$USER`
+1. Cable the **same physical port** on every node.
+2. Use the **same username** on every node — `discover-sparks` assumes `$USER`
    resolves identically across the fabric.
 
 The trap: **each QSFP port surfaces as two Linux interfaces**, because the NIC
 reaches the SoC over two PCIe Gen5 x4 links. One cable gives *two* `(Up)` lines.
-
-```bash
-ssh <you>@<spark> ibdev2netdev
-```
 
 | Port | Interfaces |
 |------|-----------|
 | Left (nearest the RJ45, from the rear) | `enp1s0f0np0`, `enP2p1s0f0np0` |
 | Right | `enp1s0f1np1`, `enP2p1s0f1np1` |
 
-`modules/dgx-spark-cluster.nix` defaults to the **right** port. If you cabled
-the left, override `interfaces` in the host file. Only `(Up)` interfaces are
-cabled — addressing a down interface silently does nothing.
+This pair is cabled on the **left** port, so both host files override the
+module's right-port default. Left and right are electrically identical — the
+playbook simply illustrates the right one, which is not a reason to move a
+cable.
 
-The module writes `/etc/netplan/40-cx7.yaml` (mode 0600), but netplan needs a
-nudge; `dgx-cx7-addresses` exists specifically to catch a file that was written
-and never applied:
+### Verified end state
 
-```bash
-nixfleet apply -g dgx
-nixfleet run -g dgx -- 'sudo netplan apply'
-nixfleet run -g dgx -- 'ping -c1 -W2 192.168.100.10'
-```
+Both Sparks, 2026-08-20:
+
+| | dgx-spark-1 (spark-5267) | dgx-spark-2 (spark-7ee2) |
+|---|---|---|
+| Management | 192.168.3.140/24, mtu 9000 | 192.168.3.141/24, mtu 9000 |
+| VLAN 8 | 192.168.8.140/24, mtu 9000 | 192.168.8.141/24, mtu 9000 |
+| CX7 | 192.168.100.10, 192.168.101.10 | 192.168.100.11, 192.168.101.11 |
+| Jumbo to gtr-150 | PASS (8972B, DF) | PASS |
+| Health checks | 9/9 PASS | 8/8 PASS |
+
+The jumbo ping matters more than a plain one: an untrunked or
+non-jumbo switch port still answers a normal ping while silently dropping
+anything over 1500.
 
 ## 8. Enable dsv4
 
