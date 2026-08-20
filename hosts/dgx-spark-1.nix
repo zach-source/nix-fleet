@@ -32,6 +32,9 @@
 {
   imports = [
     ../modules/dgx-spark-cluster.nix
+    ../modules/vllm.nix
+    # Rank 0 — the master, and the only node that serves HTTP (:8000).
+    (import ./dgx-spark-dsv4.nix { nodeRank = 0; })
   ];
 
   nixfleet = {
