@@ -28,20 +28,18 @@ nix eval --raw .#nixfleetConfigurations.dgx-spark-1.base   # -> dgx
 Both checks are local. `nixfleet status -g dgx` will resolve the hosts but
 cannot connect to anything until steps 1 and 2 are done.
 
-## 1. Set the real addresses
+## 1. Addresses
 
-`10.0.3.10` / `10.0.3.11` are placeholders. Replace them in **both** places or
-the two halves disagree and you deploy to nothing:
+Set, and verified against the hardware on 2026-08-20:
 
-| File | Field |
-|------|-------|
-| `inventory/fleet.yaml` | `hosts.dgx-spark-{1,2}.addr` |
-| `hosts/dgx-spark-{1,2}.nix` | `nixfleet.host.addr` |
+| Host | Management (`enP7s7`, 10GbE) | Storage VLAN 8 | CX7 fabric |
+|------|------------------------------|----------------|-----------|
+| dgx-spark-1 (`spark-5267`) | 192.168.3.140 | 192.168.8.140/24 | .100.10 / .101.10 |
+| dgx-spark-2 | 192.168.3.141 | 192.168.8.141/24 | .100.11 / .101.11 |
 
-The management address is the 10GbE RJ45 port. The `192.168.100.x` /
-`192.168.101.x` addresses are the ConnectX-7 fabric and are configured
-separately in [step 7](#7-cable-and-bring-up-the-connectx-7-fabric) — never put
-one of those in the inventory.
+Only the management address goes in `inventory/fleet.yaml` and
+`nixfleet.host.addr`. The other two are produced by
+`modules/storage-vlan.nix` and `modules/dgx-spark-cluster.nix`.
 
 ## 2. Bootstrap each Spark
 
@@ -50,12 +48,43 @@ Run on the box, as root, once per Spark. Installs Nix multi-user, creates
 
 ```bash
 scp scripts/bootstrap-ubuntu.sh <you>@<spark>:/tmp/
-ssh <you>@<spark> 'sudo bash /tmp/bootstrap-ubuntu.sh --ssh-key "$(cat ~/.ssh/nixfleet.pub)"'
+ssh -t <you>@<spark> 'sudo bash /tmp/bootstrap-ubuntu.sh --ssh-key "$(cat ~/.ssh/nixfleet.pub)"'
 ```
 
-> The script gates on `grep -q Ubuntu /etc/os-release`. DGX OS is an Ubuntu
-> derivative and should pass, but check `cat /etc/os-release` first — if NVIDIA
-> has rebranded `NAME=`, the gate is the only thing that needs relaxing.
+`-t` because `ztaylor` has **no passwordless sudo** on a fresh Spark (verified on
+spark-5267) — you will be prompted. That is also why this step cannot be
+automated from the workstation; it is the one part that needs your password.
+
+The OS gate passes: DGX OS 7.2.3 reports `ID=ubuntu`,
+`PRETTY_NAME="Ubuntu 24.04.4 LTS"`, with the DGX identity in `/etc/dgx-release`.
+
+### Add nixbot
+
+`nixbot` is the fleet escape hatch — passwordless, Duo-free sudo. It currently
+exists **only on gti** (uid 30033), not on the gtr nodes, so there is no
+existing-host pattern to copy; this is the definition:
+
+```bash
+sudo useradd -m -u 30033 -s /bin/bash -G sudo nixbot
+sudo install -d -m 700 -o nixbot -g nixbot /home/nixbot/.ssh
+sudo tee /home/nixbot/.ssh/authorized_keys >/dev/null <<'KEYS'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAt4RzLTsBILE4lf8vdzSGQpFoxDznF/ieCOyddXz2+4 GitHub
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIF0xNAQcC206JS3rcSwsZccWHGJoq976hSOMOqoyNSm agent-claude-workspace-ztaylor@localhost
+KEYS
+sudo chown nixbot:nixbot /home/nixbot/.ssh/authorized_keys
+sudo chmod 600 /home/nixbot/.ssh/authorized_keys
+echo 'nixbot ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/nixbot >/dev/null
+sudo chmod 440 /etc/sudoers.d/nixbot && sudo visudo -cf /etc/sudoers.d/nixbot
+```
+
+That grants full passwordless root to anyone holding either key — the same
+posture gti already runs, stated plainly rather than inherited by accident.
+
+Check it from the workstation:
+
+```bash
+ssh -o KexAlgorithms=curve25519-sha256 nixbot@192.168.3.140 'sudo -n id'
+```
 
 ### Seed trusted-users by hand
 

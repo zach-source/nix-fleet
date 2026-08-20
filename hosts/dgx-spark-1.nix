@@ -1,4 +1,4 @@
-# Example DGX Spark host configuration
+# DGX Spark 1 (spark-5267) — rank 0 of the stacked pair.
 #
 # DGX OS is NVIDIA's Ubuntu derivative, so NixFleet manages a Spark exactly like
 # an Ubuntu host — packages, files, users, directories, systemd units and health
@@ -33,6 +33,7 @@
   imports = [
     ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
+    ../modules/storage-vlan.nix
     ../modules/vllm.nix
     # Rank 0 — the master, and the only node that serves HTTP (:8000).
     (import ./dgx-spark-dsv4.nix { nodeRank = 0; })
@@ -42,16 +43,35 @@
     host = {
       name = "dgx-spark-1";
       base = "dgx";
-      addr = "10.0.3.10";
+      addr = "192.168.3.140";
     };
 
     # ConnectX-7 fabric to the other Spark. nodeIndex 10 is NVIDIA's first-node
-    # convention; the peer would be 11. Defaults to the RIGHT QSFP port's two
-    # logical interfaces — run `ibdev2netdev` and match whichever port you
-    # actually cabled, using the same physical port on both machines.
+    # convention; the peer is 11.
+    #
+    # The LEFT QSFP port is the cabled one here, so the module's right-port
+    # default is overridden. Verified on spark-5267 2026-08-20 — ibdev2netdev
+    # reports enp1s0f0np0 and enP2p1s0f0np0 (Up) while the right port's pair is
+    # (Down). Left and right are electrically identical; NVIDIA's playbook just
+    # happens to show the right one, so there is no reason to move the cable.
     modules.dgxSparkCluster = {
       enable = true;
       nodeIndex = 10;
+      interfaces = {
+        enp1s0f0np0 = "192.168.100";
+        enP2p1s0f0np0 = "192.168.101";
+      };
+    };
+
+    # VLAN 8 storage network, same as the gtr nodes. Parent is the 10GbE RJ45
+    # (enP7s7, maxmtu 9194 — verified, so 9000 fits). Peer is gtr-150, which
+    # already lives on this VLAN, so the check fails loudly if the switch port
+    # isn't trunked for 8.
+    modules.storageVlan = {
+      enable = true;
+      interface = "enP7s7";
+      address = "192.168.8.140/24";
+      peer = "192.168.8.133";
     };
 
     # Ordinary package management — the part that works like any other host.

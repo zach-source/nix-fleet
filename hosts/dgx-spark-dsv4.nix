@@ -26,7 +26,11 @@
   # The CX7 interface NCCL should use. Left unset, NCCL picks by its own
   # heuristics and may choose the 10GbE management NIC — the job still runs,
   # just at a fraction of the bandwidth, which is miserable to diagnose.
-  ncclInterface ? "enp1s0f1np1",
+  #
+  # The LEFT port is the cabled one on this pair (verified on spark-5267), so
+  # this must stay in step with modules.dgxSparkCluster.interfaces in both host
+  # files. Pointing NCCL at a down interface is the silent-hang case.
+  ncclInterface ? "enp1s0f0np0",
 }:
 
 {

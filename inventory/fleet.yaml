@@ -179,7 +179,7 @@ hosts:
   # here and in hosts/dgx-spark-{1,2}.nix before the first apply.
   dgx-spark-1:
     base: dgx
-    addr: 10.0.3.10
+    addr: 192.168.3.140
     ssh_user: deploy
     roles:
       - base
@@ -192,7 +192,7 @@ hosts:
 
   dgx-spark-2:
     base: dgx
-    addr: 10.0.3.11
+    addr: 192.168.3.141
     ssh_user: deploy
     roles:
       - base
