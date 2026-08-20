@@ -43,64 +43,35 @@ Only the management address goes in `inventory/fleet.yaml` and
 
 ## 2. Bootstrap each Spark
 
-Run on the box, as root, once per Spark. Installs Nix multi-user, creates
-`deploy`, writes the sudoers rules and seeds `/var/lib/nixfleet`:
+One script does all three password-requiring steps — `nixbot`, Nix + `deploy`,
+and the trusted-users seed. It is idempotent, so re-running is safe:
 
 ```bash
-scp scripts/bootstrap-ubuntu.sh <you>@<spark>:/tmp/
-ssh -t <you>@<spark> 'sudo bash /tmp/bootstrap-ubuntu.sh --ssh-key "$(cat ~/.ssh/nixfleet.pub)"'
+scp scripts/{bootstrap-ubuntu.sh,dgx-spark-setup.sh} <you>@<spark>:/tmp/
+ssh -t <you>@<spark> 'sudo bash /tmp/dgx-spark-setup.sh'
 ```
 
 `-t` because `ztaylor` has **no passwordless sudo** on a fresh Spark (verified on
-spark-5267) — you will be prompted. That is also why this step cannot be
-automated from the workstation; it is the one part that needs your password.
+spark-5267) — you will be prompted. That is precisely why this step cannot be
+driven from the workstation, and why it is the only manual one.
 
-The OS gate passes: DGX OS 7.2.3 reports `ID=ubuntu`,
-`PRETTY_NAME="Ubuntu 24.04.4 LTS"`, with the DGX identity in `/etc/dgx-release`.
+What it does, and why each part is needed:
 
-### Add nixbot
+| Step | Why it isn't already handled |
+|------|------------------------------|
+| `nixbot` (uid 30033, `NOPASSWD: ALL`) | Exists **only on gti**, not on any gtr node, so there is no host to copy from. Grants full passwordless root to either fleet key — gti's existing posture, stated rather than inherited. |
+| `bootstrap-ubuntu.sh` | Delegated to, not duplicated. Installs Nix, creates `deploy`, writes sudoers, seeds `/var/lib/nixfleet`. |
+| trusted-users seed | A genuine chicken-and-egg: `modules/nix-config.nix` owns `trusted-users`, but it can only arrive via an apply that the missing trust blocks. Also adds the `!include nix.custom.conf` line if the installer didn't, since otherwise the seed is read by nobody. |
 
-`nixbot` is the fleet escape hatch — passwordless, Duo-free sudo. It currently
-exists **only on gti** (uid 30033), not on the gtr nodes, so there is no
-existing-host pattern to copy; this is the definition:
+It refuses to run on anything without `/etc/dgx-release`. DGX OS reports
+`ID=ubuntu` and `PRETTY_NAME="Ubuntu 24.04.4 LTS"`, so os-release alone cannot
+identify a Spark — use `bootstrap-ubuntu.sh` directly for plain Ubuntu.
 
-```bash
-sudo useradd -m -u 30033 -s /bin/bash -G sudo nixbot
-sudo install -d -m 700 -o nixbot -g nixbot /home/nixbot/.ssh
-sudo tee /home/nixbot/.ssh/authorized_keys >/dev/null <<'KEYS'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAt4RzLTsBILE4lf8vdzSGQpFoxDznF/ieCOyddXz2+4 GitHub
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIF0xNAQcC206JS3rcSwsZccWHGJoq976hSOMOqoyNSm agent-claude-workspace-ztaylor@localhost
-KEYS
-sudo chown nixbot:nixbot /home/nixbot/.ssh/authorized_keys
-sudo chmod 600 /home/nixbot/.ssh/authorized_keys
-echo 'nixbot ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/nixbot >/dev/null
-sudo chmod 440 /etc/sudoers.d/nixbot && sudo visudo -cf /etc/sudoers.d/nixbot
-```
-
-That grants full passwordless root to anyone holding either key — the same
-posture gti already runs, stated plainly rather than inherited by accident.
-
-Check it from the workstation:
+Confirm from the workstation:
 
 ```bash
 ssh -o KexAlgorithms=curve25519-sha256 nixbot@192.168.3.140 'sudo -n id'
 ```
-
-### Seed trusted-users by hand
-
-This is the one genuine chicken-and-egg in the whole process, and it is not in
-the bootstrap script. `nixfleet apply` copies **locally-built, unsigned**
-closures, which the daemon rejects unless `deploy` is a trusted user — but the
-module that manages `trusted-users` can only arrive *via* an apply.
-
-So seed it manually, once:
-
-```bash
-ssh <you>@<spark> 'echo "extra-trusted-users = deploy" | sudo tee -a /etc/nix/nix.custom.conf \
-  && sudo systemctl restart nix-daemon'
-```
-
-`modules/nix-config.nix` takes over from the first apply onward.
 
 ## 3. Teach your workstation to build aarch64-linux
 
