@@ -32,3 +32,4 @@ agents/.slack-apps.json
 # Claude working files
 .claude/
 __pycache__/
+.mcp.json

@@ -9,6 +9,8 @@
     ../modules/iscsi.nix
     ../modules/multipath.nix
     ../modules/k0s.nix
+    ../modules/kubevirt.nix
+    ../modules/sysctl.nix
   ];
 
   nixfleet = {
@@ -28,6 +30,23 @@
     # Blacklist Synology LUNs from dm-multipath auto-claim — see
     # modules/multipath.nix (2026-07-25 gastown-town readonly incident).
     modules.multipath.enable = true;
+
+    # KubeVirt: bind k0s's real kubelet pods dir onto the hardcoded
+    # /var/lib/kubelet/pods, or virt-launcher's container-disk init container
+    # can't find its binary and every VM crash-loops. See modules/kubevirt.nix.
+    modules.kubevirt.enable = true;
+
+    # inotify headroom for k0s. Ubuntu defaults (max_user_instances=128) are
+    # exhausted by kubelet + containerd + CSI, and virt-handler then panics at
+    # startup with "Failed to create an inotify watcher: too many open files".
+    # Same values gti already runs.
+    modules.sysctl = {
+      enable = true;
+      settings = {
+        "fs.inotify.max_user_watches" = 524288;
+        "fs.inotify.max_user_instances" = 8192;
+      };
+    };
 
     packages = with pkgs; [
       git

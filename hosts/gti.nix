@@ -14,6 +14,7 @@
     ../modules/iscsi.nix
     ../modules/multipath.nix
     ../modules/backup.nix
+    ../modules/kubevirt.nix
   ];
 
   nixfleet = {
@@ -55,6 +56,11 @@
     # busy" error. See modules/multipath.nix and the
     # gastown-readonly-multipath-2026-07-25 incident.
     modules.multipath.enable = true;
+
+    # KubeVirt: bind k0s's real kubelet pods dir onto the hardcoded
+    # /var/lib/kubelet/pods, or virt-launcher's container-disk init container
+    # can't find its binary and every VM crash-loops. See modules/kubevirt.nix.
+    modules.kubevirt.enable = true;
 
     # nix-config module is for Determinate-Nix hosts (writes nix.custom.conf).
     # gti runs vanilla nix (require-sigs=false, connects as the trusted ztaylor
