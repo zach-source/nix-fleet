@@ -276,6 +276,17 @@
         gtr-153 = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr-153.nix ];
         };
+        # DGX Sparks are aarch64 (GB10 Grace Blackwell), so they must be
+        # evaluated for aarch64-linux — the default x86_64-linux would resolve
+        # the wrong nixpkgs and produce a closure the box cannot run.
+        dgx-spark-1 = mkNixFleetConfiguration {
+          system = "aarch64-linux";
+          modules = [ ./hosts/dgx-spark-1.nix ];
+        };
+        dgx-spark-2 = mkNixFleetConfiguration {
+          system = "aarch64-linux";
+          modules = [ ./hosts/dgx-spark-2.nix ];
+        };
         # Synology NAS — managed via the DSM API (Model B), not SSH.
         znas = mkNixFleetConfiguration {
           modules = [ ./hosts/znas.nix ];

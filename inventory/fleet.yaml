@@ -21,10 +21,22 @@ groups:
     vars:
       max_parallel: 1
 
+  dgx:
+    hosts:
+      - dgx-spark-1
+      - dgx-spark-2
+    vars:
+      max_parallel: 1
+      hardware: "GB10 Grace Blackwell (aarch64)"
+      vram: "128GB unified"
+      backend: "CUDA"
+      fabric: "ConnectX-7 200GbE direct-attach"
+
   all:
     children:
       - infra
       - gtr
+      - dgx
 
 hosts:
   gti:
@@ -160,6 +172,34 @@ hosts:
         notes: "47 languages, Docker Compose, privileged"
       - port: 50052
         role: rpc-worker
+
+  # DGX Sparks — base: dgx means NixFleet manages packages/files/units but
+  # never runs OS updates (DGX Dashboard + fwupdmgr own that lane).
+  # NOTE: addr values below are PLACEHOLDERS. Set the real management IPs
+  # here and in hosts/dgx-spark-{1,2}.nix before the first apply.
+  dgx-spark-1:
+    base: dgx
+    addr: 10.0.3.10
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+    services:
+      - port: 8000
+        model: deepseek-ai/DeepSeek-V4-Flash
+        role: primary-llm
+        notes: "TP=2 across the Spark pair, rank 0 serves HTTP. Needs /opt/dsv4 on-box."
+
+  dgx-spark-2:
+    base: dgx
+    addr: 10.0.3.11
+    ssh_user: deploy
+    roles:
+      - base
+      - llm-inference
+    services:
+      - role: dsv4-rank-1
+        notes: "Serves no HTTP — joins rank 0 over the CX7 fabric."
 
 # K8s services (on gti k0s cluster, managed by Flux)
 k8s:
