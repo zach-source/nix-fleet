@@ -22,9 +22,11 @@ Refs: [OS and component update](https://docs.nvidia.com/dgx/dgx-spark/os-and-com
 Confirm before you start:
 
 ```bash
-nix eval --raw .#nixfleetConfigurations.dgx-spark-1.base      # -> dgx
-nixfleet status -g dgx                                        # resolves 2 hosts
+nix eval --raw .#nixfleetConfigurations.dgx-spark-1.base   # -> dgx
 ```
+
+Both checks are local. `nixfleet status -g dgx` will resolve the hosts but
+cannot connect to anything until steps 1 and 2 are done.
 
 ## 1. Set the real addresses
 
