@@ -5,6 +5,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/llm-inference.nix
     ../modules/iscsi.nix
     ../modules/multipath.nix
@@ -48,16 +49,6 @@
         "fs.inotify.max_user_instances" = 8192;
       };
     };
-
-    packages = with pkgs; [
-      git
-      htop
-      iperf3
-      curl
-      jq
-      tmux
-      vim
-    ];
 
     modules.llmInference = {
       enable = true;

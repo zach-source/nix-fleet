@@ -10,6 +10,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
     ../modules/vllm.nix
     (import ./dgx-spark-dsv4.nix { nodeRank = 1; })
@@ -28,14 +29,6 @@
       enable = true;
       nodeIndex = 11;
     };
-
-    packages = with pkgs; [
-      git
-      htop
-      jq
-      tmux
-      vim
-    ];
 
     healthChecks = {
       gpu-present = {

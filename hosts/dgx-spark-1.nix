@@ -31,6 +31,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
     ../modules/vllm.nix
     # Rank 0 — the master, and the only node that serves HTTP (:8000).
@@ -60,14 +61,6 @@
     # No apt.hold entries either. NVIDIA's update guide names no metapackages
     # and does not ask you to pin anything, so inventing holds would just fight
     # the dashboard. NixFleet already refuses to upgrade this host.
-    packages = with pkgs; [
-      git
-      htop
-      jq
-      tmux
-      vim
-    ];
-
     directories = {
       "/srv/datasets" = {
         mode = "0775";

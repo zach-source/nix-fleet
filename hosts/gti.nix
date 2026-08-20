@@ -5,6 +5,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/netboot-server.nix
     ../modules/dns.nix
     ../modules/tpm2-unlock.nix
@@ -24,16 +25,8 @@
       addr = "192.168.3.131";
     };
 
-    packages = with pkgs; [
-      git
-      htop
-      iperf3
-      curl
-      jq
-      tmux
-      vim
-      nfs-utils
-    ];
+    # Extras beyond the fleet base set (modules/base-packages.nix).
+    packages = with pkgs; [ nfs-utils ];
 
     # ============================================================================
     # TPM2 auto-unlock for ZFS-on-LUKS keystore
