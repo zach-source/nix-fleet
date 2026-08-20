@@ -184,8 +184,17 @@ func NewManager() *Manager {
 
 // ReadState reads the current state from a host
 func (m *Manager) ReadState(ctx context.Context, client *ssh.Client) (*HostState, error) {
-	// Ensure state directory exists
-	result, err := client.Exec(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo '{}'", StatePath))
+	// Read with sudo, mirroring WriteState's `sudo tee`. The state dir is
+	// root-owned and bootstrap-ubuntu.sh creates it 0750, so an unprivileged
+	// cat fails — and it fails *silently*, because the `|| echo '{}'` fallback
+	// turns permission denied into an empty state. Every caller then sees a
+	// blank ManifestHash and concludes the host has never been deployed, so
+	// `plan` reports NEW DEPLOYMENT forever and drift detection never fires.
+	//
+	// This hid on gtr-150, whose /var/lib/nixfleet predates the chmod and is
+	// 0755. It appeared on the DGX Sparks, the first hosts bootstrapped with
+	// the current script.
+	result, err := client.ExecSudo(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo '{}'", StatePath))
 	if err != nil {
 		return nil, fmt.Errorf("reading state: %w", err)
 	}
