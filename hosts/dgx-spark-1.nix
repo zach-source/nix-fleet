@@ -30,11 +30,24 @@
 { pkgs, ... }:
 
 {
+  imports = [
+    ../modules/dgx-spark-cluster.nix
+  ];
+
   nixfleet = {
     host = {
       name = "dgx-spark-1";
       base = "dgx";
       addr = "10.0.3.10";
+    };
+
+    # ConnectX-7 fabric to the other Spark. nodeIndex 10 is NVIDIA's first-node
+    # convention; the peer would be 11. Defaults to the RIGHT QSFP port's two
+    # logical interfaces — run `ibdev2netdev` and match whichever port you
+    # actually cabled, using the same physical port on both machines.
+    modules.dgxSparkCluster = {
+      enable = true;
+      nodeIndex = 10;
     };
 
     # Ordinary package management — the part that works like any other host.
