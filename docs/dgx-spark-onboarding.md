@@ -76,44 +76,50 @@ ssh -o KexAlgorithms=curve25519-sha256 nixbot@192.168.3.140 'sudo -n id'
 ## 3. Teach your workstation to build aarch64-linux
 
 Nothing in the fleet can build for a Spark. gti and the gtr nodes are x86_64;
-a Mac is `aarch64-darwin`, which is the wrong kernel even though the CPU
-matches. **The Spark builds for itself**, as a remote builder.
+a Mac is `aarch64-darwin` — the right CPU, the wrong kernel. **Each Spark builds
+for itself.**
 
-`nix build` is invoked as a plain subprocess by the CLI, so global builder
-config applies with no NixFleet flags needed.
-
-`/etc/nix/machines` on your workstation:
-
-```
-ssh-ng://deploy@<spark-1-addr> aarch64-linux /var/root/.ssh/nixfleet 8 1 big-parallel
-```
-
-Then in `/etc/nix/nix.custom.conf`:
-
-```
-builders-use-substitutes = true
-```
-
-The nix daemon runs as **root**, so root — not you — needs the key and the host
-key:
+The scope is smaller than it sounds. A `--dry-run` of `dgx-spark-1.system`
+wants **9 derivations built and 141 paths fetched**: everything substantial
+comes from cache.nixos.org, which already carries aarch64-linux. The nine are
+NixFleet's own outputs — the activation script, unit files, `nixfleet-etc`, and
+the two netplan configs.
 
 ```bash
-sudo cp ~/.ssh/nixfleet /var/root/.ssh/nixfleet
-sudo chmod 600 /var/root/.ssh/nixfleet
-sudo ssh-keyscan -H <spark-1-addr> >> /var/root/.ssh/known_hosts
-sudo launchctl kickstart -k system/org.nixos.nix-daemon
+sudo bash scripts/dgx-add-builder.sh
+```
 
-# prove it
+Root is required for a non-obvious reason: **the nix daemon performs remote
+builds, and it runs as root**. So it is root's `~/.ssh/known_hosts` that has to
+trust the Sparks, not yours. A missing entry surfaces as:
+
+```
+cannot build on 'ssh-ng://deploy@192.168.3.140':
+  error: failed to start SSH master connection to '192.168.3.140'
+Failed to find a machine for remote build!
+```
+
+which names neither SSH keys nor `known_hosts`. The script handles it, plus:
+
+- appends both Sparks to `/etc/nix/machines` (the key stays in **your** home —
+  root reads it fine, and that matches how the existing gti builder is set up)
+- sets `builders-use-substitutes = true`, so the Spark pulls its 161 MiB from
+  cache.nixos.org directly rather than the workstation downloading it all and
+  pushing it over SSH
+- restarts the right daemon. Determinate Nix replaces `org.nixos.nix-daemon`
+  with `systems.determinate.nix-daemon` and leaves the old label
+  present-but-**disabled**, so the script probes rather than assuming
+
+Verify:
+
+```bash
 nix build --impure --no-link --print-out-paths \
   .#nixfleetConfigurations.dgx-spark-1.system
 ```
 
-If that prints a store path, everything downstream works. If it hangs, it is
-almost always root's `known_hosts`.
-
-> Do **not** reach for qemu-emulated aarch64 on gti. It is Ubuntu, not NixOS, so
-> there is no `boot.binfmt.emulatedSystems`, and emulated builds of this size
-> are measured in hours.
+> Don't reach for qemu-emulated aarch64 on gti. It's Ubuntu, not NixOS, so
+> there's no `boot.binfmt.emulatedSystems`, and emulated builds are far slower
+> than letting the Spark do its own nine derivations.
 
 ## 4. Onboard
 

@@ -28,10 +28,8 @@
     # 192.168.100.11 and 192.168.101.11 on the two CX7 subnets.
     #
     # Left-port override matching dgx-spark-1 — the playbook's one hard rule is
-    # that every node uses the SAME physical port. UNVERIFIED on this box: it
-    # wasn't reachable when spark-5267 was inspected. Confirm with
-    # `ibdev2netdev` before the fabric apply; if the right port is the cabled
-    # one here, move the cable rather than diverging the two hosts.
+    # that every node uses the SAME physical port. Verified on spark-7ee2
+    # 2026-08-20: enp1s0f0np0 + enP2p1s0f0np0 (Up), right pair (Down).
     modules.dgxSparkCluster = {
       enable = true;
       nodeIndex = 11;
@@ -41,8 +39,8 @@
       };
     };
 
-    # VLAN 8 storage network. Interface name assumed identical to spark-5267 —
-    # confirm with `ip -br link` before applying.
+    # VLAN 8 storage network. Parent confirmed identical to spark-5267 —
+    # enP7s7, maxmtu 9194, so 9000 fits.
     modules.storageVlan = {
       enable = true;
       interface = "enP7s7";
