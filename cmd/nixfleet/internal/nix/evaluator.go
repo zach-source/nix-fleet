@@ -196,18 +196,24 @@ func (e *Evaluator) getManifestHash(ctx context.Context, storePath string) (stri
 		return "", err
 	}
 
-	// Newer Nix renders `path-info --json` as an object keyed by store path;
-	// older Nix renders an array. Handle both.
+	return parseNarHash(stdout.Bytes(), storePath), nil
+}
+
+// parseNarHash pulls the NAR hash out of `nix path-info --json` output.
+//
+// Newer Nix renders it as an object keyed by store path; older Nix renders an
+// array. Handle both — the fleet does not run one Nix version everywhere.
+func parseNarHash(data []byte, storePath string) string {
 	var asMap map[string]struct {
 		NarHash string `json:"narHash"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &asMap); err == nil && len(asMap) > 0 {
+	if err := json.Unmarshal(data, &asMap); err == nil && len(asMap) > 0 {
 		if info, ok := asMap[storePath]; ok && info.NarHash != "" {
-			return info.NarHash, nil
+			return info.NarHash
 		}
 		for _, info := range asMap {
 			if info.NarHash != "" {
-				return info.NarHash, nil
+				return info.NarHash
 			}
 		}
 	}
@@ -215,11 +221,11 @@ func (e *Evaluator) getManifestHash(ctx context.Context, storePath string) (stri
 	var asArray []struct {
 		NarHash string `json:"narHash"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &asArray); err == nil && len(asArray) > 0 {
-		return asArray[0].NarHash, nil
+	if err := json.Unmarshal(data, &asArray); err == nil && len(asArray) > 0 {
+		return asArray[0].NarHash
 	}
 
-	return "", nil
+	return ""
 }
 
 // GetClosureSize returns the size of a closure in bytes

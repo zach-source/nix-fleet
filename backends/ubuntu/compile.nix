@@ -543,6 +543,11 @@ let
     STAGING_DIR="/etc/.nixfleet/staging"
     SYSTEM_LINK="$NIXFLEET_ROOT/system"
 
+    # Substituted with this system derivation's own store path when the system
+    # is built. It cannot be a Nix interpolation: this script is an input to
+    # that derivation, so referring to it here is a cycle.
+    SYSTEM_PATH="@systemPath@"
+
     log() {
       echo "[nixfleet] $*"
     }
@@ -551,8 +556,16 @@ let
     log "Manifest hash: ${manifestHash}"
 
     # Step 1: Create/update the system profile
+    #
+    # The profile points at the system, not at the packages closure. Pointing
+    # it at the packages closure is what `nixfleet rollback` used to trip over:
+    # `activate` lives in the system derivation, so
+    # $NIXFLEET_ROOT/system/activate did not exist and neither rollback path
+    # could run. Pull mode always set the system here, so the two modes now
+    # agree. $SYSTEM_LINK/bin is unchanged either way — the system derivation
+    # symlinks every packages binary into its own bin/.
     log "Installing system profile..."
-    nix-env --profile "$SYSTEM_LINK" --set ${packagesProfile}
+    nix-env --profile "$SYSTEM_LINK" --set "$SYSTEM_PATH"
 
     # Step 2: Create groups
     #
@@ -1004,8 +1017,9 @@ in
           # Link the secrets (encrypted)
           ln -s ${secretsPayload} $out/secrets
 
-          # Install the activation script
-          cp ${activateScript} $out/activate
+          # Install the activation script, resolving @systemPath@ to this
+          # derivation so activation can root the profile at itself.
+          substitute ${activateScript} $out/activate --subst-var-by systemPath "$out"
           chmod +x $out/activate
 
           # Write metadata. These go through writeJSON, not an inline echo —

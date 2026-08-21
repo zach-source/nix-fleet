@@ -10,6 +10,17 @@ import (
 
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/ssh"
+	"github.com/nixfleet/nixfleet/internal/state"
+)
+
+// nix on a managed host, where Nix came from the multi-user installer. The
+// absolute paths matter: a non-interactive SSH session does not source
+// /etc/profile.d/nix.sh, and sudo resets PATH on top of that, so a bare `nix`
+// or `nix-env` fails with "command not found". NixOS is the exception — Nix
+// lives in the system profile there, which is already on root's PATH.
+const (
+	hostNixBin    = "/nix/var/nix/profiles/default/bin/nix"
+	hostNixEnvBin = "/nix/var/nix/profiles/default/bin/nix-env"
 )
 
 // sshOpts builds NIX_SSHOPTS for the openssh that `nix copy` shells out to.
@@ -212,6 +223,45 @@ func (d *Deployer) Rollback(ctx context.Context, client *ssh.Client, base string
 	}
 }
 
+// RefreshStateAfterRollback rewrites the host's state file to describe the
+// generation it was just rolled back to.
+//
+// Callers must invoke this after a successful Rollback. It is separate from
+// Rollback so a state-write failure cannot be mistaken for a rollback failure —
+// the rollback has already happened by then.
+//
+// Without it, `plan` reads a state file describing the generation that was
+// rolled *away* from and reports the host UP TO DATE while it runs something
+// else. Activation writes that file too, in its own schema, so it cannot be
+// left to do the job.
+func (d *Deployer) RefreshStateAfterRollback(ctx context.Context, client *ssh.Client, base string) error {
+	gen, storePath, err := d.GetCurrentGeneration(ctx, client, base)
+	if err != nil {
+		return fmt.Errorf("reading current generation: %w", err)
+	}
+	if storePath == "" {
+		return fmt.Errorf("host reported no current store path")
+	}
+
+	// The hash has to come from the host: rollback builds nothing locally, and
+	// the target closure may not be in the local store at all.
+	result, err := client.Exec(ctx, fmt.Sprintf(
+		"%s --extra-experimental-features nix-command path-info --json %s", hostNixBin, storePath))
+	if err != nil {
+		return fmt.Errorf("querying path-info: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("querying path-info: %s", strings.TrimSpace(result.Stderr))
+	}
+
+	hash := parseNarHash([]byte(result.Stdout), storePath)
+	if hash == "" {
+		return fmt.Errorf("no narHash for %s", storePath)
+	}
+
+	return state.NewManager().UpdateAfterApply(ctx, client, storePath, hash, gen, 0)
+}
+
 func (d *Deployer) rollbackNixOS(ctx context.Context, client *ssh.Client, generation int) error {
 	var cmd string
 	if generation == 0 {
@@ -240,7 +290,7 @@ func (d *Deployer) rollbackUbuntu(ctx context.Context, client *ssh.Client, gener
 	var cmd string
 	if generation == 0 {
 		// Rollback to previous
-		cmd = "nix-env --profile /nix/var/nix/profiles/nixfleet/system --rollback && " +
+		cmd = hostNixEnvBin + " --profile /nix/var/nix/profiles/nixfleet/system --rollback && " +
 			"/nix/var/nix/profiles/nixfleet/system/activate"
 	} else {
 		// Rollback to specific generation
@@ -264,7 +314,7 @@ func (d *Deployer) rollbackDarwin(ctx context.Context, client *ssh.Client, gener
 	if generation == 0 {
 		// Rollback to previous generation
 		// nix-darwin stores profiles in /nix/var/nix/profiles/system
-		cmd = "nix-env --profile /nix/var/nix/profiles/system --rollback && " +
+		cmd = hostNixEnvBin + " --profile /nix/var/nix/profiles/system --rollback && " +
 			"/nix/var/nix/profiles/system/activate"
 	} else {
 		// Rollback to specific generation

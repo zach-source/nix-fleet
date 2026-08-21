@@ -499,6 +499,10 @@ func rollbackCmd() *cobra.Command {
 					continue
 				}
 
+				if err := deployer.RefreshStateAfterRollback(ctx, client, host.Base); err != nil {
+					fmt.Printf("  Warning: rolled back, but failed to update state - %v\n", err)
+				}
+
 				fmt.Printf("  Done!\n")
 			}
 

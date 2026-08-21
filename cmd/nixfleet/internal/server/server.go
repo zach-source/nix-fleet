@@ -472,7 +472,14 @@ func (s *Server) handleRollbackHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.jsonResponse(w, map[string]string{"status": "rolled back"}, http.StatusOK)
+	resp := map[string]string{"status": "rolled back"}
+	// Not an error response: the rollback itself succeeded. Report it so the
+	// caller knows the host's reported state is stale until the next apply.
+	if err := s.deployer.RefreshStateAfterRollback(ctx, client, host.Base); err != nil {
+		resp["warning"] = "state not updated: " + err.Error()
+	}
+
+	s.jsonResponse(w, resp, http.StatusOK)
 }
 
 func (s *Server) handleDriftStatus(w http.ResponseWriter, r *http.Request) {
