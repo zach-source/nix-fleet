@@ -35,6 +35,10 @@ let
   # Whitelist pattern for grep -v -E
   whitelistPattern = lib.concatStringsSep "|" cfg.adblock.whitelist;
 
+  # Does unbound bind a wildcard address? If so it collides with
+  # systemd-resolved's stub on 127.0.0.53 — see the drop-in below.
+  bindsWildcard = lib.any (a: a == "0.0.0.0" || a == "::") cfg.listenAddresses;
+
   # Adblock update script
   adblockUpdateScript = ''
     #!/bin/bash
@@ -333,6 +337,32 @@ in
           text = unboundConf;
           restartUnits = [ "nixfleet-dns.service" ];
         };
+      }
+      // lib.optionalAttrs bindsWildcard {
+        # systemd-resolved's stub listener owns 127.0.0.53:53 and 127.0.0.54:53.
+        # unbound cannot bind a wildcard over those, so whichever starts second
+        # loses — and pre-2026-08-20 gti that was decided by boot ordering, which
+        # meant any unbound restart could take fleet DNS down and leave it down.
+        #
+        # Only emitted when listenAddresses is a wildcard; a host bound to
+        # specific IPs has no conflict and keeps its stub.
+        "/etc/systemd/resolved.conf.d/10-nixfleet-no-stub.conf" = {
+          mode = "0644";
+          owner = "root";
+          group = "root";
+          text = ''
+            # Managed by NixFleet — modules/dns.nix (do not edit).
+            # unbound binds ${lib.concatStringsSep ", " cfg.listenAddresses} on port ${toString cfg.port}, which cannot
+            # coexist with the resolved stub. Local name resolution is
+            # unaffected: nss-resolve talks to resolved over varlink, not
+            # through 127.0.0.53, so only `dig @127.0.0.53` stops working.
+            [Resolve]
+            DNSStubListener=no
+          '';
+          restartUnits = [ "systemd-resolved.service" ];
+        };
+      }
+      // {
 
         "/etc/unbound/local-records.conf" = {
           mode = "0644";
