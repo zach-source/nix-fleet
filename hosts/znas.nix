@@ -19,20 +19,26 @@
     enable = true;
     host = "192.168.1.67";
     port = 5001;
-    # botuser has iSCSI permission (created for synology-csi) but is not in the
-    # administrators group, so every DSM write 403s — including NFS apply. Reads
-    # all work today (verified 2026-08-21 on DSM 7.3.2-86009 U4 against
-    # SYNO.Core.Share list, SYNO.Core.FileServ.NFS get and
-    # …NFS.SharePrivilege load), so `status` and dry-run `reconcile` are safe.
+    # botuser is already in the DSM administrators group — verified 2026-08-21 on
+    # DSM 7.3.2-86009 U4 via SYNO.Core.Group.Member list group=administrators,
+    # which returns admin, ztaylor, botuser. DSM writes, NFS apply included, are
+    # permitted; nothing needs granting.
     #
-    # Application Privileges will NOT fix this: they gate which apps an account
-    # may open, not API write scope. DSM 7 has exactly three groups here
-    # (administrators, http, users) and no share- or NFS-specific privilege, so
-    # SYNO.Core.* set/save requires administrators membership — nothing narrower
-    # exists. Note the blast radius before promoting botuser: its password lives
-    # in the synology-csi client-info-secret, so anything that can read that
-    # secret would then hold full DSM admin. A separate admin account whose
-    # password never enters the cluster keeps the CSI credential unprivileged.
+    # An earlier version of this note claimed the opposite and sent readers to
+    # "Application Privileges → File Station/shared-folder admin". Both halves
+    # were wrong, and both are easy to fall for again:
+    #   - the 403 behind it came from a MALFORMED call (array `name` + a bogus
+    #     `additional`), not from permission. SYNO.Core.User get still fails that
+    #     way today, so don't read a 403 there as an authorization signal.
+    #   - Application Privileges gate which apps an account may open, not API
+    #     write scope. DSM 7 has three groups here (administrators, http, users)
+    #     and no share- or NFS-specific privilege, so administrators membership
+    #     is the only lever that exists anyway.
+    #
+    # Blast radius worth knowing: botuser's DSM password lives in the
+    # synology-csi client-info-secret, so anything with RBAC to read that secret
+    # holds full DSM admin. Pointing the CSI driver at a non-admin account would
+    # contain that, with nixfleet keeping botuser for reconcile.
     user = "botuser";
 
     # Static iSCSI LUNs (CSI-managed dynamic LUNs are intentionally absent).
