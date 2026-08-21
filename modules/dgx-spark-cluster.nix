@@ -136,9 +136,12 @@ in
       ''
       + ifaceLines
       + "\n";
-      # Only fires where modules.netplan.autoApply is on; elsewhere the file
+      # Gated: where autoApply is off the unit ships disabled, and queueing a
+      # restart of a disabled unit is a no-op that only logs noise. The file
       # still lands and takes effect at next boot. See modules/netplan.nix.
-      restartUnits = [ "nixfleet-netplan-apply.service" ];
+      restartUnits = lib.optionals config.nixfleet.modules.netplan.autoApply [
+        "nixfleet-netplan-apply.service"
+      ];
     };
 
     nixfleet.healthChecks = {

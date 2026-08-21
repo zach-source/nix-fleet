@@ -42,10 +42,14 @@
 
     # VLAN 8 storage network. Parent confirmed identical to spark-5267 —
     # enP7s7, maxmtu 9194, so 9000 fits.
-    # Netplan config on this pair is proven (CX7 fabric + VLAN 8 both verified
-    # live), and the management NIC is a separate interface that netplan does
-    # not touch here — so applying on change is safe. See modules/netplan.nix.
-    modules.netplan.autoApply = true;
+    # OFF, and not out of caution — out of fact. The management address lives
+    # on enP7s7, which is exactly the interface modules/storage-vlan.nix
+    # declares as the VLAN 8 parent. With renderer: NetworkManager, an apply
+    # tears down and rebuilds that connection, i.e. the one carrying SSH. There
+    # is no BMC, no AMT and no reachable KVM on this fleet, and spark-7ee2 has
+    # already needed a deadman rollback once for exactly this. The unit still
+    # ships (disabled) so an operator physically present can run it by hand.
+    modules.netplan.autoApply = false;
 
     modules.storageVlan = {
       enable = true;

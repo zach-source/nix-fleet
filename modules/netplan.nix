@@ -39,10 +39,15 @@ in
     };
   };
 
-  config = lib.mkIf cfg.autoApply {
+  config = {
     nixfleet.systemd.units = {
+      # Installed either way, so `systemctl start nixfleet-netplan-apply` is a
+      # one-liner for an operator who IS in front of the machine. `enabled`
+      # tracks autoApply because activation restarts every unit whose file
+      # changed — installing an enabled unit would itself fire an apply on the
+      # very first deploy, which is the thing this module is careful about.
       "nixfleet-netplan-apply.service" = {
-        enabled = true;
+        enabled = cfg.autoApply;
         text = ''
           [Unit]
           Description=Apply NixFleet-managed netplan configuration
@@ -63,6 +68,8 @@ in
         '';
       };
 
+    }
+    // lib.optionalAttrs cfg.autoApply {
       "nixfleet-netplan-apply.path" = {
         enabled = true;
         text = ''
@@ -79,7 +86,7 @@ in
       };
     };
 
-    nixfleet.healthChecks = {
+    nixfleet.healthChecks = lib.optionalAttrs cfg.autoApply {
       nixfleet-netplan-applied = {
         type = "command";
         command = "systemctl show nixfleet-netplan-apply.service -p Result | grep -q success";
