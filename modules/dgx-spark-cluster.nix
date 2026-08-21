@@ -51,6 +51,7 @@ let
         "      addresses:"
         "        - ${prefix}.${toString cfg.nodeIndex}/24"
         "      dhcp4: no"
+        "      mtu: ${toString cfg.mtu}"
       ]
     ) cfg.interfaces
   );
@@ -85,6 +86,25 @@ in
 
         Cabling both ports means listing all four here; anything less leaves
         bandwidth on the table.
+      '';
+    };
+
+    mtu = lib.mkOption {
+      type = lib.types.int;
+      default = 9000;
+      description = ''
+        MTU for the fabric interfaces. These are direct-attach cables between
+        Sparks with no switch in the path, so jumbo frames cost nothing to
+        enable and the default 1500 leaves throughput on the floor.
+
+        Measured spark-5267 -> spark-7ee2 over enp1s0f0np0, iperf3 -t10 -P4:
+
+          mtu 1500 ->  95 Gbit/s, 6678 retransmits
+          mtu 9000 -> 110 Gbit/s,    2 retransmits
+
+        It plateaus near 111 Gbit/s at -P8 with zero retransmits, which is a
+        TCP/CPU ceiling on 20 cores rather than a link limit — NCCL over RoCE
+        bypasses the TCP stack, so treat that number as a floor.
       '';
     };
 
@@ -135,6 +155,22 @@ in
         command = lib.concatStringsSep " && " (
           lib.mapAttrsToList (
             iface: prefix: "ip -4 addr show ${iface} | grep -q '${prefix}.${toString cfg.nodeIndex}/24'"
+          ) cfg.interfaces
+        );
+      };
+
+      # The addresses check above passes on an interface that carries its IP at
+      # the wrong MTU, and NCCL will happily run there — 15% slower, with the
+      # retransmits buried in the NIC counters. Assert the MTU separately.
+      #
+      # This is not hypothetical: writing `mtu: 9000` into the netplan file does
+      # NOT apply it. Nothing in the deploy path runs `netplan apply`, so the
+      # file is correct for the next boot while the live link stays at 1500.
+      dgx-cx7-mtu = {
+        type = "command";
+        command = lib.concatStringsSep " && " (
+          lib.mapAttrsToList (
+            iface: _: "test \"$(cat /sys/class/net/${iface}/mtu)\" = '${toString cfg.mtu}'"
           ) cfg.interfaces
         );
       };
