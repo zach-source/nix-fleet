@@ -223,6 +223,13 @@ in
           Environment=HOME=/home/${cfg.user}
           ExecStart=${startScript}
           ExecStop=${stopScript}
+          # The start script exits 3 for "the stack is already up" and says so
+          # in as many words: "Supervisors: treat exit 3 as already-up (systemd
+          # SuccessExitStatus=3)". That happens on every boot, because compose
+          # carries restart: unless-stopped and dockerd restores the ranks
+          # before this unit runs. Without this the unit lands in `failed` while
+          # the model is serving perfectly, and activation reports red.
+          SuccessExitStatus=3
           # Both ranks come up detached (`up -d`), so this returns well before
           # the model is loaded — but a cold start still has to pull layers and
           # mmap 156GB of weights, and the script waits on the worker's SSH.
