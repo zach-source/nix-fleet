@@ -33,9 +33,10 @@
   imports = [
     ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
+    ../modules/netplan.nix
     ../modules/storage-vlan.nix
-    ../modules/vllm.nix
-    # Rank 0 — the master, and the only node that serves HTTP (:8000).
+    ../modules/dspark-dsv4.nix
+    # Rank 0 — the head, and the only node that serves HTTP (:8888).
     (import ./dgx-spark-dsv4.nix { nodeRank = 0; })
   ];
 
@@ -67,6 +68,11 @@
     # (enP7s7, maxmtu 9194 — verified, so 9000 fits). Peer is gtr-150, which
     # already lives on this VLAN, so the check fails loudly if the switch port
     # isn't trunked for 8.
+    # Netplan config on this pair is proven (CX7 fabric + VLAN 8 both verified
+    # live), and the management NIC is a separate interface that netplan does
+    # not touch here — so applying on change is safe. See modules/netplan.nix.
+    modules.netplan.autoApply = true;
+
     modules.storageVlan = {
       enable = true;
       interface = "enP7s7";
@@ -97,12 +103,6 @@
         group = "dgxusers";
       };
     };
-
-    # dsv4 stays off until /opt/dsv4/bin/dsv4-vllm-entrypoint and the pinned
-    # vLLM dev wheel are on the box. Neither is packaged by NixFleet and both
-    # were verified ABSENT on this host 2026-08-20, so enabling it now would
-    # only produce a unit that starts, fails, and health-checks red.
-    modules.vllm.services.dsv4-flash.enable = false;
 
     healthChecks = {
       # Confirms the GPU is enumerable. Note `nvidia-smi` on Spark reports

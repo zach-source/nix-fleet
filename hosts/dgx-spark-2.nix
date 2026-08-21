@@ -12,8 +12,9 @@
   imports = [
     ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
+    ../modules/netplan.nix
     ../modules/storage-vlan.nix
-    ../modules/vllm.nix
+    ../modules/dspark-dsv4.nix
     (import ./dgx-spark-dsv4.nix { nodeRank = 1; })
   ];
 
@@ -41,6 +42,11 @@
 
     # VLAN 8 storage network. Parent confirmed identical to spark-5267 —
     # enP7s7, maxmtu 9194, so 9000 fits.
+    # Netplan config on this pair is proven (CX7 fabric + VLAN 8 both verified
+    # live), and the management NIC is a separate interface that netplan does
+    # not touch here — so applying on change is safe. See modules/netplan.nix.
+    modules.netplan.autoApply = true;
+
     modules.storageVlan = {
       enable = true;
       interface = "enP7s7";
@@ -52,19 +58,16 @@
       peer = "192.168.8.133";
     };
 
-    # Same as rank 0 — the entrypoint and wheel are absent here too.
-    modules.vllm.services.dsv4-flash.enable = false;
-
     healthChecks = {
       gpu-present = {
         type = "command";
         command = "nvidia-smi -L | grep -q GPU";
       };
 
-      # Rank 1 serves no HTTP — modules/vllm.nix health-checks the unit here
-      # instead of a port. What is worth asserting from this side is that the
-      # fabric path to rank 0 is actually up, since a silent NCCL hang is the
-      # usual symptom of it not being.
+      # Rank 1 serves no HTTP and has no service unit — the head starts this
+      # node's container over SSH. What is worth asserting from this side is
+      # that the fabric path to rank 0 is actually up, since a silent NCCL hang
+      # is the usual symptom of it not being.
       dsv4-master-reachable = {
         type = "command";
         command = "ping -c1 -W2 192.168.100.10";
