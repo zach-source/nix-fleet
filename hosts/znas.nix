@@ -19,10 +19,20 @@
     enable = true;
     host = "192.168.1.67";
     port = 5001;
-    # botuser has iSCSI permission (created for synology-csi) but NOT share/NFS
-    # admin — NFS apply returns 403 until it's granted "Application Privileges →
-    # File Station/shared-folder admin" in DSM (or use an admin account). LUN
-    # read + reconcile-diff work today; `status` + dry-run `reconcile` are safe.
+    # botuser has iSCSI permission (created for synology-csi) but is not in the
+    # administrators group, so every DSM write 403s — including NFS apply. Reads
+    # all work today (verified 2026-08-21 on DSM 7.3.2-86009 U4 against
+    # SYNO.Core.Share list, SYNO.Core.FileServ.NFS get and
+    # …NFS.SharePrivilege load), so `status` and dry-run `reconcile` are safe.
+    #
+    # Application Privileges will NOT fix this: they gate which apps an account
+    # may open, not API write scope. DSM 7 has exactly three groups here
+    # (administrators, http, users) and no share- or NFS-specific privilege, so
+    # SYNO.Core.* set/save requires administrators membership — nothing narrower
+    # exists. Note the blast radius before promoting botuser: its password lives
+    # in the synology-csi client-info-secret, so anything that can read that
+    # secret would then hold full DSM admin. A separate admin account whose
+    # password never enters the cluster keeps the CSI credential unprivileged.
     user = "botuser";
 
     # Static iSCSI LUNs (CSI-managed dynamic LUNs are intentionally absent).
