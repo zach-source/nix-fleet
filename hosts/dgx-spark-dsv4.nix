@@ -1,5 +1,9 @@
 # DeepSeek-V4-Flash across a stacked DGX Spark pair — shared definition.
 #
+# Why the Sparks and not the gtr boxes: DeepSeek-V4-Flash was tried on the AMD
+# gfx1151 nodes and is un-runnable there — its ops are CUDA/Metal only (see
+# hosts/gtr-153.nix). This pair is the only CUDA hardware on the fleet.
+#
 # Both Sparks take a byte-identical env file except for NODE_RANK, so the
 # settings live here once and each host file states its rank. Rank divergence is
 # the classic way a TP job hangs in NCCL rendezvous with no useful error, so it
