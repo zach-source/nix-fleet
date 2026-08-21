@@ -5,6 +5,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/tpm2-unlock.nix
     ../modules/backup.nix
   ];
@@ -15,16 +16,6 @@
       base = "ubuntu";
       addr = "192.168.3.31";
     };
-
-    packages = with pkgs; [
-      git
-      htop
-      iperf3
-      curl
-      jq
-      tmux
-      vim
-    ];
 
     # ============================================================================
     # TPM2 auto-unlock for ZFS-on-LUKS keystore

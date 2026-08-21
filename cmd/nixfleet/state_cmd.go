@@ -77,8 +77,8 @@ state anyway. Run with --dry-run first to see the drift report.`,
 			for _, host := range hosts {
 				fmt.Printf("Host: %s (%s @ %s)\n", host.Name, host.Base, host.Addr)
 
-				if host.Base != "ubuntu" {
-					fmt.Printf("  skip: adopt only supports ubuntu hosts (base=%s)\n\n", host.Base)
+				if !host.IsAptManaged() {
+					fmt.Printf("  skip: adopt only supports apt-managed hosts (base=%s)\n\n", host.Base)
 					skipped++
 					continue
 				}

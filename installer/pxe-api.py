@@ -3,9 +3,25 @@
 NixFleet Pixiecore API Backend
 
 Serves boot configurations to pixiecore based on MAC address.
-Supports two modes per target:
-  - install:  Ubuntu autoinstall with NixFleet preinstalled
-  - recovery: Ubuntu live boot with ZFS/LUKS recovery tools
+Supports four modes per target:
+  - install:          Ubuntu autoinstall with NixFleet preinstalled
+  - recovery:         Ubuntu live boot with ZFS/LUKS recovery tools
+  - dgx-spark:        DGX OS autoinstall from an ISO (needs 'iso_url')
+  - dgx-spark-fastos: DGX Spark FastOS recovery image (needs 'fastos_url')
+
+CAVEAT on the DGX Spark modes: the cmdlines and boot-file layout below follow
+NVIDIA's PXE guide and are believed correct, but the transport is NOT verified.
+NVIDIA documents netbooting a Spark with a signed arm64 GRUB
+(grubnetaa64.efi.signed, served via DHCP next-server/filename), whereas
+pixiecore drives its own DHCP-proxy and iPXE chain, which is x86-centric.
+Whether pixiecore can netboot an aarch64 Spark has not been tested here. If it
+can't, these builders are still the right cmdlines — point a plain
+GRUB/TFTP/DHCP setup at them instead, per the guide.
+
+Also note Secure Boot must be disabled, or grubnetaa64.efi.signed enrolled in
+UEFI, before a Spark will PXE boot at all.
+
+Ref: https://docs.nvidia.com/dgx/dgx-spark/pxe.html
 
 Pixiecore calls GET /v1/boot/<mac> and expects JSON:
   { "kernel": "file:///path/vmlinuz",
@@ -76,6 +92,80 @@ def build_recovery_config():
     }
 
 
+def build_dgx_spark_config(target):
+    """Build boot config for a DGX Spark installing DGX OS from an ISO.
+
+    Kernel and initrd come out of the DGX OS ISO's own casper/ directory, so
+    they live under a separate subdirectory from the Ubuntu installer's:
+
+        sudo mount -o loop base_os_7.0.0.iso /mnt
+        cp /mnt/casper/{vmlinuz,initrd} <BOOT_DIR>/dgx-spark/
+
+    Two of these arguments are DGX-specific and not obvious:
+    nvme-core.multipath=n, and nouveau.modeset=0 to keep the open-source
+    driver off the GPU during install. Keep this aligned with the ISO's own
+    /boot/grub/grub.cfg if you move to a different DGX OS release.
+
+    Ref: https://docs.nvidia.com/dgx/dgx-spark/pxe.html
+    """
+    iso_url = target.get("iso_url")
+    if not iso_url:
+        raise ValueError("dgx-spark mode requires 'iso_url' in the target")
+    return {
+        "kernel": f"file://{BOOT_DIR}/dgx-spark/vmlinuz",
+        "initrd": [f"file://{BOOT_DIR}/dgx-spark/initrd"],
+        "cmdline": (
+            "fsck.mode=skip "
+            "autoinstall "
+            "ip=dhcp "
+            f"url={iso_url} "
+            "nvme-core.multipath=n "
+            "nouveau.modeset=0"
+        ),
+    }
+
+
+def build_dgx_spark_fastos_config(target):
+    """Build boot config for DGX Spark FastOS recovery.
+
+    Unlike the ISO path this pulls a tarball over HTTP (fastos_usbimg_url),
+    extracted from NVIDIA's dgx-spark-recovery-image archive:
+
+        tar xpfv usb.customer.tar.gz
+        cp usbimg.customer/usb/{vmlinuz,initrd} <BOOT_DIR>/dgx-spark-fastos/
+
+    static_ip is optional and takes the form '<ip>:<gateway>'; without it the
+    initramfs relies on ip=dhcp alone. Note the serial console runs at 921600,
+    not a typo, and sbsa_gwdt.action=1 sets the ARM SBSA watchdog behaviour.
+    """
+    img_url = target.get("fastos_url")
+    if not img_url:
+        raise ValueError("dgx-spark-fastos mode requires 'fastos_url' in the target")
+    cmdline = (
+        "nouveau.modeset=0 "
+        "console=tty0 "
+        "console=ttyS0,921600 "
+        "sbsa_gwdt.action=1 "
+        "noui "
+        "pxeinstall=true "
+        f"fastos_usbimg_url={img_url} "
+        "ip=dhcp"
+    )
+    static_ip = target.get("static_ip")
+    if static_ip:
+        cmdline += f" static_ip={static_ip}"
+    # usb.skipfw bypasses the firmware stage; usb.shell drops to a shell
+    # instead of installing. Both are opt-in escape hatches for a bad install.
+    for flag in ("usb.skipfw", "usb.shell"):
+        if target.get(flag.replace(".", "_")):
+            cmdline += f" {flag}"
+    return {
+        "kernel": f"file://{BOOT_DIR}/dgx-spark-fastos/vmlinuz",
+        "initrd": [f"file://{BOOT_DIR}/dgx-spark-fastos/initrd"],
+        "cmdline": cmdline,
+    }
+
+
 class PXEAPIHandler(BaseHTTPRequestHandler):
     """Handle pixiecore API requests."""
 
@@ -107,26 +197,46 @@ class PXEAPIHandler(BaseHTTPRequestHandler):
         target = targets[mac]
         mode = target.get("mode", "install")
 
-        if mode == "install":
-            host = target.get("host", "unknown")
-            config = build_install_config(host)
-            self.log_message(f"INSTALL {mac} -> host={host}")
-        elif mode == "recovery":
-            config = build_recovery_config()
-            self.log_message(f"RECOVERY {mac}")
-        else:
+        try:
+            if mode == "install":
+                host = target.get("host", "unknown")
+                config = build_install_config(host)
+                self.log_message(f"INSTALL {mac} -> host={host}")
+            elif mode == "recovery":
+                config = build_recovery_config()
+                self.log_message(f"RECOVERY {mac}")
+            elif mode == "dgx-spark":
+                config = build_dgx_spark_config(target)
+                self.log_message(f"DGX-SPARK {mac} -> {target.get('iso_url')}")
+            elif mode == "dgx-spark-fastos":
+                config = build_dgx_spark_fastos_config(target)
+                self.log_message(
+                    f"DGX-SPARK-FASTOS {mac} -> {target.get('fastos_url')}"
+                )
+            else:
+                self.send_response(400)
+                self.end_headers()
+                self.log_message(f"ERROR {mac}: unknown mode '{mode}'")
+                return
+        except ValueError as e:
             self.send_response(400)
             self.end_headers()
-            self.log_message(f"ERROR {mac}: unknown mode '{mode}'")
+            self.log_message(f"ERROR {mac}: {e}")
             return
 
-        # Verify boot files exist
-        kernel_path = f"{BOOT_DIR}/vmlinuz"
-        initrd_path = f"{BOOT_DIR}/initrd"
-        if not os.path.isfile(kernel_path) or not os.path.isfile(initrd_path):
+        # Verify boot files exist. Derive the paths from the config rather than
+        # assuming BOOT_DIR/vmlinuz — the DGX Spark modes boot a kernel from
+        # their own subdirectory, and checking the wrong file would report
+        # healthy right up until the machine failed to netboot.
+        missing = [
+            p[len("file://") :]
+            for p in [config["kernel"], *config["initrd"]]
+            if p.startswith("file://") and not os.path.isfile(p[len("file://") :])
+        ]
+        if missing:
             self.send_response(500)
             self.end_headers()
-            self.log_message(f"ERROR: Boot files missing. Run 'installer-setup' first.")
+            self.log_message(f"ERROR {mac}: boot files missing: {', '.join(missing)}")
             return
 
         response = json.dumps(config)

@@ -331,9 +331,27 @@ in
         type = types.enum [
           "ubuntu"
           "nixos"
+          "dgx"
           "synology"
         ];
-        description = "Base OS type. 'synology' hosts are managed via the DSM API (Model B), not SSH.";
+        description = ''
+          Base OS type.
+
+          'dgx' is DGX OS, NVIDIA's Ubuntu derivative (DGX Spark and friends).
+          It deploys exactly like 'ubuntu' — same apt, systemd and filesystem
+          layout — and packages, files, users and units are all managed
+          normally. What it does not get is OS updates: NixFleet never runs
+          apt upgrade or a release upgrade on a DGX host.
+
+          That is a choice about ownership, not a claim that apt is unsafe
+          there. NVIDIA documents DGX Dashboard as the primary and recommended
+          update path, and a full manual update is two halves — apt for the OS,
+          fwupdmgr for firmware. NixFleet has no firmware story, so it would
+          only ever do half the job while racing the dashboard for the same
+          packages. See docs.nvidia.com/dgx/dgx-spark/os-and-component-update.
+
+          'synology' hosts are managed via the DSM API (Model B), not SSH.
+        '';
       };
 
       addr = mkOption {

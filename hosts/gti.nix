@@ -5,6 +5,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/netboot-server.nix
     ../modules/dns.nix
     ../modules/tpm2-unlock.nix
@@ -24,16 +25,8 @@
       addr = "192.168.3.131";
     };
 
-    packages = with pkgs; [
-      git
-      htop
-      iperf3
-      curl
-      jq
-      tmux
-      vim
-      nfs-utils
-    ];
+    # Extras beyond the fleet base set (modules/base-packages.nix).
+    packages = with pkgs; [ nfs-utils ];
 
     # ============================================================================
     # TPM2 auto-unlock for ZFS-on-LUKS keystore
@@ -112,7 +105,12 @@
         # would also enable RA on the cilium/lxc veths, where a stray RA could
         # install bogus routes. systemd's udev rule (99-systemd.rules) reapplies
         # per-interface sysctls as devices appear, so this survives reboot.
-        "net.ipv6.conf.enp174s0f1.accept_ra" = 2;
+        # enp173s0f1, not enp174s0f1 — the latter does not exist on this box
+        # and `sysctl --system` exits 0 on an unknown key, so the typo applied
+        # cleanly and did nothing for months. Confirmed 2026-08-20: enp173s0f1
+        # carries 192.168.3.131, the global v6 addresses and the RA-learned
+        # default route.
+        "net.ipv6.conf.enp173s0f1.accept_ra" = 2;
       };
     };
 
@@ -309,7 +307,7 @@
       # install the wider 100.96.0.0/16 covering the rest of CF's
       # CGNAT range, so reply packets to other WARP clients
       # (100.96.0.x) miss the TUN and fall through to the default
-      # route — out enp174s0f1 to the LAN gateway, which has no path
+      # route — out enp173s0f1 to the LAN gateway, which has no path
       # back to CGNAT and silently drops them.
       #
       # The pod's entrypoint also installs this route, but declaring

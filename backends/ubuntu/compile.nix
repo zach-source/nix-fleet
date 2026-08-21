@@ -145,6 +145,19 @@ let
   );
 
   # Generate health checks JSON
+  # Write a JSON blob to the store rather than interpolating it into the
+  # builder script.
+  #
+  # These were `echo '<json>' > $out/x.json`, which breaks the moment any value
+  # contains a single quote: it closes the shell string early and the remainder
+  # is parsed as code. A DGX health check of the form
+  #
+  #   test "$(ibdev2netdev | grep -c '(Up)')" -ge 2
+  #
+  # produced `syntax error near unexpected token '('` at build time — the config
+  # was fine, the quoting was not. writeJSON sidesteps shell quoting entirely.
+  writeJSON = name: data: pkgs.writeText name data;
+
   healthChecksData = builtins.toJSON cfg.healthChecks;
 
   # Declarative apt package state (Ubuntu native packages)
@@ -530,6 +543,11 @@ let
     STAGING_DIR="/etc/.nixfleet/staging"
     SYSTEM_LINK="$NIXFLEET_ROOT/system"
 
+    # Substituted with this system derivation's own store path when the system
+    # is built. It cannot be a Nix interpolation: this script is an input to
+    # that derivation, so referring to it here is a cycle.
+    SYSTEM_PATH="@systemPath@"
+
     log() {
       echo "[nixfleet] $*"
     }
@@ -538,20 +556,23 @@ let
     log "Manifest hash: ${manifestHash}"
 
     # Step 1: Create/update the system profile
+    #
+    # The profile points at the system, not at the packages closure. Pointing
+    # it at the packages closure is what `nixfleet rollback` used to trip over:
+    # `activate` lives in the system derivation, so
+    # $NIXFLEET_ROOT/system/activate did not exist and neither rollback path
+    # could run. Pull mode always set the system here, so the two modes now
+    # agree. $SYSTEM_LINK/bin is unchanged either way — the system derivation
+    # symlinks every packages binary into its own bin/.
     log "Installing system profile..."
-    nix-env --profile "$SYSTEM_LINK" --set ${packagesProfile}
+    nix-env --profile "$SYSTEM_LINK" --set "$SYSTEM_PATH"
 
-    # Step 2: Create directories
-    log "Creating directories..."
-    ${concatStringsSep "\n" (
-      mapAttrsToList (path: dirCfg: ''
-        mkdir -p "${path}"
-        chmod ${dirCfg.mode} "${path}"
-        chown ${dirCfg.owner}:${dirCfg.group} "${path}"
-      '') cfg.directories
-    )}
-
-    # Step 3: Create groups
+    # Step 2: Create groups
+    #
+    # Groups and users precede directories because a directory's owner/group
+    # may be one this activation is about to create. The reverse order chowns
+    # to a principal that does not exist yet, and `chown` fails the whole
+    # activation — there is no `|| true` on it, by design.
     log "Managing groups..."
     ${concatStringsSep "\n" (
       mapAttrsToList (
@@ -569,7 +590,7 @@ let
       ) cfg.groups
     )}
 
-    # Step 4: Create users
+    # Step 3: Create users
     log "Managing users..."
     ${concatStringsSep "\n" (
       mapAttrsToList (
@@ -592,6 +613,16 @@ let
           fi
         ''
       ) cfg.users
+    )}
+
+    # Step 4: Create directories
+    log "Creating directories..."
+    ${concatStringsSep "\n" (
+      mapAttrsToList (path: dirCfg: ''
+        mkdir -p "${path}"
+        chmod ${dirCfg.mode} "${path}"
+        chown ${dirCfg.owner}:${dirCfg.group} "${path}"
+      '') cfg.directories
     )}
 
     # Step 5: Decrypt and deploy secrets
@@ -798,9 +829,25 @@ let
       fi
     done
 
+    # Units declared `enabled = false` are installed and disabled, never
+    # started. Without this they still land in CHANGED_UNITS whenever their
+    # file differs, and the restart below would start the very services the
+    # config retired — on gtr-150 that is two GPU models on the fleet's
+    # tightest node. The file still gets installed, so flipping enable back on
+    # is one apply away.
+    DISABLED_UNITS="${
+      concatStringsSep " " (attrNames (filterAttrs (_: u: !u.enabled) cfg.systemd.units))
+    }"
+
     if [ -n "$UNITS_TO_RESTART" ]; then
       log "Restarting affected units:$UNITS_TO_RESTART"
       for unit in $UNITS_TO_RESTART; do
+        case " $DISABLED_UNITS " in
+        *" $unit "*)
+          log "  Skipping $unit (declared disabled)"
+          continue
+          ;;
+        esac
         # --no-block: queue the restart and move on instead of waiting for the
         # unit to become active. GPU inference units carry a startup-stagger
         # sleep in ExecStartPre, so a blocking restart serialized across many of
@@ -986,19 +1033,23 @@ in
           # Link the secrets (encrypted)
           ln -s ${secretsPayload} $out/secrets
 
-          # Install the activation script
-          cp ${activateScript} $out/activate
+          # Install the activation script, resolving @systemPath@ to this
+          # derivation so activation can root the profile at itself.
+          substitute ${activateScript} $out/activate --subst-var-by systemPath "$out"
           chmod +x $out/activate
 
-          # Write metadata
-          echo '${fileMetadata}' > $out/files.json
-          echo '${unitsMetadata}' > $out/units.json
-          echo '${usersData}' > $out/users.json
-          echo '${groupsData}' > $out/groups.json
-          echo '${directoriesData}' > $out/directories.json
-          echo '${healthChecksData}' > $out/health-checks.json
-          echo '${secretsMetadata}' > $out/secrets.json
-          echo '${aptData}' > $out/apt.json
+          # Write metadata. These go through writeJSON, not an inline echo —
+          # see its definition for why.
+          cp ${writeJSON "files.json" fileMetadata} $out/files.json
+          cp ${writeJSON "units.json" unitsMetadata} $out/units.json
+          cp ${writeJSON "users.json" usersData} $out/users.json
+          cp ${writeJSON "groups.json" groupsData} $out/groups.json
+          cp ${writeJSON "directories.json" directoriesData} $out/directories.json
+          cp ${writeJSON "health-checks.json" healthChecksData} $out/health-checks.json
+          cp ${writeJSON "secrets.json" secretsMetadata} $out/secrets.json
+          cp ${writeJSON "apt.json" aptData} $out/apt.json
+
+          # Safe as an echo: a manifest hash is hex, so it has no metacharacters.
           echo '${manifestHash}' > $out/manifest-hash
 
           # Create bin symlinks for convenience

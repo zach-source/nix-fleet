@@ -35,6 +35,10 @@ let
   # Whitelist pattern for grep -v -E
   whitelistPattern = lib.concatStringsSep "|" cfg.adblock.whitelist;
 
+  # Does unbound bind a wildcard address? If so it collides with
+  # systemd-resolved's stub on 127.0.0.53 — see the drop-in below.
+  bindsWildcard = lib.any (a: a == "0.0.0.0" || a == "::") cfg.listenAddresses;
+
   # Adblock update script
   adblockUpdateScript = ''
     #!/bin/bash
@@ -127,6 +131,12 @@ let
         local-zone: "${cfg.domain}." static
         include: /etc/unbound/local-records.conf
     ${lib.optionalString cfg.adblock.enable ''
+      # Literal path, not a glob. A wildcard looks like the tidier way to make
+      # a missing blocklist non-fatal, and unbound-checkconf accepts one that
+      # matches nothing — but the daemon rejects `adblock*.conf` outright, even
+      # with the file present, reporting "cannot open include file". The file's
+      # existence is guaranteed by the ExecStartPre in nixfleet-dns.service
+      # instead.
       include: /etc/unbound/adblock.conf
     ''}
 
@@ -327,6 +337,32 @@ in
           text = unboundConf;
           restartUnits = [ "nixfleet-dns.service" ];
         };
+      }
+      // lib.optionalAttrs bindsWildcard {
+        # systemd-resolved's stub listener owns 127.0.0.53:53 and 127.0.0.54:53.
+        # unbound cannot bind a wildcard over those, so whichever starts second
+        # loses — and pre-2026-08-20 gti that was decided by boot ordering, which
+        # meant any unbound restart could take fleet DNS down and leave it down.
+        #
+        # Only emitted when listenAddresses is a wildcard; a host bound to
+        # specific IPs has no conflict and keeps its stub.
+        "/etc/systemd/resolved.conf.d/10-nixfleet-no-stub.conf" = {
+          mode = "0644";
+          owner = "root";
+          group = "root";
+          text = ''
+            # Managed by NixFleet — modules/dns.nix (do not edit).
+            # unbound binds ${lib.concatStringsSep ", " cfg.listenAddresses} on port ${toString cfg.port}, which cannot
+            # coexist with the resolved stub. Local name resolution is
+            # unaffected: nss-resolve talks to resolved over varlink, not
+            # through 127.0.0.53, so only `dig @127.0.0.53` stops working.
+            [Resolve]
+            DNSStubListener=no
+          '';
+          restartUnits = [ "systemd-resolved.service" ];
+        };
+      }
+      // {
 
         "/etc/unbound/local-records.conf" = {
           mode = "0644";
@@ -429,13 +465,26 @@ in
           [Service]
           Type=simple
           ExecStartPre=/bin/bash -c 'id unbound &>/dev/null || useradd -r -s /usr/sbin/nologin -d /var/lib/unbound unbound'
-          ${lib.optionalString cfg.enableDnssec ''ExecStartPre=-/usr/sbin/unbound-anchor -a /var/lib/unbound/root.key''}
+          ${lib.optionalString cfg.adblock.enable ''
+            # unbound's `include:` is fatal on a missing file, so guarantee the
+            # target exists without ever overwriting it — the blocklist itself
+            # belongs to nixfleet-adblock-update. Needs ReadWritePaths below:
+            # ProtectSystem=full mounts /etc read-only for this unit, and
+            # without it this line fails with EROFS and takes DNS down.
+            ExecStartPre=/bin/bash -c 'test -e /etc/unbound/adblock.conf || install -m 0644 /dev/null /etc/unbound/adblock.conf'
+          ''}
+          ${lib.optionalString cfg.enableDnssec "ExecStartPre=-/usr/sbin/unbound-anchor -a /var/lib/unbound/root.key"}
           ExecStart=/usr/sbin/unbound -d -c /etc/unbound/unbound.conf
           Restart=on-failure
           RestartSec=10
 
           # Security hardening
           ProtectSystem=full
+          ${lib.optionalString cfg.adblock.enable ''
+            # Narrow hole in ProtectSystem=full so the adblock ExecStartPre can
+            # create the include target. Only this one directory is writable.
+            ReadWritePaths=/etc/unbound
+          ''}
           ProtectHome=yes
           PrivateDevices=yes
           NoNewPrivileges=false
@@ -468,15 +517,19 @@ in
       # ============================================================================
       # Adblock — blocklist-based DNS ad blocking
       # ============================================================================
+      # /etc/unbound/adblock.conf is deliberately NOT declared here.
+      #
+      # Its content belongs to nixfleet-adblock-update, which downloads the
+      # blocklists and writes the file directly. Declaring it as `text = ""` —
+      # which it was, purely to guarantee unbound's `include:` had a target —
+      # meant every apply truncated a 4.8 MB / 92k-line blocklist back to
+      # nothing and restarted DNS, leaving the fleet unfiltered until the timer
+      # next ran. Regenerating it only re-armed the loop, because the fresh
+      # file then differed from the empty declaration again.
+      #
+      # unbound needs the file to exist, not to be managed, so the service
+      # creates it if absent (ExecStartPre above) and nothing else touches it.
       nixfleet.files = {
-        "/etc/unbound/adblock.conf" = {
-          mode = "0644";
-          owner = "root";
-          group = "root";
-          text = "";
-          restartUnits = [ "nixfleet-dns.service" ];
-        };
-
         "/usr/local/bin/adblock-update" = {
           mode = "0755";
           owner = "root";

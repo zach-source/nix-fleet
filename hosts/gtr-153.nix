@@ -8,6 +8,7 @@
 
 {
   imports = [
+    ../modules/base-packages.nix
     ../modules/llm-inference.nix
     ../modules/ufw.nix
     ../modules/iscsi.nix
@@ -52,16 +53,6 @@
         "fs.inotify.max_user_instances" = 8192;
       };
     };
-
-    packages = with pkgs; [
-      git
-      htop
-      iperf3
-      curl
-      jq
-      tmux
-      vim
-    ];
 
     # Preserve gtr-153's pre-existing nix system-features (the nix-config
     # module owns nix.custom.conf, so they'd otherwise be dropped). trusted-users

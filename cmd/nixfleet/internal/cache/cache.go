@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 )
 
@@ -87,7 +88,7 @@ func (m *Manager) PushToCache(ctx context.Context, storePath string, cacheURL st
 
 // ConfigureHostCache configures a remote host to use the binary caches
 func (m *Manager) ConfigureHostCache(ctx context.Context, client *ssh.Client, base string) error {
-	switch base {
+	switch inventory.NormalizeBase(base) {
 	case "ubuntu":
 		return m.configureUbuntuCache(ctx, client)
 	case "nixos":

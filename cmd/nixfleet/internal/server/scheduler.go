@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/nixfleet/nixfleet/internal/inventory"
 )
 
 // Scheduler runs periodic background tasks
@@ -126,7 +128,11 @@ func (s *Scheduler) runUpdateCheck(ctx context.Context) {
 	totalSecurity := 0
 
 	for _, host := range hosts {
-		if host.Base != "ubuntu" {
+		// Exact "ubuntu" on purpose, not IsAptManaged: DGX hosts are
+		// apt-managed, but their updates are DGX Dashboard's to drive (and
+		// include firmware, which we can't touch), so they stay out of the
+		// update scheduler entirely.
+		if host.Base != inventory.BaseUbuntu {
 			continue
 		}
 

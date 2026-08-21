@@ -155,27 +155,23 @@ SUDOERS_FILE="/etc/sudoers.d/nixfleet-$DEPLOY_USER"
 log_info "Configuring sudoers for $DEPLOY_USER"
 cat >"$SUDOERS_FILE" <<EOF
 # NixFleet sudo rules for $DEPLOY_USER
-# Allows passwordless execution of Nix and systemctl commands
-
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /nix/var/nix/profiles/nixfleet/*/bin/*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nix*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /nix/var/nix/profiles/default/bin/nix*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/install -m * -o * -g * *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/chown *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/chmod *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/mkdir *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /sbin/reboot
+#
+# Full passwordless root, matching what gtr-150..153 already run.
+#
+# This replaced a list of ~18 narrow rules, which did not work. The activation
+# script lives at an unpredictable /nix/store path; state is written with
+# tee /var/lib/nixfleet/state.json; and NixFleet also invokes apt-get,
+# arbitrary systemctl units, k0s kubectl, shutdown and user-supplied bash -c
+# hooks. That surface cannot be enumerated, and every omission surfaces
+# mid-deploy as "sudo: a password is required".
+#
+# It also bought nothing. The old list granted chown, chmod, tee /etc/*,
+# useradd and usermod — each a one-step path to root. It read like a boundary
+# while being root-equivalent, which is worse than being explicit.
+#
+# A real boundary here would be a separate constrained deploy path, not a
+# longer wildcard list.
+$DEPLOY_USER ALL=(ALL) NOPASSWD: ALL
 EOF
 
 chmod 440 "$SUDOERS_FILE"

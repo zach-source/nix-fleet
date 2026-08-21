@@ -33,3 +33,4 @@ agents/.slack-apps.json
 .claude/
 __pycache__/
 .mcp.json
+.claude-uuid-session
