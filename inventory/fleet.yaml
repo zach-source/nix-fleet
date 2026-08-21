@@ -175,8 +175,6 @@ hosts:
 
   # DGX Sparks — base: dgx means NixFleet manages packages/files/units but
   # never runs OS updates (DGX Dashboard + fwupdmgr own that lane).
-  # NOTE: addr values below are PLACEHOLDERS. Set the real management IPs
-  # here and in hosts/dgx-spark-{1,2}.nix before the first apply.
   dgx-spark-1:
     base: dgx
     addr: 192.168.3.140
@@ -185,10 +183,12 @@ hosts:
       - base
       - llm-inference
     services:
-      - port: 8000
-        model: deepseek-ai/DeepSeek-V4-Flash
+      # 8888, NOT the 8000 every other fleet LLM uses — a probe at 8000 here
+      # reads connection-refused while the model is perfectly healthy.
+      - port: 8888
+        model: deepseek-ai/DeepSeek-V4-Flash-0731
         role: primary-llm
-        notes: "TP=2 across the Spark pair, rank 0 serves HTTP. Needs /opt/dsv4 on-box."
+        notes: "TP=2 across the Spark pair, rank 0 serves HTTP. Recipe + env at /opt/dspark (modules/dspark-dsv4.nix)."
 
   dgx-spark-2:
     base: dgx

@@ -610,6 +610,19 @@ let
           if ! id "${name}" > /dev/null 2>&1; then
             log "  Creating user: ${name}"
             useradd ${systemArg} ${uidArg} ${groupArg} ${homeArg} ${createHomeArg} ${shellArg} ${extraGroupsArg} ${commentArg} "${name}" || true
+          ${optionalString (userCfg.extraGroups != [ ]) ''
+            else
+              # useradd only runs for users that don't exist yet, so without this
+              # branch declaring extraGroups on an already-present user (deploy is
+              # always already present) silently does nothing. -a so we only add;
+              # never take away groups this config doesn't know about.
+              for g in ${concatStringsSep " " userCfg.extraGroups}; do
+                if ! id -nG "${name}" | tr ' ' '\n' | grep -qx "$g"; then
+                  log "  Adding ${name} to group: $g"
+                  usermod -aG "$g" "${name}" || true
+                fi
+              done
+          ''}
           fi
         ''
       ) cfg.users

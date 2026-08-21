@@ -12,8 +12,9 @@
   imports = [
     ../modules/base-packages.nix
     ../modules/dgx-spark-cluster.nix
+    ../modules/netplan.nix
     ../modules/storage-vlan.nix
-    ../modules/vllm.nix
+    ../modules/dspark-dsv4.nix
     (import ./dgx-spark-dsv4.nix { nodeRank = 1; })
   ];
 
@@ -41,6 +42,15 @@
 
     # VLAN 8 storage network. Parent confirmed identical to spark-5267 —
     # enP7s7, maxmtu 9194, so 9000 fits.
+    # OFF, and not out of caution — out of fact. The management address lives
+    # on enP7s7, which is exactly the interface modules/storage-vlan.nix
+    # declares as the VLAN 8 parent. With renderer: NetworkManager, an apply
+    # tears down and rebuilds that connection, i.e. the one carrying SSH. There
+    # is no BMC, no AMT and no reachable KVM on this fleet, and spark-7ee2 has
+    # already needed a deadman rollback once for exactly this. The unit still
+    # ships (disabled) so an operator physically present can run it by hand.
+    modules.netplan.autoApply = false;
+
     modules.storageVlan = {
       enable = true;
       interface = "enP7s7";
@@ -52,19 +62,16 @@
       peer = "192.168.8.133";
     };
 
-    # Same as rank 0 — the entrypoint and wheel are absent here too.
-    modules.vllm.services.dsv4-flash.enable = false;
-
     healthChecks = {
       gpu-present = {
         type = "command";
         command = "nvidia-smi -L | grep -q GPU";
       };
 
-      # Rank 1 serves no HTTP — modules/vllm.nix health-checks the unit here
-      # instead of a port. What is worth asserting from this side is that the
-      # fabric path to rank 0 is actually up, since a silent NCCL hang is the
-      # usual symptom of it not being.
+      # Rank 1 serves no HTTP and has no service unit — the head starts this
+      # node's container over SSH. What is worth asserting from this side is
+      # that the fabric path to rank 0 is actually up, since a silent NCCL hang
+      # is the usual symptom of it not being.
       dsv4-master-reachable = {
         type = "command";
         command = "ping -c1 -W2 192.168.100.10";
