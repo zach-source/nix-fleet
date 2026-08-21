@@ -65,6 +65,13 @@ in
           # Managed by NixFleet — hosts/<host>.nix modules.sysctl.settings
           ${lib.concatStringsSep "\n" renderedLines}
         '';
+        # Apply on deploy through activation, not only through the path unit
+        # below. Activation writes files (step 5) before it installs units
+        # (step 7), so on a host that has never seen this module the watcher
+        # does not exist yet when the file lands — and on a host that has, the
+        # watcher may not be running. restartUnits is the path that actually
+        # fires every time.
+        restartUnits = [ "nixfleet-sysctl-apply.service" ];
       };
     };
 
@@ -81,7 +88,10 @@ in
           Type=oneshot
           # --system re-reads ALL drop-ins; safe to run on any change.
           ExecStart=/sbin/sysctl --system
-          RemainAfterExit=yes
+          # No RemainAfterExit. A .path unit triggers by *starting* its unit,
+          # and starting an already-active service is a no-op — so keeping a
+          # oneshot active after it exits makes the watcher below fire exactly
+          # once, at boot, and never again.
 
           [Install]
           WantedBy=multi-user.target

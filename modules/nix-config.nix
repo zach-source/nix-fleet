@@ -92,6 +92,9 @@ in
         # Determinate Nix's /etc/nix/nix.conf `!include`s this file.
         ${lib.concatStringsSep "\n" lines}
       '';
+      # Applied on deploy through activation — the path unit alone is not
+      # enough. See modules/sysctl.nix.
+      restartUnits = [ "nixfleet-nix-config-apply.service" ];
     };
 
     nixfleet.systemd.units = {
@@ -106,7 +109,8 @@ in
           [Service]
           Type=oneshot
           ExecStart=/usr/bin/systemctl restart nix-daemon.service
-          RemainAfterExit=yes
+          # No RemainAfterExit — see modules/sysctl.nix for why it silently
+          # disables the path unit below.
 
           [Install]
           WantedBy=multi-user.target

@@ -150,6 +150,9 @@ in
           /usr/sbin/ufw reload >/dev/null
           /usr/sbin/ufw status verbose | head -40
         '';
+        # Applied on deploy through activation — the path unit alone is not
+        # enough. See modules/sysctl.nix.
+        restartUnits = [ "nixfleet-ufw-apply.service" ];
       };
     };
 
@@ -166,7 +169,8 @@ in
           [Service]
           Type=oneshot
           ExecStart=/usr/local/bin/nixfleet-ufw-apply
-          RemainAfterExit=yes
+          # No RemainAfterExit — see modules/sysctl.nix for why it silently
+          # disables the path unit below.
 
           [Install]
           WantedBy=multi-user.target
