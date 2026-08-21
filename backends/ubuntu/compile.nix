@@ -829,9 +829,25 @@ let
       fi
     done
 
+    # Units declared `enabled = false` are installed and disabled, never
+    # started. Without this they still land in CHANGED_UNITS whenever their
+    # file differs, and the restart below would start the very services the
+    # config retired — on gtr-150 that is two GPU models on the fleet's
+    # tightest node. The file still gets installed, so flipping enable back on
+    # is one apply away.
+    DISABLED_UNITS="${
+      concatStringsSep " " (attrNames (filterAttrs (_: u: !u.enabled) cfg.systemd.units))
+    }"
+
     if [ -n "$UNITS_TO_RESTART" ]; then
       log "Restarting affected units:$UNITS_TO_RESTART"
       for unit in $UNITS_TO_RESTART; do
+        case " $DISABLED_UNITS " in
+        *" $unit "*)
+          log "  Skipping $unit (declared disabled)"
+          continue
+          ;;
+        esac
         # --no-block: queue the restart and move on instead of waiting for the
         # unit to become active. GPU inference units carry a startup-stagger
         # sleep in ExecStartPre, so a blocking restart serialized across many of
