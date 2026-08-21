@@ -150,6 +150,9 @@ in
           ""
         ]
       );
+      # Only fires where modules.netplan.autoApply is on; elsewhere the file
+      # still lands and takes effect at next boot. See modules/netplan.nix.
+      restartUnits = [ "nixfleet-netplan-apply.service" ];
     };
 
     nixfleet.healthChecks = {
