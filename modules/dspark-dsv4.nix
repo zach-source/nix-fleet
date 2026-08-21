@@ -62,19 +62,31 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "ghcr.io/zach-source/dspark-vllm-gx10:0.1.1@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8";
+      default = "ghcr.io/anemll/dspark-vllm-gx10:0.1.1@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8";
       description = ''
-        Runtime image, digest-pinned. Defaults to our own GHCR mirror rather
-        than ghcr.io/anemll/... so an upstream delete or retag can't change what
-        the fleet runs — the digest is byte-identical to upstream 0.1.1.
+        Runtime image, pinned by digest. The digest is what gives supply-chain
+        immutability here: an upstream retag or force-push cannot change what
+        this resolves to, and a delete fails loudly instead of silently serving
+        something else.
 
-        The mirror is PRIVATE, because the image bundles CUDA, PyTorch and
-        Triton under their own upstream terms; re-hosting those publicly isn't
-        ours to do. A cold pull therefore needs a read:packages credential in
-        the host's docker config. That is not wired up: both Sparks already have
-        the image resident and the compose file sets `pull_policy:
-        if_not_present`, so nothing pulls today. Re-imaging a Spark needs the
-        credential first.
+        We also keep a byte-identical private mirror at
+        ghcr.io/zach-source/dspark-vllm-gx10:0.1.1 (same digest, verified). It
+        is NOT the default, and that is a deliberate, tested decision rather
+        than an oversight:
+
+          - `pull_policy: if_not_present` resolves an image by REPO DIGEST, not
+            by image ID. The layers resident on both Sparks carry the RepoDigest
+            ghcr.io/anemll/...@sha256:a839..., so pointing this at the mirror
+            makes docker consider the image absent and attempt a pull.
+          - Neither Spark holds a ghcr credential, and the mirror is private
+            (the image bundles CUDA, PyTorch and Triton under their own upstream
+            terms, so public re-hosting isn't ours to do). That pull fails auth,
+            and the model server does not come back. Verified before deploying,
+            not discovered afterwards.
+
+        So the mirror is disaster recovery: if upstream disappears, put a
+        read:packages credential on the hosts, switch this to the mirror ref,
+        and the pull succeeds. Keep the mirror in sync when this digest changes.
       '';
     };
 
