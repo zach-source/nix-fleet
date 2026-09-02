@@ -216,7 +216,12 @@ in
           # this module, one second before logging "skipped because unmet
           # condition check". Exec*= lines never run for a skipped unit, so this
           # form only evicts dsv4 when GLM is genuinely starting.
-          ExecStartPre=/usr/bin/systemctl stop dspark-dsv4.service
+          #
+          # The `+` prefix runs this one command as root. Without it the command
+          # inherits User= above and a non-root systemctl stop of a system unit
+          # dies on "Interactive authentication required" — which fails the whole
+          # unit, so GLM would refuse to start rather than start alongside dsv4.
+          ExecStartPre=+/usr/bin/systemctl stop dspark-dsv4.service
           # systemd does not derive HOME from User=, and the recipe resolves the
           # HF cache and the worker's SSH identity out of $HOME.
           Environment=HOME=/home/${cfg.user}

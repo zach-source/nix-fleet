@@ -223,10 +223,11 @@ in
           Environment=HOME=/home/${cfg.user}
           # The other half of the mutual exclusion with GLM-5.3-Flash — see the
           # long note in modules/dspark-glm53.nix for why this is ExecStartPre
-          # and not Conflicts=. Leading `-` because that unit only exists on a
-          # host that also declares the GLM stack, and a missing unit must not
-          # stop dsv4 from starting.
-          ExecStartPre=-/usr/bin/systemctl stop glm53-flash.service
+          # and not Conflicts=. `-` because that unit only exists on a host that
+          # also declares the GLM stack, and a missing unit must not stop dsv4
+          # from starting; `+` because the command would otherwise inherit User=
+          # below and fail on "Interactive authentication required".
+          ExecStartPre=-+/usr/bin/systemctl stop glm53-flash.service
           ExecStart=${startScript}
           ExecStop=${stopScript}
           # The start script exits 3 for "the stack is already up" and says so
