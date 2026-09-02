@@ -39,9 +39,11 @@
     ../modules/dspark-glm53.nix
     # Rank 0 — the head, and the only node that serves HTTP (:8888).
     #
-    # Both model stacks are declared; they are mutually exclusive at runtime
-    # (Conflicts=, ~80 GiB of 121 GiB per node each) and GLM's unit stays
-    # condition-skipped until its weights are on disk. Only one ever serves.
+    # Both model stacks are declared and both checkpoints stay on disk, but
+    # only GLM is boot-enabled — it is the model this pair serves. They are
+    # mutually exclusive at runtime (~80 GiB of 121 GiB per node each) and each
+    # unit's ExecStartPre stops the other, so `systemctl start dspark-dsv4` is
+    # the entire switch-back procedure. Only one ever serves.
     (import ./dgx-spark-dsv4.nix { nodeRank = 0; })
     (import ./dgx-spark-glm53.nix { nodeRank = 0; })
   ];

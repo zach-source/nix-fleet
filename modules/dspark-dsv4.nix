@@ -44,6 +44,14 @@ let
 
   startScript = "${cfg.recipeDir}/start-deepseek-v4-flash-dspark.sh";
   stopScript = "${cfg.recipeDir}/stop-deepseek-v4-flash-dspark.sh";
+
+  # Derived from the settings rather than written out, so it cannot drift from
+  # the checkpoint the recipe would actually serve. The Hub turns "org/name"
+  # into "models--org--name".
+  weightsPath =
+    "${cfg.settings.HF_CACHE}/hub/models--"
+    + builtins.replaceStrings [ "/" ] [ "--" ] cfg.settings.DSPARK_MODEL_OFFICIAL
+    + "/snapshots/${cfg.settings.DSPARK_REVISION}";
 in
 {
   options.nixfleet.modules.dsparkDsv4 = {
@@ -201,7 +209,17 @@ in
     }
     // lib.optionalAttrs isHead {
       "dspark-dsv4.service" = {
-        enabled = true;
+        # Installed but NOT wanted at boot: GLM-5.3-Flash serves this pair now.
+        # The unit file, the recipe checkout and the 156 GiB checkpoint all stay
+        # on disk, so switching back is `systemctl start dspark-dsv4` — which
+        # evicts GLM via the ExecStartPre below.
+        #
+        # This is also the only correct answer at boot. Both units are
+        # WantedBy=multi-user.target with no ordering between them, and each
+        # one's ExecStartPre stops the other, so leaving both enabled makes the
+        # winner a race — including the case where each kills the other's load.
+        # Exactly one of the pair may be boot-enabled.
+        enabled = false;
         text = ''
           [Unit]
           Description=DeepSeek-V4-Flash — TP=2 across the stacked DGX Spark pair
@@ -256,30 +274,47 @@ in
         timeout = 10;
       };
 
+      # The stack is parked, not deleted — this is what makes "kept on disk"
+      # an assertion instead of a hope. 156 GiB is a tempting thing to reclaim.
+      dspark-weights-present = {
+        type = "command";
+        command = "test -d ${weightsPath}";
+        timeout = 10;
+      };
+
       # Asserts the running container was built from the digest this config
       # names. Compares the image's own sha256, not the reference string, so it
       # stays green whether the image was pulled from our mirror or from
       # upstream — those are byte-identical — but goes red on a genuinely
       # different build left behind by a hand-run `docker compose up`.
+      #
+      # Skips when no container is running, which is now the normal state. The
+      # unguarded form fed an empty string to `docker inspect` and failed with
+      # "requires at least 1 argument" — a red check reporting nothing but its
+      # own broken quoting.
       dspark-image-pinned = {
         type = "command";
         command =
           let
             digest = lib.last (lib.splitString "@" cfg.image);
           in
-          "test \"$(docker inspect --format '{{index .RepoDigests 0}}' "
-          + "$(docker inspect --format '{{.Image}}' "
-          + "$(docker ps -q --filter name=vllm-dspark | head -1)) "
+          "cid=$(docker ps -q --filter name=vllm-dspark | head -1); "
+          + "test -z \"$cid\" || "
+          + "test \"$(docker inspect --format '{{index .RepoDigests 0}}' "
+          + "$(docker inspect --format '{{.Image}}' \"$cid\") "
           + "| sed 's/.*@//')\" = '${digest}'";
         timeout = 15;
       };
     }
     // lib.optionalAttrs isHead {
+      # Gated on the unit, because GLM-5.3-Flash serves the same port. Without
+      # the guard this check goes green off GLM's answer and reports a model
+      # that is not running as healthy.
       dspark-dsv4-serving = {
         type = "command";
-        command = "curl -sf -m 10 http://127.0.0.1:${
-          cfg.settings.VLLM_PORT or "8888"
-        }/v1/models >/dev/null";
+        command =
+          "! systemctl is-active --quiet dspark-dsv4.service || "
+          + "curl -sf -m 10 http://127.0.0.1:${cfg.settings.VLLM_PORT or "8888"}/v1/models >/dev/null";
         timeout = 20;
       };
     };
