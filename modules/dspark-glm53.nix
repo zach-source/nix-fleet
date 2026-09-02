@@ -221,6 +221,23 @@ in
           # inherits User= above and a non-root systemctl stop of a system unit
           # dies on "Interactive authentication required" — which fails the whole
           # unit, so GLM would refuse to start rather than start alongside dsv4.
+          # Wait for DNS before anything else, because network-online.target
+          # does not mean name resolution works. NetworkManager-wait-online is
+          # disabled on DGX OS, so that target is reached immediately.
+          #
+          # Measured on the 2026-09-02 power-loss reboot: this unit started at
+          # 16:53:39 and asked for ghcr.io at 16:53:45, two seconds before
+          # systemd-resolved was handed its server list at 16:53:47. The pull
+          # failed "server misbehaving", the unit failed, and Restart=no left
+          # the pair's only model down until a human noticed. start.sh pulls
+          # unconditionally even at SKIP_BUILD=1, so keeping the image local
+          # does not avoid this.
+          #
+          # Ordered first on purpose: the eviction below would otherwise stop
+          # dsv4 and then fail here, leaving both models down. No shell
+          # variables in the loop — systemd expands $NAME in Exec lines before
+          # sh ever sees it — so the bound comes from timeout(1) instead.
+          ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until getent hosts ghcr.io >/dev/null 2>&1; do sleep 2; done'
           ExecStartPre=+/usr/bin/systemctl stop dspark-dsv4.service
           # Reclaim page cache before the engine sizes its KV pool, on both
           # nodes. This is not superstition: GB10 is unified memory, so page
