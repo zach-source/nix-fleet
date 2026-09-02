@@ -222,6 +222,15 @@ in
           # dies on "Interactive authentication required" — which fails the whole
           # unit, so GLM would refuse to start rather than start alongside dsv4.
           ExecStartPre=+/usr/bin/systemctl stop dspark-dsv4.service
+          # Reclaim page cache before the engine sizes its KV pool, on both
+          # nodes. This is not superstition: GB10 is unified memory, so page
+          # cache and GPU allocations come out of the same 121 GiB. A cold start
+          # follows a 164 GiB weight rsync, which leaves the cache full, and
+          # vLLM then measures the shortfall at KV-sizing time and refuses to
+          # start ("14.52 GiB KV cache is needed ... available 13.27 GiB").
+          # Upstream GB10 recipes document the same drop as a pre-launch ritual.
+          # Ordered after the stop above so dsv4's memory is released first.
+          ExecStartPre=+/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
           # systemd does not derive HOME from User=, and the recipe resolves the
           # HF cache and the worker's SSH identity out of $HOME.
           Environment=HOME=/home/${cfg.user}

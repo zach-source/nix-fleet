@@ -64,7 +64,17 @@
       # up, so a single endpoint always points at whichever model is running.
       # The served model name is what distinguishes them on the wire.
       PORT = "8888";
-      MAX_MODEL_LEN = "1000000";
+      # 768k, not the recipe's 1M, and this is measured rather than cautious.
+      # At 1000000 vLLM sized the KV pool at 14.52 GiB against 13.27 GiB
+      # available and refused to start. The binding constraint is GB10's unified
+      # memory: weights, page cache and KV all come out of the same 121 GiB, and
+      # this pair carries a 164 GiB checkpoint where upstream's numbers assume
+      # their own geometry.
+      #
+      # 768k needs ~11.2 GiB, which leaves real headroom instead of landing 1.25
+      # GiB short. Raise it once a run has shown how much KV is actually free —
+      # `/metrics` reports the pool — but do not put 1M back without checking.
+      MAX_MODEL_LEN = "786432";
       MAX_NUM_SEQS = "4";
       # 7168 is the maintainer default for MAX_NUM_SEQS=4. It is not arbitrary:
       # this model caches in 3584-token pages whose KDA state is checkpointed
