@@ -96,6 +96,17 @@
       ENFORCE_EAGER = "0";
       CG_ESTIMATE = "1";
 
+      # Use the digest-pinned GHCR image; do not rebuild it locally.
+      #
+      # start.sh stamps the image with a hash of the recipe tree and rebuilds
+      # from the Dockerfile whenever the stamp does not match — which it never
+      # does for a pulled image, so the default is to rebuild on every cold
+      # start. That throws away the whole point of pinning by digest (the
+      # locally built image is not the artifact we verified) and costs a CUDA
+      # build on an aarch64 Spark. The image is public and anonymously
+      # pullable, so there is no reason to build it.
+      SKIP_BUILD = "1";
+
       # --- multimodal -------------------------------------------------------
       # GLM-5.3-Flash is natively multimodal; this is the first vision-capable
       # model on the fleet. Profiling the MM encoder at boot is skipped because
