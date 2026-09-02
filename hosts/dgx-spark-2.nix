@@ -15,7 +15,9 @@
     ../modules/netplan.nix
     ../modules/storage-vlan.nix
     ../modules/dspark-dsv4.nix
+    ../modules/dspark-glm53.nix
     (import ./dgx-spark-dsv4.nix { nodeRank = 1; })
+    (import ./dgx-spark-glm53.nix { nodeRank = 1; })
   ];
 
   nixfleet = {

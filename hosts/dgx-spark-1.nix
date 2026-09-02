@@ -36,8 +36,14 @@
     ../modules/netplan.nix
     ../modules/storage-vlan.nix
     ../modules/dspark-dsv4.nix
+    ../modules/dspark-glm53.nix
     # Rank 0 — the head, and the only node that serves HTTP (:8888).
+    #
+    # Both model stacks are declared; they are mutually exclusive at runtime
+    # (Conflicts=, ~80 GiB of 121 GiB per node each) and GLM's unit stays
+    # condition-skipped until its weights are on disk. Only one ever serves.
     (import ./dgx-spark-dsv4.nix { nodeRank = 0; })
+    (import ./dgx-spark-glm53.nix { nodeRank = 0; })
   ];
 
   nixfleet = {
