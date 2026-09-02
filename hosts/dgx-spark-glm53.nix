@@ -113,7 +113,14 @@
       # it costs minutes and estimates a shape the recipe already pins.
       LANGUAGE_MODEL_ONLY = "0";
       SKIP_MM_PROFILING = "1";
-      LIMIT_MM = "{\"image\":4,\"video\":1}";
+      # The embedded single quotes are load-bearing, not decoration. start.sh
+      # reads this file with `set -a; source`, so bash strips the inner double
+      # quotes from a bare value and vLLM receives {image:4,video:1}, which is
+      # not JSON:
+      #   vllm serve: error: argument --limit-mm-per-prompt:
+      #   Value {image:4,video:1} cannot be converted to <function loads>
+      # Any value here containing quotes or spaces needs the same treatment.
+      LIMIT_MM = "'{\"image\":4,\"video\":1}'";
 
       # --- recipe behaviour flags ------------------------------------------
       GLM53_BOOT_SHAPE_WARMUP = "1";
