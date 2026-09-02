@@ -198,17 +198,25 @@ in
           # Until the pinned snapshot exists systemd skips this unit and says so,
           # which is a clean "not yet" rather than a failed activation.
           ConditionPathExists=${weightsPath}
-          # Mutual exclusion with DeepSeek-V4-Flash. Each model wants ~80 GiB of
-          # the 121 GiB per node, so they physically cannot both be resident.
-          # systemd applies Conflicts= in both directions: starting either unit
-          # stops the other, running its ExecStop on the way out.
-          Conflicts=dspark-dsv4.service
 
           [Service]
           Type=oneshot
           RemainAfterExit=yes
           User=${cfg.user}
           WorkingDirectory=${cfg.recipeDir}
+          # Mutual exclusion with DeepSeek-V4-Flash: ~80 GiB of the 121 GiB per
+          # node each, so they cannot both be resident.
+          #
+          # This is deliberately ExecStartPre and NOT Conflicts=, which is the
+          # obvious way to write it and is wrong here. systemd resolves
+          # Conflicts= when it *queues* the job but evaluates Condition*= when it
+          # *executes* it, so a Conflicts= on this unit evicts dsv4 even on the
+          # activations where the weights gate above skips this unit entirely.
+          # That is not theoretical — it took dsv4 down on the first deploy of
+          # this module, one second before logging "skipped because unmet
+          # condition check". Exec*= lines never run for a skipped unit, so this
+          # form only evicts dsv4 when GLM is genuinely starting.
+          ExecStartPre=/usr/bin/systemctl stop dspark-dsv4.service
           # systemd does not derive HOME from User=, and the recipe resolves the
           # HF cache and the worker's SSH identity out of $HOME.
           Environment=HOME=/home/${cfg.user}

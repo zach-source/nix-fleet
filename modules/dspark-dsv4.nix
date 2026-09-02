@@ -221,6 +221,12 @@ in
           # systemd does not set HOME from User=, and the recipe resolves both
           # the HF cache and the SSH identity for the worker out of $HOME.
           Environment=HOME=/home/${cfg.user}
+          # The other half of the mutual exclusion with GLM-5.3-Flash — see the
+          # long note in modules/dspark-glm53.nix for why this is ExecStartPre
+          # and not Conflicts=. Leading `-` because that unit only exists on a
+          # host that also declares the GLM stack, and a missing unit must not
+          # stop dsv4 from starting.
+          ExecStartPre=-/usr/bin/systemctl stop glm53-flash.service
           ExecStart=${startScript}
           ExecStop=${stopScript}
           # The start script exits 3 for "the stack is already up" and says so
