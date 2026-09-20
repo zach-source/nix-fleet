@@ -209,17 +209,20 @@ in
     }
     // lib.optionalAttrs isHead {
       "dspark-dsv4.service" = {
-        # Installed but NOT wanted at boot: GLM-5.3-Flash serves this pair now.
-        # The unit file, the recipe checkout and the 156 GiB checkpoint all stay
-        # on disk, so switching back is `systemctl start dspark-dsv4` — which
-        # evicts GLM via the ExecStartPre below.
+        # Boot-enabled: this is the model the pair serves. Rolled back to from
+        # GLM-5.3-Flash on 2026-09-19 for concurrency — GLM is the faster single
+        # stream (62.3 tok/s structured against ~27 here) but does not batch,
+        # because GLM53_MIXED_PREFILL_CHUNK=skip serializes concurrent cold
+        # prefills. dsv4 batches to 161 tok/s aggregate at MAX_NUM_SEQS=6, and
+        # it is the only one of the pair with a real agentic score
+        # (Terminal-Bench 2.1 0.685 against GLM's 0.409 at c=4, 14 of 22 trials
+        # lost to AgentTimeoutError).
         #
-        # This is also the only correct answer at boot. Both units are
-        # WantedBy=multi-user.target with no ordering between them, and each
-        # one's ExecStartPre stops the other, so leaving both enabled makes the
-        # winner a race — including the case where each kills the other's load.
-        # Exactly one of the pair may be boot-enabled.
-        enabled = false;
+        # Both units are WantedBy=multi-user.target with no ordering between
+        # them, and each one's ExecStartPre stops the other, so leaving both
+        # enabled makes the winner a race — including the case where each kills
+        # the other's load. Exactly one of the pair may be boot-enabled.
+        enabled = true;
         text = ''
           [Unit]
           Description=DeepSeek-V4-Flash — TP=2 across the stacked DGX Spark pair

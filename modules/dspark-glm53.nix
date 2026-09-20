@@ -184,7 +184,13 @@ in
     }
     // lib.optionalAttrs isHead {
       "glm53-flash.service" = {
-        enabled = true;
+        # Installed but NOT wanted at boot: DeepSeek-V4-Flash serves this pair
+        # again as of 2026-09-19 — see the note on dspark-dsv4.service for why.
+        # The unit file, the recipe checkout and the 164 GiB EXL3 checkpoint all
+        # stay on disk, so switching back is `systemctl start glm53-flash`,
+        # which evicts dsv4 via the ExecStartPre below. Exactly one of the pair
+        # may be boot-enabled.
+        enabled = false;
         text = ''
           [Unit]
           Description=GLM-5.3-Flash EXL3 — TP=2 across the stacked DGX Spark pair
@@ -281,9 +287,17 @@ in
       # Deliberately /health and not /v1/models: this recipe's README is explicit
       # that /v1/models answers 200 with a dead engine behind it, which is the
       # worst possible shape for a health check.
+      #
+      # Gated on the unit, because DeepSeek-V4-Flash serves the same port and is
+      # also a vLLM that answers /health. Ungated, this check goes green off
+      # dsv4's answer and reports a model that is not running as healthy — the
+      # same trap dspark-dsv4-serving already guards against in the other
+      # direction.
       glm53-flash-serving = {
         type = "command";
-        command = "curl -sf -m 10 http://127.0.0.1:${cfg.settings.PORT or "8888"}/health >/dev/null";
+        command =
+          "! systemctl is-active --quiet glm53-flash.service || "
+          + "curl -sf -m 10 http://127.0.0.1:${cfg.settings.PORT or "8888"}/health >/dev/null";
         timeout = 20;
       };
     };
