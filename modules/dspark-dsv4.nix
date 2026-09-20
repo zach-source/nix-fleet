@@ -44,6 +44,14 @@ let
 
   startScript = "${cfg.recipeDir}/start-deepseek-v4-flash-dspark.sh";
   stopScript = "${cfg.recipeDir}/stop-deepseek-v4-flash-dspark.sh";
+
+  # Derived from the settings rather than written out, so it cannot drift from
+  # the checkpoint the recipe would actually serve. The Hub turns "org/name"
+  # into "models--org--name".
+  weightsPath =
+    "${cfg.settings.HF_CACHE}/hub/models--"
+    + builtins.replaceStrings [ "/" ] [ "--" ] cfg.settings.DSPARK_MODEL_OFFICIAL
+    + "/snapshots/${cfg.settings.DSPARK_REVISION}";
 in
 {
   options.nixfleet.modules.dsparkDsv4 = {
@@ -201,6 +209,19 @@ in
     }
     // lib.optionalAttrs isHead {
       "dspark-dsv4.service" = {
+        # Boot-enabled: this is the model the pair serves. Rolled back to from
+        # GLM-5.3-Flash on 2026-09-19 for concurrency — GLM is the faster single
+        # stream (62.3 tok/s structured against ~27 here) but does not batch,
+        # because GLM53_MIXED_PREFILL_CHUNK=skip serializes concurrent cold
+        # prefills. dsv4 batches to 161 tok/s aggregate at MAX_NUM_SEQS=6, and
+        # it is the only one of the pair with a real agentic score
+        # (Terminal-Bench 2.1 0.685 against GLM's 0.409 at c=4, 14 of 22 trials
+        # lost to AgentTimeoutError).
+        #
+        # Both units are WantedBy=multi-user.target with no ordering between
+        # them, and each one's ExecStartPre stops the other, so leaving both
+        # enabled makes the winner a race — including the case where each kills
+        # the other's load. Exactly one of the pair may be boot-enabled.
         enabled = true;
         text = ''
           [Unit]
@@ -221,6 +242,13 @@ in
           # systemd does not set HOME from User=, and the recipe resolves both
           # the HF cache and the SSH identity for the worker out of $HOME.
           Environment=HOME=/home/${cfg.user}
+          # The other half of the mutual exclusion with GLM-5.3-Flash — see the
+          # long note in modules/dspark-glm53.nix for why this is ExecStartPre
+          # and not Conflicts=. `-` because that unit only exists on a host that
+          # also declares the GLM stack, and a missing unit must not stop dsv4
+          # from starting; `+` because the command would otherwise inherit User=
+          # below and fail on "Interactive authentication required".
+          ExecStartPre=-+/usr/bin/systemctl stop glm53-flash.service
           ExecStart=${startScript}
           ExecStop=${stopScript}
           # The start script exits 3 for "the stack is already up" and says so
@@ -249,30 +277,47 @@ in
         timeout = 10;
       };
 
+      # The stack is parked, not deleted — this is what makes "kept on disk"
+      # an assertion instead of a hope. 156 GiB is a tempting thing to reclaim.
+      dspark-weights-present = {
+        type = "command";
+        command = "test -d ${weightsPath}";
+        timeout = 10;
+      };
+
       # Asserts the running container was built from the digest this config
       # names. Compares the image's own sha256, not the reference string, so it
       # stays green whether the image was pulled from our mirror or from
       # upstream — those are byte-identical — but goes red on a genuinely
       # different build left behind by a hand-run `docker compose up`.
+      #
+      # Skips when no container is running, which is now the normal state. The
+      # unguarded form fed an empty string to `docker inspect` and failed with
+      # "requires at least 1 argument" — a red check reporting nothing but its
+      # own broken quoting.
       dspark-image-pinned = {
         type = "command";
         command =
           let
             digest = lib.last (lib.splitString "@" cfg.image);
           in
-          "test \"$(docker inspect --format '{{index .RepoDigests 0}}' "
-          + "$(docker inspect --format '{{.Image}}' "
-          + "$(docker ps -q --filter name=vllm-dspark | head -1)) "
+          "cid=$(docker ps -q --filter name=vllm-dspark | head -1); "
+          + "test -z \"$cid\" || "
+          + "test \"$(docker inspect --format '{{index .RepoDigests 0}}' "
+          + "$(docker inspect --format '{{.Image}}' \"$cid\") "
           + "| sed 's/.*@//')\" = '${digest}'";
         timeout = 15;
       };
     }
     // lib.optionalAttrs isHead {
+      # Gated on the unit, because GLM-5.3-Flash serves the same port. Without
+      # the guard this check goes green off GLM's answer and reports a model
+      # that is not running as healthy.
       dspark-dsv4-serving = {
         type = "command";
-        command = "curl -sf -m 10 http://127.0.0.1:${
-          cfg.settings.VLLM_PORT or "8888"
-        }/v1/models >/dev/null";
+        command =
+          "! systemctl is-active --quiet dspark-dsv4.service || "
+          + "curl -sf -m 10 http://127.0.0.1:${cfg.settings.VLLM_PORT or "8888"}/v1/models >/dev/null";
         timeout = 20;
       };
     };
