@@ -12,8 +12,8 @@ at it and select a model by name.
 
 | Calling from | Base URL | Headers required |
 |---|---|---|
-| **In-cluster** (k0s pods) | `http://litellm.litellm.svc.cluster.local:4000/v1` | `Authorization: Bearer sk-nixfleet-2026` |
-| **External** (laptop, bare-metal, anywhere) | `https://llm.nixfleet.private.stigen.ai/v1` | `Authorization: Bearer sk-nixfleet-2026` **plus** Cloudflare Access |
+| **In-cluster** (k0s pods) | `http://litellm.litellm.svc.cluster.local:4000/v1` | `Authorization: Bearer $LITELLM_KEY` |
+| **External** (laptop, bare-metal, anywhere) | `https://llm.nixfleet.private.stigen.ai/v1` | `Authorization: Bearer $LITELLM_KEY` **plus** Cloudflare Access |
 
 External traffic goes through a Cloudflare Tunnel guarded by CF Access
 (`*.nixfleet.private.stigen.ai`, allows `@stigen.ai` / `@stigen.io`). A browser
@@ -26,8 +26,27 @@ SEC=$(op read "op://Personal Agents/op-connect-cf-access/client_secret")
 #   -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SEC"
 ```
 
-The master key `sk-nixfleet-2026` is the LiteLLM virtual key (defined in
-`general_settings.master_key`).
+Auth is a **virtual key**, one per consumer, minted on the proxy and stored in
+1Password. Get yours with:
+
+```bash
+export LITELLM_KEY=$(op read "op://Personal Agents/litellm-<consumer>/credential")
+```
+
+Existing ones: `litellm-open-webui`, `litellm-librechat`, `litellm-lap`,
+`litellm-hindsight`, `fabriek-litellm`. To mint another, from the gateway pod:
+
+```bash
+curl -sX POST http://127.0.0.1:4000/key/generate \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{"key_alias":"<consumer>"}'
+```
+
+The **master key** (`op://Personal Agents/LiteLLMMasterKey/credential`) is
+gateway admin — it authorizes `/key/*` and `/ui`. Use it to mint and revoke
+keys, never as a client credential. Until 2026-09-27 the proxy had no key store,
+so it was the only credential that worked and every consumer carried it inline;
+that is no longer true, and it is no longer in git.
 
 ## 2. Model reference
 
@@ -53,7 +72,7 @@ List the live names anytime:
 
 ```bash
 curl -s http://litellm.litellm.svc.cluster.local:4000/v1/models \
-  -H "Authorization: Bearer sk-nixfleet-2026" | jq -r '.data[].id'
+  -H "Authorization: Bearer $LITELLM_KEY" | jq -r '.data[].id'
 ```
 
 ## 3. Chat completions — `/v1/chat/completions`
@@ -62,18 +81,19 @@ curl -s http://litellm.litellm.svc.cluster.local:4000/v1/models \
 
 ```bash
 curl -s http://litellm.litellm.svc.cluster.local:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-nixfleet-2026" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" -H "Content-Type: application/json" \
   -d '{"model":"qwen3-coder","messages":[{"role":"user","content":"Write a bash one-liner to count files"}]}'
 ```
 
 **Python (OpenAI SDK)** — change `model` to use any chat model:
 
 ```python
+import os
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://litellm.litellm.svc.cluster.local:4000/v1",
-    api_key="sk-nixfleet-2026",
+    api_key=os.environ["LITELLM_KEY"],
 )
 r = client.chat.completions.create(
     model="qwen3-coder",                 # or qwopus, gemma4, qwen3.6-35b, …
@@ -88,7 +108,7 @@ print(r.choices[0].message.content)
 ```python
 client = OpenAI(
     base_url="https://llm.nixfleet.private.stigen.ai/v1",
-    api_key="sk-nixfleet-2026",
+    api_key=os.environ["LITELLM_KEY"],
     default_headers={"CF-Access-Client-Id": ID, "CF-Access-Client-Secret": SEC},
 )
 ```
@@ -111,7 +131,7 @@ print(len(e.data[0].embedding))   # 768 (nomic-embed) | 4096 (qwen3-embedding)
 
 ```bash
 curl -s http://litellm.litellm.svc.cluster.local:4000/v1/embeddings \
-  -H "Authorization: Bearer sk-nixfleet-2026" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" -H "Content-Type: application/json" \
   -d '{"model":"qwen3-embedding","input":"text to embed"}'
 ```
 
@@ -123,7 +143,7 @@ curl -s http://litellm.litellm.svc.cluster.local:4000/v1/embeddings \
 
 ```bash
 curl -s http://litellm.litellm.svc.cluster.local:4000/v1/rerank \
-  -H "Authorization: Bearer sk-nixfleet-2026" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" -H "Content-Type: application/json" \
   -d '{"model":"qwen3-reranker","query":"capital of France",
        "documents":["Paris is the capital of France.","Berlin is in Germany."],
        "top_n":2}'

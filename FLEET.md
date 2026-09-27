@@ -46,7 +46,8 @@ Custom llama.cpp fork: [github.com/zach-source/llama.cpp](https://github.com/zac
 
 ```
 Base URL: https://llm.stigen.home/v1
-API Key:  sk-nixfleet-2026
+API Key:  a virtual key, op://Personal Agents/litellm-<consumer>/credential
+          (master key = op://Personal Agents/LiteLLMMasterKey/credential, admin only)
 ```
 
 ### Model Names

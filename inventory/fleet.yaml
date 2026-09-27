@@ -208,7 +208,7 @@ k8s:
     url: https://llm.stigen.home
     port: 4000
     role: ai-gateway
-    notes: "Routes all models, OpenAI-compatible, API key sk-nixfleet-2026"
+    notes: "Routes all models, OpenAI-compatible, API key = a per-consumer virtual key from op://Personal Agents/litellm-<consumer>/credential"
 
   open-webui:
     namespace: open-webui
