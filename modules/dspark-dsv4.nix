@@ -54,6 +54,8 @@ let
     + "/snapshots/${cfg.settings.DSPARK_REVISION}";
 in
 {
+  imports = [ ./model-watchdog.nix ];
+
   options.nixfleet.modules.dsparkDsv4 = {
     enable = lib.mkEnableOption "DeepSeek-V4-Flash via the dspark Docker Compose recipe";
 
@@ -267,6 +269,27 @@ in
           [Install]
           WantedBy=multi-user.target
         '';
+      };
+    };
+
+    # Head only: the worker has no unit of its own, and restarting the head's
+    # unit is what takes BOTH ranks down and back up. That is the whole point
+    # here — a half-restart is the failure mode, not the fix. Rank 0 hosts the
+    # torch TCPStore, so when it dies and rank 1 survives as a zombie, every
+    # fresh rank 0 waits forever for a peer that will never re-join, exits 0,
+    # and docker's `unless-stopped` starts it again. Hit 2026-09-29 at
+    # RestartCount=94. This unit's ExecStop stops the worker over SSH first, so
+    # a plain `systemctl restart` is the documented fix.
+    #
+    # /health, not /v1/models: vLLM answers /v1/models 200 with a dead engine
+    # behind it (see the note on glm53-flash-serving), which is the worst shape
+    # for a trigger that restarts things. The 30min grace matches
+    # TimeoutStartSec — a cold start pulls layers and mmaps 156GB.
+    nixfleet.modules.modelWatchdog.probes = lib.optionalAttrs isHead {
+      dspark-dsv4 = {
+        url = "http://127.0.0.1:${cfg.settings.VLLM_PORT or "8888"}/health";
+        unit = "dspark-dsv4.service";
+        graceSec = 1800;
       };
     };
 
