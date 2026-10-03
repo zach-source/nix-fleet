@@ -60,5 +60,21 @@ in
 
   config = lib.mkIf cfg.enable {
     nixfleet.packages = cfg.packages;
+
+    # Being in the profile is not the same as being runnable. Only some hosts
+    # put /nix/var/nix/profiles/nixfleet/system/bin on PATH (gti and gtr-153
+    # do, the rest do not), so `codex` installed fleet-wide was still "command
+    # not found" on five of seven boxes. /usr/local/bin is on PATH everywhere,
+    # which is where every other fleet-installed command already lives.
+    #
+    # Only codex gets a shim: the rest of the base set is either already in
+    # the user profiles or is a tool nobody invokes by hand.
+    nixfleet.files."/usr/local/bin/codex" = {
+      text = ''
+        #!/bin/sh
+        exec ${lib.getExe pkgs.codex} "$@"
+      '';
+      mode = "0755";
+    };
   };
 }
