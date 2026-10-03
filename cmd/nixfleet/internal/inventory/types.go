@@ -2,11 +2,18 @@ package inventory
 
 // Host represents a managed host in the inventory
 type Host struct {
-	Name     string            `yaml:"name" json:"name"`
-	Base     string            `yaml:"base" json:"base"` // "ubuntu" or "nixos"
-	Addr     string            `yaml:"addr" json:"addr"`
-	SSHUser  string            `yaml:"ssh_user" json:"ssh_user"`
-	SSHPort  int               `yaml:"ssh_port" json:"ssh_port"`
+	Name    string `yaml:"name" json:"name"`
+	Base    string `yaml:"base" json:"base"` // "ubuntu" or "nixos"
+	Addr    string `yaml:"addr" json:"addr"`
+	SSHUser string `yaml:"ssh_user" json:"ssh_user"`
+	SSHPort int    `yaml:"ssh_port" json:"ssh_port"`
+	// SSHKey pins the private key used for this host. Leave it empty to use
+	// the fleet defaults (~/.ssh/nixfleet, then the usual id_* names, then the
+	// agent). Set it for a host that authorizes something else: the pinned key
+	// is then the ONLY one offered, so a host that rejects the fleet key does
+	// not burn its MaxAuthTries budget before the right key is tried. A
+	// leading ~/ is expanded.
+	SSHKey   string            `yaml:"ssh_key" json:"ssh_key"`
 	Roles    []string          `yaml:"roles" json:"roles"`
 	Tags     map[string]string `yaml:"tags" json:"tags"`
 	OSUpdate OSUpdateConfig    `yaml:"os_updates" json:"os_updates"`

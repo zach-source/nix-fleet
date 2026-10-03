@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,6 +21,7 @@ type rawHost struct {
 	Addr      string            `yaml:"addr"`
 	SSHUser   string            `yaml:"ssh_user"`
 	SSHPort   int               `yaml:"ssh_port"`
+	SSHKey    string            `yaml:"ssh_key"`
 	Roles     []string          `yaml:"roles"`
 	Tags      map[string]string `yaml:"tags"`
 	OSUpdates rawOSUpdates      `yaml:"os_updates"`
@@ -103,6 +105,7 @@ func loadFile(inv *Inventory, path string) error {
 			Addr:    rh.Addr,
 			SSHUser: rh.SSHUser,
 			SSHPort: rh.SSHPort,
+			SSHKey:  rh.SSHKey,
 			Roles:   rh.Roles,
 			Tags:    rh.Tags,
 			OSUpdate: OSUpdateConfig{
@@ -123,6 +126,12 @@ func loadFile(inv *Inventory, path string) error {
 		// Apply defaults
 		applyHostDefaults(host)
 
+		// Register the pinned key here rather than at every call site: the
+		// CLI resolves hosts in ~70 places and builds a throwaway connection
+		// pool for most of them, so loading the inventory is the one
+		// chokepoint they all pass through.
+		SetHostKey(host.Addr, host.SSHKey)
+
 		inv.Hosts[name] = host
 	}
 
@@ -141,6 +150,7 @@ func loadFile(inv *Inventory, path string) error {
 }
 
 func applyHostDefaults(h *Host) {
+	h.SSHKey = expandHome(h.SSHKey)
 	if h.SSHUser == "" {
 		h.SSHUser = "deploy"
 	}
@@ -168,6 +178,46 @@ func applyHostDefaults(h *Host) {
 	if h.Tags == nil {
 		h.Tags = make(map[string]string)
 	}
+}
+
+// hostKeys maps a host address to the private key pinned for it by the
+// inventory's `ssh_key`. It lives here, not in internal/ssh, only because ssh
+// already imports this package — the other direction is a cycle.
+//
+// ponytail: one process, one fleet, so a package-level map is enough. If the
+// CLI ever drives two inventories at once, hang this off the Inventory value
+// and thread it through the connection pool then.
+var hostKeys sync.Map // host address -> private key path
+
+// SetHostKey pins the identity used for a host address. An empty keyFile
+// clears it. Safe to call repeatedly; the last write wins.
+func SetHostKey(addr, keyFile string) {
+	if keyFile == "" {
+		hostKeys.Delete(addr)
+		return
+	}
+	hostKeys.Store(addr, keyFile)
+}
+
+// HostKey returns the identity pinned for an address, or "" for none.
+func HostKey(addr string) string {
+	if v, ok := hostKeys.Load(addr); ok {
+		return v.(string)
+	}
+	return ""
+}
+
+// expandHome resolves a leading ~/ against the current user's home. Inventory
+// files are shared across machines, so they cannot hardcode /Users/<name>.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // Validate checks inventory for consistency
