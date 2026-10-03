@@ -51,6 +51,8 @@ let
   stopScript = "${cfg.recipeDir}/stop.sh";
 in
 {
+  imports = [ ./model-watchdog.nix ];
+
   options.nixfleet.modules.dsparkGlm53 = {
     enable = lib.mkEnableOption "GLM-5.3-Flash via the MiaAI-Lab EXL3 recipe";
 
@@ -273,6 +275,20 @@ in
           [Install]
           WantedBy=multi-user.target
         '';
+      };
+    };
+
+    # Same shape as the dsv4 probe — see modules/dspark-dsv4.nix for why a
+    # restart of the head unit is the right lever for a TP=2 pair. /health
+    # because this recipe's README says /v1/models answers 200 with a dead
+    # engine. The watchdog probes a unit only while it is active, so the two
+    # stacks' mutual exclusion on this port needs no extra guard: whichever one
+    # lost is inactive and gets skipped.
+    nixfleet.modules.modelWatchdog.probes = lib.optionalAttrs isHead {
+      glm53-flash = {
+        url = "http://127.0.0.1:${cfg.settings.PORT or "8888"}/health";
+        unit = "glm53-flash.service";
+        graceSec = 1800;
       };
     };
 

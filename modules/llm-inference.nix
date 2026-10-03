@@ -375,7 +375,22 @@ in
     };
   };
 
+  imports = [ ./model-watchdog.nix ];
+
   config = mkIf cfg.enable {
+    # llama-server answers /health with 503 while the model loads and 200 once
+    # it is ready, so the watchdog needs no special-casing beyond a load grace.
+    # 600s, not the module's 300: a cold 30GB GGUF read off disk is slow, and an
+    # over-generous grace only delays the first probe after a (re)start.
+    nixfleet.modules.modelWatchdog.probes = mapAttrs' (
+      name: svc:
+      nameValuePair "llama-${name}" {
+        url = "http://127.0.0.1:${toString svc.port}/health";
+        unit = "llama-rocm-${name}.service";
+        graceSec = 600;
+      }
+    ) (filterAttrs (_: svc: svc.enable) cfg.services);
+
     # imap0 over the sorted service names gives each a stable index for the
     # startup stagger (see mkUnit).
     nixfleet.systemd.units = listToAttrs (
