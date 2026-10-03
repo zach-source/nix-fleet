@@ -37,6 +37,7 @@ in
     packages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
+        codex
         curl
         git
         htop
