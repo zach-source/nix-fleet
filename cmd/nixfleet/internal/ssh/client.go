@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/nixfleet/nixfleet/internal/inventory"
 )
 
 // Client represents an SSH connection to a host
@@ -60,6 +62,17 @@ func DefaultConfig() *ClientConfig {
 func NewClient(host string, cfg *ClientConfig) (*Client, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
+	}
+
+	// A pinned key is exclusive: offering the defaults and the agent as well
+	// would spend the server's MaxAuthTries budget on keys already known to be
+	// wrong, and the host that needs pinning is precisely the host that
+	// rejects everything else. This mirrors ssh(1) -o IdentitiesOnly=yes.
+	if kf := inventory.HostKey(host); kf != "" {
+		pinned := *cfg
+		pinned.KeyFiles = []string{kf}
+		pinned.UseAgent = false
+		cfg = &pinned
 	}
 
 	authMethods, err := buildAuthMethods(cfg)

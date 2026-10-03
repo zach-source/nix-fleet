@@ -43,6 +43,12 @@ hosts:
     base: ubuntu
     addr: 192.168.3.131
     ssh_user: ztaylor
+    # gti is the one host that does not authorize the fleet `nixfleet` key.
+    # Without pinning, apply fails preflight here (and only here) with
+    # "unable to authenticate ... no supported methods remain", which reads
+    # like the box is down. Pinning also means this key is the ONLY one
+    # offered, so the defaults cannot eat sshd's MaxAuthTries budget first.
+    ssh_key: ~/.ssh/agent_claude_workspace
     roles:
       - base
       - k0s-controller

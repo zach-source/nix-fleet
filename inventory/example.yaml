@@ -25,6 +25,11 @@ hosts:
     base: ubuntu
     addr: 10.0.1.11
     ssh_user: deploy
+    # Optional. Pins the private key for this host; ~/ is expanded. Omit it to
+    # use the fleet defaults (~/.ssh/nixfleet, the usual id_* names, then the
+    # agent). When set, it is the ONLY key offered, so a host that authorizes
+    # something unusual cannot exhaust sshd's MaxAuthTries on the defaults.
+    ssh_key: ~/.ssh/nixfleet
     roles:
       - base
       - nginx

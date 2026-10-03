@@ -34,9 +34,17 @@ const (
 // IdentitiesOnly confines openssh to the fleet keys, mirroring the ordering
 // fix in internal/ssh. Missing key files are skipped so this degrades to the
 // agent rather than breaking hosts that rely on it.
-func sshOpts() string {
+//
+// A host with `ssh_key` set in the inventory gets that key and nothing else,
+// matching what internal/ssh does for the control connection — otherwise the
+// copy would authenticate differently from the session that activates it.
+func sshOpts(host *inventory.Host) string {
 	opts := []string{"-o", "IdentitiesOnly=yes"}
-	for _, kf := range ssh.DefaultConfig().KeyFiles {
+	keyFiles := ssh.DefaultConfig().KeyFiles
+	if host != nil && host.SSHKey != "" {
+		keyFiles = []string{host.SSHKey}
+	}
+	for _, kf := range keyFiles {
 		if _, err := os.Stat(kf); err == nil {
 			opts = append(opts, "-i", kf)
 		}
@@ -71,7 +79,7 @@ func (d *Deployer) CopyToHost(ctx context.Context, closure *HostClosure, host *i
 
 	// Run nix copy
 	cmd := exec.CommandContext(ctx, d.nixBin, "copy", "--to", sshURI, closure.StorePath)
-	cmd.Env = append(os.Environ(), "NIX_SSHOPTS="+sshOpts())
+	cmd.Env = append(os.Environ(), "NIX_SSHOPTS="+sshOpts(host))
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
