@@ -189,8 +189,23 @@ func (m *Manager) parseUpgradedPackages(output string) []string {
 	return packages
 }
 
+// packageNameRe matches a Debian package name with optional :arch and =version.
+var packageNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+(:[a-z0-9-]+)?(=[A-Za-z0-9.+~:-]+)?$`)
+
+// ValidatePackageName rejects anything that is not a plain package spec, since
+// the name is interpolated into a root shell command.
+func ValidatePackageName(name string) error {
+	if !packageNameRe.MatchString(name) {
+		return fmt.Errorf("invalid package name %q", name)
+	}
+	return nil
+}
+
 // InstallPackage installs a specific package
 func (m *Manager) InstallPackage(ctx context.Context, client *ssh.Client, packageName string) error {
+	if err := ValidatePackageName(packageName); err != nil {
+		return err
+	}
 	cmd := fmt.Sprintf("DEBIAN_FRONTEND=noninteractive apt-get install -y %s", packageName)
 	result, err := client.ExecSudo(ctx, cmd)
 	if err != nil {
@@ -204,6 +219,9 @@ func (m *Manager) InstallPackage(ctx context.Context, client *ssh.Client, packag
 
 // RemovePackage removes a specific package
 func (m *Manager) RemovePackage(ctx context.Context, client *ssh.Client, packageName string) error {
+	if err := ValidatePackageName(packageName); err != nil {
+		return err
+	}
 	cmd := fmt.Sprintf("DEBIAN_FRONTEND=noninteractive apt-get remove -y %s", packageName)
 	result, err := client.ExecSudo(ctx, cmd)
 	if err != nil {
@@ -237,6 +255,9 @@ func (m *Manager) GetInstalledPackages(ctx context.Context, client *ssh.Client) 
 
 // GetPackageInfo returns detailed information about a package
 func (m *Manager) GetPackageInfo(ctx context.Context, client *ssh.Client, packageName string) (*Package, error) {
+	if err := ValidatePackageName(packageName); err != nil {
+		return nil, err
+	}
 	cmd := fmt.Sprintf("dpkg-query -W -f='${Package}|${Version}|${Installed-Size}|${Description}' %s 2>/dev/null", packageName)
 	result, err := client.Exec(ctx, cmd)
 	if err != nil {

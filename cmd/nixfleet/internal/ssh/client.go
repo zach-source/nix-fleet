@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -300,9 +301,19 @@ func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
 	}, nil
 }
 
-// ExecSudo executes a command with sudo on the remote host
+// ExecSudo executes a command with sudo on the remote host. The whole command
+// runs under a root shell, so pipes, redirects and && chains are all privileged.
 func (c *Client) ExecSudo(ctx context.Context, cmd string) (*ExecResult, error) {
-	return c.Exec(ctx, fmt.Sprintf("sudo %s", cmd))
+	return c.Exec(ctx, sudoCommand(cmd))
+}
+
+func sudoCommand(cmd string) string {
+	return "sudo sh -c " + ShellQuote(cmd)
+}
+
+// ShellQuote single-quotes s for safe use as one POSIX shell word.
+func ShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Host returns the hostname
