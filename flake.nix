@@ -138,6 +138,9 @@
           gitTag = if self ? rev then "v0.1.0" else "dev";
         };
         spire-agent = final.callPackage ./pkgs/spire-agent { };
+        # Override nixpkgs' source-built codex with the upstream prebuilt
+        # release, which tracks latest far more closely.
+        codex = final.callPackage ./pkgs/codex { };
       };
 
       # CLI package for each system + netboot images for x86_64-linux
