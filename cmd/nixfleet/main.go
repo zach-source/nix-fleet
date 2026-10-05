@@ -6116,10 +6116,14 @@ Examples:
 					time.Sleep(2 * time.Second)
 				}
 
-				// Get more details on failure
+				// Get more details on failure. Exec returns a nil result with its
+				// error, so the detail is best effort.
 				describeCmd := fmt.Sprintf("sudo k0s kubectl describe clusterissuer %s", issuerName)
-				result, _ := client.Exec(ctx, describeCmd)
-				return fmt.Errorf("ClusterIssuer not ready after 30s:\n%s", result.Stdout)
+				detail := ""
+				if result, err := client.Exec(ctx, describeCmd); err == nil && result != nil {
+					detail = result.Stdout
+				}
+				return fmt.Errorf("ClusterIssuer not ready after 30s:\n%s", detail)
 			}
 
 			fmt.Println()

@@ -79,6 +79,13 @@ func DefaultConfig() Config {
 }
 
 // Installer handles pull mode installation on hosts
+// Execer is the subset of *ssh.Client the installer uses, so tests can drive
+// it with a double.
+type Execer interface {
+	Exec(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+	ExecSudo(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+}
+
 type Installer struct{}
 
 // NewInstaller creates a new pull mode installer
@@ -238,10 +245,16 @@ Host github.com
 	return nil
 }
 
-func (i *Installer) setupRepository(ctx context.Context, client *ssh.Client, config Config) error {
-	// Check if repo exists
+func (i *Installer) setupRepository(ctx context.Context, client Execer, config Config) error {
+	// Check if repo exists. ExecSudo returns a nil result with its error, so
+	// this has to be checked before ExitCode is read: a dropped connection
+	// would otherwise panic, and `test -d` exiting non-zero is the normal
+	// "clone it" path, not a failure.
 	checkCmd := fmt.Sprintf("test -d %s/.git", config.RepoPath)
-	result, _ := client.ExecSudo(ctx, checkCmd)
+	result, err := client.ExecSudo(ctx, checkCmd)
+	if err != nil {
+		return fmt.Errorf("checking for an existing repository: %w", err)
+	}
 
 	if result.ExitCode != 0 {
 		// Clone repository
