@@ -4768,7 +4768,7 @@ Examples:
 			}
 
 			if output != "" {
-				if err := os.WriteFile(output, secretJSON, 0644); err != nil {
+				if err := writeK8sSecretFile(output, secretJSON); err != nil {
 					return fmt.Errorf("writing output file: %w", err)
 				}
 				fmt.Printf("Secret written to %s\n", output)
@@ -4791,6 +4791,25 @@ Examples:
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (prints to stdout if not specified)")
 
 	return cmd
+}
+
+// writeK8sSecretFile writes an exported Kubernetes Secret to disk. The manifest
+// carries tls.key, so it must not be world-readable; truncate an existing file
+// through O_TRUNC rather than reusing its (possibly looser) mode.
+func writeK8sSecretFile(path string, secretJSON []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(secretJSON); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func pkiCertManagerIssuerCmd() *cobra.Command {
