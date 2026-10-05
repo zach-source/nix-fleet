@@ -3,6 +3,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -77,6 +78,19 @@ type DeployResult struct {
 	Closure      string `json:"closure"`
 	ManifestHash string `json:"manifestHash,omitempty"`
 	Action       string `json:"action"` // "switch", "boot", "test"
+	Generation   int    `json:"generation,omitempty"`
+
+	// StateUpdated and StateError record whether the apply was written to
+	// /var/lib/nixfleet/state.json. A failure here does not fail the deploy.
+	StateUpdated bool   `json:"stateUpdated,omitempty"`
+	StateError   string `json:"stateError,omitempty"`
+
+	// Duration covers build through activation.
+	Duration time.Duration `json:"-"`
+
+	// Client is the connection the deploy used, so callers can carry on with
+	// PKI, k0s reconciliation and health checks without reconnecting.
+	Client *ssh.Client `json:"-"`
 }
 
 // PipelineResults contains results for all hosts
@@ -180,6 +194,36 @@ func (p *Pipeline) Apply(ctx context.Context, hosts []*inventory.Host, action st
 	return results, nil
 }
 
+// phaseMessage keeps the wording the pipeline reported before the deploy
+// sequence moved into HostDeploy.
+func phaseMessage(err error) string {
+	var phaseErr *PhaseError
+	if !errors.As(err, &phaseErr) {
+		return err.Error()
+	}
+	switch phaseErr.Phase {
+	case PhaseBuild:
+		return fmt.Sprintf("Build failed: %v", phaseErr.Err)
+	case PhaseCopy:
+		return fmt.Sprintf("Copy failed: %v", phaseErr.Err)
+	case PhaseConnect:
+		return fmt.Sprintf("SSH connection failed: %v", phaseErr.Err)
+	default:
+		return fmt.Sprintf("Activation failed: %v", phaseErr.Err)
+	}
+}
+
+// hostDeploy builds the single-host deploy sequence from the pipeline's
+// collaborators.
+func (p *Pipeline) hostDeploy() HostDeploy {
+	return HostDeploy{
+		Builder:  p.evaluator,
+		Deployer: p.deployer,
+		Pool:     p.sshPool,
+		State:    p.stateMgr,
+	}
+}
+
 // applyHost runs the pipeline for a single host
 func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action string) *HostResult {
 	result := &HostResult{
@@ -217,55 +261,44 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 		log.Printf("[%s] Preflight checks passed", host.Name)
 	}
 
-	// Phase 2: Build and evaluate
-	log.Printf("[%s] Building configuration...", host.Name)
-	closure, err := p.evaluator.BuildHost(ctx, host.Name, host.Base)
-	if err != nil {
-		result.Error = fmt.Sprintf("Build failed: %v", err)
-		return result
-	}
-
-	result.DeployResult = &DeployResult{
-		Closure:      closure.StorePath,
-		ManifestHash: closure.ManifestHash,
-		Action:       action,
-	}
-
-	// Dry run stops here
+	// Phase 2: a dry run builds and stops.
 	if p.config.DryRun {
+		closure, err := p.evaluator.BuildHost(ctx, host.Name, host.Base)
+		if err != nil {
+			result.Error = fmt.Sprintf("Build failed: %v", err)
+			return result
+		}
+		result.DeployResult = &DeployResult{
+			Closure:      closure.StorePath,
+			ManifestHash: closure.ManifestHash,
+			Action:       action,
+		}
 		log.Printf("[%s] Dry run: would deploy %s", host.Name, closure.StorePath)
 		result.Success = true
 		return result
 	}
 
-	// Phase 3: Copy closure
-	log.Printf("[%s] Copying closure to host...", host.Name)
-	if err := p.deployer.CopyToHost(ctx, closure, host); err != nil {
-		result.Error = fmt.Sprintf("Copy failed: %v", err)
+	// Phases 2-4: build, copy, activate and record state.
+	deployResult, err := p.hostDeploy().Run(ctx, host, DeployOptions{
+		Action: action,
+		Progress: func(phase Phase) {
+			switch phase {
+			case PhaseBuild:
+				log.Printf("[%s] Building configuration...", host.Name)
+			case PhaseCopy:
+				log.Printf("[%s] Copying closure to host...", host.Name)
+			case PhaseActivate:
+				log.Printf("[%s] Activating configuration...", host.Name)
+			}
+		},
+	})
+	result.DeployResult = deployResult
+	if err != nil {
+		result.Error = phaseMessage(err)
 		return result
 	}
-
-	// Phase 4: Activate
-	log.Printf("[%s] Activating configuration...", host.Name)
-	switch inventory.NormalizeBase(host.Base) {
-	case "ubuntu":
-		if err := p.deployer.ActivateUbuntu(ctx, client, closure); err != nil {
-			result.Error = fmt.Sprintf("Activation failed: %v", err)
-			return result
-		}
-	case "nixos":
-		if err := p.deployer.ActivateNixOS(ctx, client, closure, action); err != nil {
-			result.Error = fmt.Sprintf("Activation failed: %v", err)
-			return result
-		}
-	case "darwin":
-		if err := p.deployer.ActivateDarwin(ctx, client, closure, action); err != nil {
-			result.Error = fmt.Sprintf("Activation failed: %v", err)
-			return result
-		}
-	default:
-		result.Error = fmt.Sprintf("Unknown host base: %s", host.Base)
-		return result
+	if deployResult.StateError != "" {
+		log.Printf("[%s] Warning: failed to update state: %s", host.Name, deployResult.StateError)
 	}
 
 	// Phase 4.5: PKI deployment (if enabled)
@@ -353,7 +386,7 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 				switch p.config.HealthCheckPolicy {
 				case PolicyRollback:
 					log.Printf("[%s] Rolling back due to health check failure...", host.Name)
-					if err := p.deployer.Rollback(ctx, client, closure.Base, 0); err != nil {
+					if err := p.deployer.Rollback(ctx, client, host.Base, 0); err != nil {
 						result.Error = fmt.Sprintf("Health checks failed and rollback failed: %v", err)
 						return result
 					}
