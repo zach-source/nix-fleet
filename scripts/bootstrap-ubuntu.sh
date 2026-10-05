@@ -189,19 +189,19 @@ mkdir -p /etc/.nixfleet/staging
 chmod 750 /var/lib/nixfleet
 chmod 700 /etc/.nixfleet/staging
 
-# Initialize state file
+# Initialize state file. Keys match the Go schema in
+# cmd/nixfleet/internal/state (HostState) -- the single schema for this file,
+# read and rewritten by nixfleet and by the activation script.
 if [[ ! -f /var/lib/nixfleet/state.json ]]; then
         cat >/var/lib/nixfleet/state.json <<EOF
 {
-  "bootstrapped": "$(date -Iseconds)",
-  "generation": 0,
-  "manifestHash": null,
-  "lastApply": null,
-  "osUpdate": {
-    "lastRun": null,
-    "lastPackages": []
-  },
-  "rebootNeeded": false
+  "hostname": "$(hostname)",
+  "base": "ubuntu",
+  "current_generation": 0,
+  "manifest_hash": "",
+  "reboot_required": false,
+  "state_version": 1,
+  "updated_at": "$(date -Iseconds)"
 }
 EOF
 fi

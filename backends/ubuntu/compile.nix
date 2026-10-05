@@ -998,19 +998,42 @@ let
     ''}
 
     # Step 12: Update state file
+    #
+    # Keys match the Go schema in cmd/nixfleet/internal/state (HostState), which
+    # is the single schema for this file.
+    #
+    # Merge into the existing state instead of overwriting it. The controller
+    # writes the same file with the managed-file hashes drift detection compares
+    # against, the k0s resource inventory orphan cleanup needs, and gathered OS
+    # info. Overwriting dropped all of it on every activation, so `state adopt`'s
+    # baseline and the k0s inventory survived only until the next apply.
     log "Updating state..."
     mkdir -p "$NIXFLEET_STATE"
+    STATE_FILE="$NIXFLEET_STATE/state.json"
+    JQ="${pkgs.jq}/bin/jq"
     GENERATION=$(readlink "$SYSTEM_LINK" | grep -oE '[0-9]+' | tail -1 || echo 0)
     APPLY_TIME=$(date -Iseconds)
-    cat > "$NIXFLEET_STATE/state.json" << STATE_EOF
+    cat > "$STATE_FILE.new" << STATE_EOF
     {
-      "generation": $GENERATION,
-      "manifestHash": "${manifestHash}",
-      "lastApply": "$APPLY_TIME",
-      "activatedUnits": [${concatStringsSep "," (map (u: "\"${u}\"") (attrNames cfg.systemd.units))}],
-      "managedFiles": [${concatStringsSep "," (map (f: "\"${f}\"") (attrNames cfg.files))}]
+      "hostname": "${cfg.host.name}",
+      "base": "ubuntu",
+      "current_generation": $GENERATION,
+      "manifest_hash": "${manifestHash}",
+      "last_apply": "$APPLY_TIME",
+      "state_version": 1,
+      "updated_at": "$APPLY_TIME"
     }
     STATE_EOF
+    if [ -s "$STATE_FILE" ] && "$JQ" -e . "$STATE_FILE" > /dev/null 2>&1; then
+      if "$JQ" -s '.[0] * .[1]' "$STATE_FILE" "$STATE_FILE.new" > "$STATE_FILE.merged"; then
+        mv "$STATE_FILE.merged" "$STATE_FILE"
+      else
+        log "  WARNING: could not merge state, keeping previous state.json"
+      fi
+      rm -f "$STATE_FILE.new" "$STATE_FILE.merged"
+    else
+      mv "$STATE_FILE.new" "$STATE_FILE"
+    fi
 
     log "Activation complete!"
   '';
