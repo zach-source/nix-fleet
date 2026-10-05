@@ -24,3 +24,24 @@ func TestSudoCommandWrapsWholeCommand(t *testing.T) {
 		t.Errorf("sudoCommand = %s, want %s", got, want)
 	}
 }
+
+// Exact-output cases, moved here when internal/osupdate's private shQuote was
+// folded into ShellQuote. A value containing a single quote must be
+// split-and-escaped so it can't break out of the surrounding quotes.
+func TestShellQuoteExactOutput(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"plain", "'plain'"},
+		{"with space", "'with space'"},
+		{"/var/log/nixfleet", "'/var/log/nixfleet'"},
+		{"it's", `'it'\''s'`},
+		{"a'; rm -rf /; '", `'a'\''; rm -rf /; '\'''`},
+	}
+	for _, c := range cases {
+		if got := ShellQuote(c.in); got != c.want {
+			t.Errorf("ShellQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
