@@ -263,6 +263,7 @@
           inherit (nixpkgs) lib;
           pkgs = nixpkgsFor.${system};
           inherit mkNixFleetConfiguration;
+          hostConfigs = self.nixfleetConfigurations;
         }
         // {
           # Every host in nixfleetConfigurations must still evaluate. Without
