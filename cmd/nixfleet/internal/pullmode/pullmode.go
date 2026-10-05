@@ -6,7 +6,6 @@ package pullmode
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"text/template"
 
@@ -232,15 +231,8 @@ Host github.com
     StrictHostKeyChecking accept-new
 `, config.SSHKeyPath)
 
-	// Use base64 encoding and bash -c to run entire pipeline with sudo
-	encoded := base64Encode([]byte(sshConfig))
-	cmd := fmt.Sprintf("bash -c \"echo '%s' | base64 -d > /root/.ssh/config && chmod 600 /root/.ssh/config\"", encoded)
-	result, err := client.ExecSudo(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("failed to write SSH config: %s", result.Stderr)
+	if err := writeRemoteFile(ctx, client, []byte(sshConfig), "/root/.ssh/config", "0600"); err != nil {
+		return fmt.Errorf("failed to write SSH config: %w", err)
 	}
 
 	return nil
@@ -282,52 +274,46 @@ func (i *Installer) installPullScript(ctx context.Context, client *ssh.Client, c
 		return err
 	}
 
-	// Base64 encode the script and use bash -c for sudo file writing
-	encoded := base64Encode([]byte(script))
-	cmd := fmt.Sprintf("bash -c \"echo '%s' | base64 -d > /usr/local/bin/nixfleet-pull && chmod +x /usr/local/bin/nixfleet-pull\"", encoded)
-	result, err := client.ExecSudo(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("failed to install script: %s", result.Stderr)
+	// The script embeds WEBHOOK_SECRET, so it goes over stdin, not argv.
+	if err := writeRemoteFile(ctx, client, []byte(script), "/usr/local/bin/nixfleet-pull", "0755"); err != nil {
+		return fmt.Errorf("failed to install script: %w", err)
 	}
 
 	return nil
 }
 
-// base64Encode encodes data to base64 string
-func base64Encode(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
+// writeRemoteFile lands data at dest with mode, streaming the content over
+// stdin: argv is readable by every user on the remote host via /proc, and
+// these files carry secrets. umask closes the window before the chmod.
+func writeRemoteFile(ctx context.Context, client *ssh.Client, data []byte, dest, mode string) error {
+	result, err := client.ExecSudoStdin(ctx, writeRemoteFileCommand(dest, mode), data)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("writing %s: %s", dest, result.Stderr)
+	}
+	return nil
+}
+
+func writeRemoteFileCommand(dest, mode string) string {
+	q := ssh.ShellQuote
+	return fmt.Sprintf("umask 077 && cat > %s && chmod %s %s", q(dest), q(mode), q(dest))
 }
 
 func (i *Installer) installSystemdUnits(ctx context.Context, client *ssh.Client, config Config) error {
 	// Install service unit
-	service := renderServiceUnit(config)
-	encodedService := base64Encode([]byte(service))
-	cmd := fmt.Sprintf("bash -c \"echo '%s' | base64 -d > /etc/systemd/system/nixfleet-pull.service\"", encodedService)
-	result, err := client.ExecSudo(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("failed to install service: %s", result.Stderr)
+	if err := writeRemoteFile(ctx, client, []byte(renderServiceUnit(config)), "/etc/systemd/system/nixfleet-pull.service", "0644"); err != nil {
+		return fmt.Errorf("failed to install service: %w", err)
 	}
 
 	// Install timer unit
-	timer := renderTimerUnit(config)
-	encodedTimer := base64Encode([]byte(timer))
-	cmd = fmt.Sprintf("bash -c \"echo '%s' | base64 -d > /etc/systemd/system/nixfleet-pull.timer\"", encodedTimer)
-	result, err = client.ExecSudo(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("failed to install timer: %s", result.Stderr)
+	if err := writeRemoteFile(ctx, client, []byte(renderTimerUnit(config)), "/etc/systemd/system/nixfleet-pull.timer", "0644"); err != nil {
+		return fmt.Errorf("failed to install timer: %w", err)
 	}
 
 	// Reload systemd
-	result, err = client.ExecSudo(ctx, "systemctl daemon-reload")
+	result, err := client.ExecSudo(ctx, "systemctl daemon-reload")
 	if err != nil {
 		return err
 	}
