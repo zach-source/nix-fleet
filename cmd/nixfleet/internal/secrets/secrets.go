@@ -176,7 +176,8 @@ func (m *Manager) DeploySecret(ctx context.Context, client *ssh.Client, secret S
 
 	// Ensure secrets directory exists
 	secretsDir := filepath.Dir(secret.DestPath)
-	mkdirCmd := fmt.Sprintf("mkdir -p %s && chmod 0750 %s", secretsDir, secretsDir)
+	q := ssh.ShellQuote
+	mkdirCmd := fmt.Sprintf("mkdir -p %s && chmod 0750 %s", q(secretsDir), q(secretsDir))
 	result, err := client.ExecSudo(ctx, mkdirCmd)
 	if err != nil {
 		return fmt.Errorf("creating secrets directory: %w", err)
@@ -185,11 +186,11 @@ func (m *Manager) DeploySecret(ctx context.Context, client *ssh.Client, secret S
 		return fmt.Errorf("creating secrets directory: %s", result.Stderr)
 	}
 
-	// Write secret to host via SSH
-	// Use base64 to safely transfer binary data
-	encoded := base64Encode(plaintext)
-	writeCmd := fmt.Sprintf("echo '%s' | base64 -d > %s", encoded, secret.DestPath)
-	result, err = client.ExecSudo(ctx, writeCmd)
+	// Stream the plaintext over stdin: on the remote host argv is readable by
+	// every user via /proc, so the value must not appear in the command. umask
+	// closes the window between create and the chmod below.
+	writeCmd := writeSecretCommand(secret.DestPath)
+	result, err = client.ExecSudoStdin(ctx, writeCmd, plaintext)
 	if err != nil {
 		return fmt.Errorf("writing secret: %w", err)
 	}
@@ -199,7 +200,7 @@ func (m *Manager) DeploySecret(ctx context.Context, client *ssh.Client, secret S
 
 	// Set ownership and permissions
 	chownCmd := fmt.Sprintf("chown %s:%s %s && chmod %s %s",
-		secret.Owner, secret.Group, secret.DestPath, secret.Mode, secret.DestPath)
+		q(secret.Owner), q(secret.Group), q(secret.DestPath), q(secret.Mode), q(secret.DestPath))
 	result, err = client.ExecSudo(ctx, chownCmd)
 	if err != nil {
 		return fmt.Errorf("setting secret permissions: %w", err)
@@ -296,14 +297,10 @@ func (m *Manager) CheckSecretChanged(ctx context.Context, client *ssh.Client, se
 	return localHash != remoteHash, nil
 }
 
-// base64Encode encodes data to base64 string
-func base64Encode(data []byte) string {
-	cmd := exec.Command("base64")
-	cmd.Stdin = bytes.NewReader(data)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Run()
-	return strings.TrimSpace(stdout.String())
+// writeSecretCommand returns the remote command that reads a secret from stdin
+// and lands it at dest. The value is never part of the command itself.
+func writeSecretCommand(dest string) string {
+	return "umask 077 && cat > " + ssh.ShellQuote(dest)
 }
 
 // GenerateAgeKey generates a new age key pair

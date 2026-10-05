@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -229,6 +230,22 @@ type ExecResult struct {
 
 // Exec executes a command on the remote host
 func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
+	return c.exec(ctx, cmd, nil)
+}
+
+// ExecStdin executes a command on the remote host with stdin fed from stdin,
+// which is closed once written. Secrets belong here and never in cmd: argv is
+// readable by every user on the remote host via /proc.
+func (c *Client) ExecStdin(ctx context.Context, cmd string, stdin []byte) (*ExecResult, error) {
+	return c.exec(ctx, cmd, stdin)
+}
+
+// ExecSudoStdin is ExecStdin under a root shell.
+func (c *Client) ExecSudoStdin(ctx context.Context, cmd string, stdin []byte) (*ExecResult, error) {
+	return c.exec(ctx, sudoCommand(cmd), stdin)
+}
+
+func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (*ExecResult, error) {
 	c.mu.Lock()
 	if c.conn == nil {
 		c.mu.Unlock()
@@ -251,6 +268,12 @@ func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
 	stderr, err := session.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	// Session.Stdin is copied (and closed on EOF) by Start in its own
+	// goroutine, so a large payload can't deadlock against our output reader.
+	if stdin != nil {
+		session.Stdin = bytes.NewReader(stdin)
 	}
 
 	// Start command
