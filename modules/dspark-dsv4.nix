@@ -1,10 +1,10 @@
 # NixFleet DeepSeek-V4-Flash module (dspark recipe, Docker Compose)
 #
 # Runs DeepSeek-V4-Flash TP=2 across a stacked DGX Spark pair using the MiaAI-Lab
-# recipe. This replaces the inert `nixfleet.modules.vllm` declaration that used to
-# describe the same workload: that one assumed a native vLLM entrypoint at
-# /opt/dsv4, which does not exist and never did, so it shipped disabled and the
-# model was started by hand instead.
+# recipe. This replaced the inert `nixfleet.modules.vllm` declaration that used to
+# describe the same workload — modules/vllm.nix has since been deleted. That one
+# assumed a native vLLM entrypoint at /opt/dsv4, which does not exist and never
+# did, so it shipped disabled and the model was started by hand instead.
 #
 # Why the vendor's own scripts rather than a unit that calls `docker compose`
 # directly: start-deepseek-v4-flash-dspark.sh resolves the RoCE GID index by

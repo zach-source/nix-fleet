@@ -9,11 +9,12 @@
 # the classic way a TP job hangs in NCCL rendezvous with no useful error, so it
 # is worth the indirection.
 #
-# This used to declare a native vLLM unit via nixfleet.modules.vllm, pointed at
-# /opt/dsv4/bin/dsv4-vllm-entrypoint. That entrypoint does not exist and is not
-# packaged by anyone, so the declaration shipped `enable = false` and the model
-# was actually started by hand from a Docker Compose recipe. This file now
-# declares the thing that really runs. See modules/dspark-dsv4.nix.
+# This used to declare a native vLLM unit via nixfleet.modules.vllm (a module
+# since deleted), pointed at /opt/dsv4/bin/dsv4-vllm-entrypoint. That entrypoint
+# does not exist and is not packaged by anyone, so the declaration shipped
+# `enable = false` and the model was actually started by hand from a Docker
+# Compose recipe. This file now declares the thing that really runs. See
+# modules/dspark-dsv4.nix.
 #
 # Measured on this pair 2026-08-21: HumanEval+ pass@1 0.933 at
 # DEFAULT_THINKING=low, 161.3 tok/s aggregate at 6-way concurrency, ~79 GiB GPU
