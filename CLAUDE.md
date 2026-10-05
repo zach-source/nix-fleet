@@ -36,13 +36,16 @@ nixfleet/
 ├── cmd/nixfleet/           # Main CLI application
 │   ├── main.go             # Entry point with Cobra commands
 │   └── internal/           # Internal packages
-│       ├── apt/            # APT package management for Ubuntu
+│       ├── agenttui/       # Terminal UI for the fleet agents
 │       ├── apply/          # Deployment pipeline with reconciliation
+│       ├── apt/            # APT package management for Ubuntu
 │       ├── cache/          # Build cache management
 │       ├── health/         # Health check execution
 │       ├── inventory/      # Host inventory loading
+│       ├── juicefs/        # Shared JuiceFS filesystem bootstrap
 │       ├── k0s/            # k0s reconciliation and status
 │       ├── nix/            # Nix evaluation and deployment
+│       ├── nodestatus/     # Node status HTTP server (pull mode)
 │       ├── osupdate/       # OS update management
 │       ├── pki/            # Fleet PKI (CA, certificates)
 │       ├── preflight/      # Pre-deployment checks
@@ -50,11 +53,13 @@ nixfleet/
 │       ├── reboot/         # Reboot orchestration
 │       ├── secrets/        # Age-encrypted secrets
 │       ├── server/         # HTTP API server + web UI
+│       ├── spire/          # SPIRE workload identity
 │       ├── ssh/            # SSH client, pool, executor
-│       └── state/          # Host state tracking (includes K0sState)
+│       ├── state/          # Host state tracking (includes K0sState)
+│       └── synology/       # Synology DSM API backend (Model B)
 ├── flake.nix               # Nix flake for building
 ├── backends/               # Backend-specific code
-├── hosts/                  # Example host configurations
+├── hosts/                  # Fleet host configurations
 ├── modules/                # NixFleet Nix modules
 ├── lib/                    # Nix library functions
 └── secrets/                # Encrypted secrets
@@ -67,8 +72,16 @@ nixfleet/
 # Enter dev shell
 nix develop
 
+# Format Nix, from the repo root. The tree is nixfmt-formatted; nixpkgs-fmt
+# would churn every file.
+nixfmt flake.nix modules/*.nix hosts/*.nix
+
+# The Go module is rooted at cmd/nixfleet, not the repo root — every go
+# command has to run from there or it fails with "go.mod file not found".
+cd cmd/nixfleet
+
 # Build
-go build -o nixfleet ./cmd/nixfleet
+go build -o nixfleet .
 
 # Run tests
 go test ./...
@@ -99,23 +112,56 @@ Format JS with: `npx prettier --write cmd/nixfleet/internal/server/ui/app.js`
 
 ## API Endpoints
 
+Registered in `NewServer()` in `server/server.go`. Everything except
+`/api/health` and `/api/info` goes through `authMiddleware`.
+
 ```
-GET  /api/hosts                      # List all hosts
-GET  /api/hosts/{name}               # Get host details
-GET  /api/hosts/{name}/os-info       # Get OS information
-GET  /api/hosts/{name}/apt/updates   # Check for APT updates
-POST /api/hosts/{name}/apt/upgrade   # Run apt upgrade
-POST /api/hosts/{name}/apt/install   # Install package
-POST /api/hosts/{name}/apt/remove    # Remove package
+GET  /api/health                      # Liveness (unauthenticated)
+GET  /api/info                        # Version/build info (unauthenticated)
+
+GET  /api/hosts                       # List all hosts
+GET  /api/hosts/{name}                # Get host details
+GET  /api/hosts/{name}/state          # Get recorded host state
+POST /api/hosts/{name}/apply          # Apply configuration to one host
+POST /api/hosts/{name}/rollback       # Roll one host back a generation
+
+GET  /api/plan                        # Plan for the whole fleet
+GET  /api/plan/{name}                 # Plan for one host
+POST /api/apply                       # Apply to the whole fleet
+
+GET  /api/drift                       # Drift status
+POST /api/drift/check                 # Re-check drift (?host=)
+POST /api/drift/fix                   # Fix drift (?host=)
+
+GET  /api/jobs                        # List async jobs
+GET  /api/jobs/{id}                   # Get one job
+
+GET  /api/hosts/{name}/os-info        # Get OS information
+GET  /api/hosts/{name}/apt/packages   # List installed APT packages
+GET  /api/hosts/{name}/apt/updates    # Check for APT updates
+POST /api/hosts/{name}/apt/update     # Run apt update
+POST /api/hosts/{name}/apt/upgrade    # Run apt upgrade
+POST /api/hosts/{name}/apt/install    # Install package
+POST /api/hosts/{name}/apt/remove     # Remove package
 POST /api/hosts/{name}/apt/autoremove # Run apt autoremove
-POST /api/hosts/{name}/apt/clean     # Clean apt cache
-POST /api/hosts/{name}/deploy        # Trigger deployment
+POST /api/hosts/{name}/apt/clean      # Clean apt cache
+
+GET  /api/pull-mode/status            # Pull mode status
+POST /api/pull-mode/{name}/trigger    # Trigger an immediate pull
+
+GET  /ui/                             # Embedded web UI
 ```
+
+There is no `/api/hosts/{name}/deploy` — applying to one host is
+`POST /api/hosts/{name}/apply`.
 
 ## Testing
 
+The Go module is rooted at `cmd/nixfleet`, so these must be run from there:
+
 ```bash
-go test ./cmd/nixfleet/internal/...
+cd cmd/nixfleet
+go test ./...
 ```
 
 Mock SSH client available in `ssh/mock.go` for testing.
@@ -161,7 +207,13 @@ NixFleet uses [Semantic Versioning](https://semver.org/):
 
 ### Creating a Release
 
-1. **Update version** in `flake.nix` if needed
+1. **Update the version in all three places it is written** — they have no way
+   of checking each other, and they have drifted before.
+   `TestVersionIsConsistent` in `cmd/nixfleet/version_test.go` enforces that
+   they agree:
+   - `pkgs/nixfleet/default.nix` — `version = "0.x.x";`
+   - `flake.nix` — the `gitTag` passed to `callPackage ./pkgs/nixfleet`
+   - `CLAUDE.md` — the **Current Version** line below
 
 2. **Create and push tag**:
    ```bash
@@ -176,11 +228,10 @@ NixFleet uses [Semantic Versioning](https://semver.org/):
 3. **GitHub Actions will automatically**:
    - Build binaries for linux/darwin (amd64/arm64)
    - Create GitHub release with tarballs and checksums
-   - Trigger homebrew-tap update
+   - Dispatch to both `homebrew-tap` and `nix-packages` with the SHA256s
 
 4. **Manual steps after release**:
-   - Update `nix-packages` overlay with new version hash
-   - Verify homebrew formula updated correctly
+   - Verify the homebrew formula and the nix-packages overlay both updated
 
 ### Release Artifacts
 
@@ -196,7 +247,7 @@ Each release includes:
 | Channel | Repository | Update Method |
 |---------|------------|---------------|
 | Homebrew | `zach-source/homebrew-tap` | Auto via GitHub Actions |
-| Nix | `zach-source/nix-packages` | Manual overlay update |
+| Nix | `zach-source/nix-packages` | Auto via GitHub Actions (`repository-dispatch`) |
 | GitHub | This repo releases | Auto via GitHub Actions |
 
 ## Secrets Management
@@ -289,4 +340,4 @@ onepassword-connect (onepassword/onepassword-connect:8080)
 | Secret | Purpose |
 |--------|---------|
 | `GITHUB_TOKEN` | Auto-provided, for releases |
-| `TAP_GITHUB_TOKEN` | PAT for triggering homebrew-tap update |
+| `PACKAGES_TOKEN` | PAT for dispatching to `homebrew-tap` and `nix-packages` |

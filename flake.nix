@@ -135,7 +135,7 @@
       overlays.default = final: prev: {
         nixfleet = final.callPackage ./pkgs/nixfleet {
           gitCommit = self.rev or self.dirtyRev or "";
-          gitTag = if self ? rev then "v0.1.0" else "dev";
+          gitTag = if self ? rev then "v0.1.5" else "dev";
         };
         spire-agent = final.callPackage ./pkgs/spire-agent { };
         # Override nixpkgs' source-built codex with the upstream prebuilt
@@ -226,7 +226,7 @@
               # Nix tooling
               nix-prefetch-git
               nix-tree
-              nixpkgs-fmt
+              nixfmt
 
               # SPIRE agent (for local identity)
               pkgs.spire-agent
