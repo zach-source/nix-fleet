@@ -3,7 +3,6 @@ package apply
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -194,25 +193,6 @@ func (p *Pipeline) Apply(ctx context.Context, hosts []*inventory.Host, action st
 	return results, nil
 }
 
-// phaseMessage keeps the wording the pipeline reported before the deploy
-// sequence moved into HostDeploy.
-func phaseMessage(err error) string {
-	var phaseErr *PhaseError
-	if !errors.As(err, &phaseErr) {
-		return err.Error()
-	}
-	switch phaseErr.Phase {
-	case PhaseBuild:
-		return fmt.Sprintf("Build failed: %v", phaseErr.Err)
-	case PhaseCopy:
-		return fmt.Sprintf("Copy failed: %v", phaseErr.Err)
-	case PhaseConnect:
-		return fmt.Sprintf("SSH connection failed: %v", phaseErr.Err)
-	default:
-		return fmt.Sprintf("Activation failed: %v", phaseErr.Err)
-	}
-}
-
 // hostDeploy builds the single-host deploy sequence from the pipeline's
 // collaborators.
 func (p *Pipeline) hostDeploy() HostDeploy {
@@ -281,7 +261,7 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 	// Phases 2-4: build, copy, activate and record state.
 	deployResult, err := p.hostDeploy().Run(ctx, host, DeployOptions{
 		Action: action,
-		Progress: func(phase Phase) {
+		Progress: func(phase Phase, _ *DeployResult) {
 			switch phase {
 			case PhaseBuild:
 				log.Printf("[%s] Building configuration...", host.Name)
@@ -294,7 +274,7 @@ func (p *Pipeline) applyHost(ctx context.Context, host *inventory.Host, action s
 	})
 	result.DeployResult = deployResult
 	if err != nil {
-		result.Error = phaseMessage(err)
+		result.Error = FailureMessage(err)
 		return result
 	}
 	if deployResult.StateError != "" {

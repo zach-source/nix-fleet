@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,6 +33,25 @@ type PhaseError struct {
 
 func (e *PhaseError) Error() string { return fmt.Sprintf("%s failed: %v", e.Phase, e.Err) }
 func (e *PhaseError) Unwrap() error { return e.Err }
+
+// FailureMessage renders a Run error the way the CLI and the pipeline have
+// always reported these failures.
+func FailureMessage(err error) string {
+	var phaseErr *PhaseError
+	if !errors.As(err, &phaseErr) {
+		return err.Error()
+	}
+	switch phaseErr.Phase {
+	case PhaseBuild:
+		return fmt.Sprintf("Build failed: %v", phaseErr.Err)
+	case PhaseCopy:
+		return fmt.Sprintf("Copy failed: %v", phaseErr.Err)
+	case PhaseConnect:
+		return fmt.Sprintf("Connection failed: %v", phaseErr.Err)
+	default:
+		return fmt.Sprintf("Activation failed: %v", phaseErr.Err)
+	}
+}
 
 // Builder builds a host's closure. *nix.Evaluator satisfies it.
 type Builder interface {
@@ -78,8 +98,10 @@ type DeployOptions struct {
 	// SkipState leaves /var/lib/nixfleet/state.json untouched.
 	SkipState bool
 
-	// Progress, if set, is called as each phase starts.
-	Progress func(Phase)
+	// Progress, if set, is called as each phase starts, with the result so far.
+	// The result is nil until the build completes, after which it carries the
+	// store path and manifest hash.
+	Progress func(Phase, *DeployResult)
 }
 
 // Run deploys one host, returning what it did. A non-nil error is always a
@@ -93,7 +115,7 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 		action = "switch"
 	}
 
-	h.progress(opts, PhaseBuild)
+	h.progress(opts, PhaseBuild, nil)
 	closure, err := h.Builder.BuildHost(ctx, host.Name, host.Base)
 	if err != nil {
 		return nil, &PhaseError{Phase: PhaseBuild, Err: err}
@@ -105,12 +127,12 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 		Action:       action,
 	}
 
-	h.progress(opts, PhaseCopy)
+	h.progress(opts, PhaseCopy, result)
 	if err := h.Deployer.CopyToHost(ctx, closure, host); err != nil {
 		return result, &PhaseError{Phase: PhaseCopy, Err: err}
 	}
 
-	h.progress(opts, PhaseConnect)
+	h.progress(opts, PhaseConnect, result)
 	port := host.SSHPort
 	if port == 0 {
 		port = 22
@@ -121,7 +143,7 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 	}
 	result.Client = client
 
-	h.progress(opts, PhaseActivate)
+	h.progress(opts, PhaseActivate, result)
 	if err := h.activate(ctx, client, closure, host.Base, action); err != nil {
 		return result, &PhaseError{Phase: PhaseActivate, Err: err}
 	}
@@ -129,7 +151,7 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 	result.Duration = time.Since(start)
 
 	if !opts.SkipState {
-		h.progress(opts, PhaseState)
+		h.progress(opts, PhaseState, result)
 		gen, _, genErr := h.Deployer.GetCurrentGeneration(ctx, client, host.Base)
 		result.Generation = gen
 		// Recording state is not worth failing a deploy that already succeeded,
@@ -164,8 +186,8 @@ func (h HostDeploy) activate(ctx context.Context, client *ssh.Client, closure *n
 	}
 }
 
-func (h HostDeploy) progress(opts DeployOptions, p Phase) {
+func (h HostDeploy) progress(opts DeployOptions, p Phase, result *DeployResult) {
 	if opts.Progress != nil {
-		opts.Progress(p)
+		opts.Progress(p, result)
 	}
 }

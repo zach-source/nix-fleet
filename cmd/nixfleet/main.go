@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nixfleet/nixfleet/internal/agenttui"
+	"github.com/nixfleet/nixfleet/internal/apply"
 	"github.com/nixfleet/nixfleet/internal/cache"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/juicefs"
@@ -344,47 +345,32 @@ func applyCmd() *cobra.Command {
 			failedCount := 0
 
 			// Build and deploy each host
+			hostDeploy := apply.HostDeploy{
+				Builder:  evaluator,
+				Deployer: deployer,
+				Pool:     pool,
+				State:    stateMgr,
+			}
+
 			for _, host := range hosts {
 				fmt.Printf("Deploying to %s...\n", host.Name)
-				startTime := time.Now()
 
-				// Build
-				closure, err := evaluator.BuildHost(ctx, host.Name, host.Base)
+				deployed, err := hostDeploy.Run(ctx, host, apply.DeployOptions{
+					SkipState: skipState,
+					Progress:  applyProgress,
+				})
 				if err != nil {
-					fmt.Printf("  Build failed: %v\n", err)
+					fmt.Printf("  %s\n", apply.FailureMessage(err))
 					failedCount++
 					continue
 				}
-				fmt.Printf("  Built: %s\n", closure.StorePath)
+				client := deployed.Client
+				duration := deployed.Duration
 
-				// Copy
-				fmt.Printf("  Copying closure...\n")
-				if err := deployer.CopyToHost(ctx, closure, host); err != nil {
-					fmt.Printf("  Copy failed: %v\n", err)
-					failedCount++
-					continue
-				}
-
-				// Activate
-				fmt.Printf("  Activating...\n")
-				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
-				if err != nil {
-					fmt.Printf("  Connection failed: %v\n", err)
-					failedCount++
-					continue
-				}
-
-				switch inventory.NormalizeBase(host.Base) {
-				case "ubuntu":
-					err = deployer.ActivateUbuntu(ctx, client, closure)
-				case "nixos":
-					err = deployer.ActivateNixOS(ctx, client, closure, "switch")
-				}
-
-				if err != nil {
-					fmt.Printf("  Activation failed: %v\n", err)
-					failedCount++
-					continue
+				if deployed.StateError != "" {
+					fmt.Printf("  Warning: failed to update state - %s\n", deployed.StateError)
+				} else if deployed.StateUpdated && verbose {
+					fmt.Printf("  State updated (gen %d)\n", deployed.Generation)
 				}
 
 				// Deploy PKI certificates if enabled
@@ -405,18 +391,6 @@ func applyCmd() *cobra.Command {
 						} else {
 							fmt.Printf("  PKI warning: %s\n", pkiResult.Error)
 						}
-					}
-				}
-
-				duration := time.Since(startTime)
-
-				// Update state
-				if !skipState {
-					gen, _, _ := deployer.GetCurrentGeneration(ctx, client, host.Base)
-					if err := stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, duration); err != nil {
-						fmt.Printf("  Warning: failed to update state - %v\n", err)
-					} else if verbose {
-						fmt.Printf("  State updated (gen %d)\n", gen)
 					}
 				}
 
@@ -1461,45 +1435,26 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 
 			fmt.Printf("\nDeploying updated closures to %d host(s)...\n\n", len(hosts))
 			success, failed := 0, 0
+			hostDeploy := apply.HostDeploy{
+				Builder:  evaluator,
+				Deployer: deployer,
+				Pool:     pool,
+				State:    stateMgr,
+			}
+
 			for _, host := range hosts {
 				fmt.Printf("Deploying to %s...\n", host.Name)
-				startTime := time.Now()
 
-				closure, err := evaluator.BuildHost(ctx, host.Name, host.Base)
+				deployed, err := hostDeploy.Run(ctx, host, apply.DeployOptions{SkipState: skipState})
 				if err != nil {
-					fmt.Printf("  Build failed: %v\n", err)
+					fmt.Printf("  %s\n", apply.FailureMessage(err))
 					failed++
 					continue
 				}
-				if err := deployer.CopyToHost(ctx, closure, host); err != nil {
-					fmt.Printf("  Copy failed: %v\n", err)
-					failed++
-					continue
+				if deployed.StateError != "" {
+					fmt.Printf("  Warning: failed to update state - %s\n", deployed.StateError)
 				}
-				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
-				if err != nil {
-					fmt.Printf("  Connection failed: %v\n", err)
-					failed++
-					continue
-				}
-				switch inventory.NormalizeBase(host.Base) {
-				case "ubuntu":
-					err = deployer.ActivateUbuntu(ctx, client, closure)
-				case "nixos":
-					err = deployer.ActivateNixOS(ctx, client, closure, "switch")
-				}
-				if err != nil {
-					fmt.Printf("  Activation failed: %v\n", err)
-					failed++
-					continue
-				}
-				if !skipState {
-					gen, _, _ := deployer.GetCurrentGeneration(ctx, client, host.Base)
-					if err := stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, time.Since(startTime)); err != nil {
-						fmt.Printf("  Warning: failed to update state - %v\n", err)
-					}
-				}
-				fmt.Printf("  Done! (%s)\n\n", time.Since(startTime).Round(time.Second))
+				fmt.Printf("  Done! (%s)\n\n", deployed.Duration.Round(time.Second))
 				success++
 			}
 			fmt.Printf("Summary: %d succeeded, %d failed\n", success, failed)
