@@ -8,9 +8,16 @@
   lib,
   pkgs,
   mkNixFleetConfiguration,
+  hostConfigs,
 }:
 
 let
+  # The text of a unit as a real host in nixfleetConfigurations declares it.
+  # Asserting against the shipped hosts rather than a synthetic one is the
+  # point for module-level fixes: the bug was always "the host we deploy is
+  # missing this", not "the option cannot express it".
+  unitText = host: unit: hostConfigs.${host}.config.nixfleet.systemd.units.${unit}.text;
+
   # Compile a throwaway Ubuntu host from `modules` and hand back the text of
   # its activation script.
   ubuntuActivation =
@@ -121,8 +128,66 @@ let
     in
     lib.filter (u: u != "") (lib.splitString "\n" body);
 
+  # --- boot-time DNS wait (dsv4) -------------------------------------------
+  #
+  # dgx-spark-1 is the head, so it is the host that gets the service units.
+  dsv4Unit = unitText "dgx-spark-1" "dspark-dsv4.service";
+  glm53Unit = unitText "dgx-spark-1" "glm53-flash.service";
+
+  dnsWaitFor = host: "until getent hosts ${host} >/dev/null 2>&1; do sleep 2; done";
+
 in
 {
+  dsv4-waits-for-dns = mkCheck "dsv4-waits-for-dns" {
+    # network-online.target does not imply name resolution: on DGX OS
+    # NetworkManager-wait-online is disabled, so the target is reached
+    # immediately. glm53-flash has waited since the 2026-09-02 reboot, where it
+    # asked for ghcr.io two seconds before resolved had its server list; dsv4
+    # is the boot-enabled one of the pair now, so it is the exposed one.
+    "dsv4 waits for the registry to resolve" = hasSubstring dsv4Unit (dnsWaitFor "ghcr.io");
+
+    # Bounded by timeout(1) rather than a shell loop counter, because systemd
+    # expands $NAME in Exec lines before sh ever sees it.
+    "the wait is bounded" = hasSubstring dsv4Unit "/usr/bin/timeout 120 /bin/sh -c";
+
+    # Ordered ahead of the GLM eviction: the other way round stops GLM and then
+    # fails on DNS, leaving both models down.
+    "the DNS wait precedes the GLM eviction" =
+      occursBefore dsv4Unit (dnsWaitFor "ghcr.io")
+        "systemctl stop glm53-flash.service";
+
+    "the DNS wait precedes ExecStart" = occursBefore dsv4Unit (dnsWaitFor "ghcr.io") "ExecStart=/opt";
+
+    # The module this was modelled on must keep its own wait.
+    "glm53 still waits too" = hasSubstring glm53Unit (dnsWaitFor "ghcr.io");
+  };
+
+  dsv4-dns-wait-follows-image = mkCheck "dsv4-dns-wait-follows-image" {
+    # The host waited on is derived from `image`, not hardcoded. That option
+    # exists so the image can be repointed at a mirror, and waiting on ghcr.io
+    # on a host configured not to use it would be the wrong gate.
+    "a repointed image moves the wait to that registry" =
+      let
+        unit =
+          (mkNixFleetConfiguration {
+            modules = [
+              ../modules/dspark-dsv4.nix
+              (import ../hosts/dgx-spark-dsv4.nix { nodeRank = 0; })
+              {
+                nixfleet.host = {
+                  name = "mirror-host";
+                  base = "dgx";
+                  addr = "127.0.0.1";
+                };
+                nixfleet.modules.dsparkDsv4.image = "registry.example.com/x/y:1@sha256:deadbeef";
+              }
+            ];
+          }).config.nixfleet.systemd.units."dspark-dsv4.service".text;
+      in
+      hasSubstring unit (dnsWaitFor "registry.example.com")
+      && !(hasSubstring unit (dnsWaitFor "ghcr.io"));
+  };
+
   stale-units-removed = mkCheck "stale-units-removed" {
     # The ledger is the mechanism: without a record of what the previous
     # generation installed there is nothing safe to diff against.

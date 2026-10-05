@@ -45,6 +45,13 @@ let
   startScript = "${cfg.recipeDir}/start-deepseek-v4-flash-dspark.sh";
   stopScript = "${cfg.recipeDir}/stop-deepseek-v4-flash-dspark.sh";
 
+  # Registry the unit has to resolve before it can pull. Derived from `image`
+  # rather than hardcoded, because that option exists precisely so it can be
+  # repointed at a mirror — hardcoding ghcr.io here would wait on a host this
+  # host had been configured not to use. The assertion below keeps the
+  # derivation honest.
+  registryHost = lib.head (lib.splitString "/" cfg.image);
+
   # Derived from the settings rather than written out, so it cannot drift from
   # the checkpoint the recipe would actually serve. The Hub turns "org/name"
   # into "models--org--name".
@@ -147,6 +154,20 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # The boot DNS wait resolves the first path segment of `image`, so that
+    # segment has to actually be a registry host. A bare `name:tag` would
+    # instead spend the unit's first 120 seconds resolving "name:tag" and then
+    # fail the start — a confusing way to learn this, and eval is the right
+    # place to learn it.
+    assertions = [
+      {
+        assertion = lib.hasInfix "." registryHost;
+        message =
+          "nixfleet.modules.dsparkDsv4.image must start with a registry host "
+          + "(e.g. ghcr.io/...), got: ${cfg.image}";
+      }
+    ];
+
     # git for the checkout below; the recipe's scripts are bash + docker, both
     # already present on DGX OS.
     nixfleet.packages = with pkgs; [ git ];
@@ -244,6 +265,24 @@ in
           # systemd does not set HOME from User=, and the recipe resolves both
           # the HF cache and the SSH identity for the worker out of $HOME.
           Environment=HOME=/home/${cfg.user}
+          # Wait for DNS before anything else, because network-online.target
+          # does not mean name resolution works: NetworkManager-wait-online is
+          # disabled on DGX OS, so that target is reached immediately.
+          #
+          # glm53-flash.service has carried this since the 2026-09-02
+          # power-loss reboot, where it asked for ghcr.io two seconds before
+          # systemd-resolved was handed its server list, failed the pull with
+          # "server misbehaving", and — Restart=no — left the pair's only model
+          # down until a human noticed. This unit is now the boot-enabled one
+          # of the pair, so it is the one exposed to that race, and it pulls on
+          # every start too: compose resolves pull_policy by repo digest, so a
+          # locally resident image under another repo name still triggers one.
+          #
+          # Ordered first on purpose: the eviction below would otherwise stop
+          # GLM and then fail here, leaving both models down. No shell
+          # variables in the loop — systemd expands $NAME in Exec lines before
+          # sh ever sees it — so the bound comes from timeout(1) instead.
+          ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until getent hosts ${registryHost} >/dev/null 2>&1; do sleep 2; done'
           # The other half of the mutual exclusion with GLM-5.3-Flash — see the
           # long note in modules/dspark-glm53.nix for why this is ExecStartPre
           # and not Conflicts=. `-` because that unit only exists on a host that
