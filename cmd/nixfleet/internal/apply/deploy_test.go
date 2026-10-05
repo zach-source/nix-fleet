@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,4 +262,38 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// Both the CLI and the server's job records report deploy failures from these
+// words: the server returns err.Error() straight into a job record, the CLI
+// prints FailureMessage. Pin them.
+func TestPhaseErrorWording(t *testing.T) {
+	boom := errors.New("boom")
+	for _, tc := range []struct {
+		phase Phase
+		want  string
+	}{
+		{PhaseBuild, "build failed: boom"},
+		{PhaseCopy, "copy failed: boom"},
+		{PhaseConnect, "connection failed: boom"},
+		{PhaseActivate, "activation failed: boom"},
+	} {
+		err := &PhaseError{Phase: tc.phase, Err: boom}
+		if got := err.Error(); got != tc.want {
+			t.Errorf("%s: Error() = %q, want %q", tc.phase, got, tc.want)
+		}
+		if got := FailureMessage(err); got != capitalizeFirst(tc.want) {
+			t.Errorf("%s: FailureMessage = %q, want %q", tc.phase, got, capitalizeFirst(tc.want))
+		}
+	}
+}
+
+func TestFailureMessagePassesThroughOtherErrors(t *testing.T) {
+	if got := FailureMessage(errors.New("no such host")); got != "No such host" {
+		t.Errorf("FailureMessage = %q", got)
+	}
+}
+
+func capitalizeFirst(s string) string {
+	return strings.ToUpper(s[:1]) + s[1:]
 }
