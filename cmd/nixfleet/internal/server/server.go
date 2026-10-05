@@ -58,6 +58,10 @@ type Server struct {
 	jobs   map[string]*Job
 	jobsMu sync.RWMutex
 
+	// applyLocks holds one mutex per host name, so two apply jobs can never
+	// build and activate on the same host at the same time.
+	applyLocks sync.Map
+
 	// Server state
 	startTime time.Time
 	mux       *http.ServeMux
@@ -814,29 +818,57 @@ func (s *Server) updateJob(job *Job, status string, result any, errStr string) {
 
 // Job runners
 
-func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host) {
-	s.updateJob(job, "running", nil, "")
+// applyLock returns the apply mutex for a host, creating it on first use.
+//
+// ponytail: entries are never reaped -- it is one mutex per host name, bounded
+// by the inventory. A pool would only matter if host names were unbounded.
+func (s *Server) applyLock(hostName string) *sync.Mutex {
+	lock, _ := s.applyLocks.LoadOrStore(hostName, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// applyOutcome is what a successful apply produced.
+type applyOutcome struct {
+	StorePath  string
+	Generation int
+	Duration   time.Duration
+}
+
+// applyOne builds, copies and activates a single host, holding that host's
+// apply lock for the whole pipeline.
+//
+// Without the lock, two POSTs to /api/hosts/{name}/apply -- or one of those
+// racing an apply-all, or the scheduler -- each spawn a goroutine that runs
+// the pipeline concurrently against the same machine. Two activations
+// interleaving means two processes writing the same files, flipping the same
+// profile symlink and restarting the same units, so the host ends up with a
+// mix of two closures and a generation pointer that matches neither. Applies
+// for the same host now queue; different hosts still run in parallel.
+//
+// The returned errors already carry their stage prefix, so callers can report
+// err.Error() directly.
+func (s *Server) applyOne(ctx context.Context, host *inventory.Host) (*applyOutcome, error) {
+	lock := s.applyLock(host.Name)
+	lock.Lock()
+	defer lock.Unlock()
 
 	startTime := time.Now()
 
 	// Build
 	closure, err := s.evaluator.BuildHost(ctx, host.Name, host.Base)
 	if err != nil {
-		s.updateJob(job, "failed", nil, "build failed: "+err.Error())
-		return
+		return nil, fmt.Errorf("build failed: %w", err)
 	}
 
 	// Copy
 	if err := s.deployer.CopyToHost(ctx, closure, host); err != nil {
-		s.updateJob(job, "failed", nil, "copy failed: "+err.Error())
-		return
+		return nil, fmt.Errorf("copy failed: %w", err)
 	}
 
 	// Activate
 	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
 	if err != nil {
-		s.updateJob(job, "failed", nil, "connection failed: "+err.Error())
-		return
+		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 
 	switch inventory.NormalizeBase(host.Base) {
@@ -847,8 +879,7 @@ func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host
 	}
 
 	if err != nil {
-		s.updateJob(job, "failed", nil, "activation failed: "+err.Error())
-		return
+		return nil, fmt.Errorf("activation failed: %w", err)
 	}
 
 	duration := time.Since(startTime)
@@ -857,17 +888,33 @@ func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host
 	gen, _, _ := s.deployer.GetCurrentGeneration(ctx, client, host.Base)
 	s.stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, duration)
 
+	return &applyOutcome{
+		StorePath:  closure.StorePath,
+		Generation: gen,
+		Duration:   duration,
+	}, nil
+}
+
+func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host) {
+	s.updateJob(job, "running", nil, "")
+
+	outcome, err := s.applyOne(ctx, host)
+	if err != nil {
+		s.updateJob(job, "failed", nil, err.Error())
+		return
+	}
+
 	// Send webhook
 	s.sendWebhook("apply", map[string]any{
 		"host":       host.Name,
-		"store_path": closure.StorePath,
-		"duration":   duration.String(),
+		"store_path": outcome.StorePath,
+		"duration":   outcome.Duration.String(),
 	})
 
 	s.updateJob(job, "completed", map[string]any{
-		"store_path": closure.StorePath,
-		"generation": gen,
-		"duration":   duration.String(),
+		"store_path": outcome.StorePath,
+		"generation": outcome.Generation,
+		"duration":   outcome.Duration.String(),
 	}, "")
 }
 
@@ -952,62 +999,21 @@ func (s *Server) runApplyAllJob(ctx context.Context, job *Job, hosts []*inventor
 	results := make([]map[string]any, 0)
 
 	for _, host := range hosts {
-		startTime := time.Now()
-
-		closure, err := s.evaluator.BuildHost(ctx, host.Name, host.Base)
+		outcome, err := s.applyOne(ctx, host)
 		if err != nil {
 			results = append(results, map[string]any{
 				"host":  host.Name,
-				"error": "build failed: " + err.Error(),
+				"error": err.Error(),
 			})
 			failed++
 			continue
 		}
-
-		if err := s.deployer.CopyToHost(ctx, closure, host); err != nil {
-			results = append(results, map[string]any{
-				"host":  host.Name,
-				"error": "copy failed: " + err.Error(),
-			})
-			failed++
-			continue
-		}
-
-		client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
-		if err != nil {
-			results = append(results, map[string]any{
-				"host":  host.Name,
-				"error": "connection failed: " + err.Error(),
-			})
-			failed++
-			continue
-		}
-
-		switch inventory.NormalizeBase(host.Base) {
-		case "ubuntu":
-			err = s.deployer.ActivateUbuntu(ctx, client, closure)
-		case "nixos":
-			err = s.deployer.ActivateNixOS(ctx, client, closure, "switch")
-		}
-
-		if err != nil {
-			results = append(results, map[string]any{
-				"host":  host.Name,
-				"error": "activation failed: " + err.Error(),
-			})
-			failed++
-			continue
-		}
-
-		duration := time.Since(startTime)
-		gen, _, _ := s.deployer.GetCurrentGeneration(ctx, client, host.Base)
-		s.stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, duration)
 
 		results = append(results, map[string]any{
 			"host":       host.Name,
 			"success":    true,
-			"store_path": closure.StorePath,
-			"duration":   duration.String(),
+			"store_path": outcome.StorePath,
+			"duration":   outcome.Duration.String(),
 		})
 		success++
 	}
