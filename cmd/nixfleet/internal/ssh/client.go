@@ -259,21 +259,14 @@ func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
 	}
 
 	// Read output with context cancellation
-	var stdoutBuf, stderrBuf []byte
-	var readErr error
+	outputs := drainOutput(stdout, stderr)
 
-	done := make(chan struct{})
-	go func() {
-		stdoutBuf, _ = io.ReadAll(stdout)
-		stderrBuf, _ = io.ReadAll(stderr)
-		close(done)
-	}()
-
+	var out execOutput
 	select {
 	case <-ctx.Done():
 		session.Signal(ssh.SIGKILL)
 		return nil, ctx.Err()
-	case <-done:
+	case out = <-outputs:
 	}
 
 	// Wait for command to finish
@@ -282,12 +275,8 @@ func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
 		if exitErr, ok := err.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
 		} else {
-			readErr = err
+			return nil, err
 		}
-	}
-
-	if readErr != nil {
-		return nil, readErr
 	}
 
 	c.mu.Lock()
@@ -295,10 +284,52 @@ func (c *Client) Exec(ctx context.Context, cmd string) (*ExecResult, error) {
 	c.mu.Unlock()
 
 	return &ExecResult{
-		Stdout:   string(stdoutBuf),
-		Stderr:   string(stderrBuf),
+		Stdout:   string(out.stdout),
+		Stderr:   string(out.stderr),
 		ExitCode: exitCode,
 	}, nil
+}
+
+type execOutput struct {
+	stdout []byte
+	stderr []byte
+}
+
+// drainOutput reads both pipes at the same time and delivers the pair once
+// both hit EOF.
+//
+// Reading them one after the other deadlocks: stdout and stderr are separate
+// channels multiplexed over one SSH connection, each with its own flow-control
+// window. A command that writes more than a window's worth to stderr (a noisy
+// nix build, a compiler) blocks on that write, which blocks the whole remote
+// process, so it never closes stdout either -- and the sequential read is
+// still waiting on stdout. Neither side moves again.
+//
+// The channel is buffered so the goroutine never blocks on delivery when the
+// caller has already given up on a cancelled context.
+func drainOutput(stdout, stderr io.Reader) <-chan execOutput {
+	outputs := make(chan execOutput, 1)
+
+	var (
+		wg  sync.WaitGroup
+		out execOutput
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		out.stdout, _ = io.ReadAll(stdout)
+	}()
+	go func() {
+		defer wg.Done()
+		out.stderr, _ = io.ReadAll(stderr)
+	}()
+
+	go func() {
+		wg.Wait()
+		outputs <- out
+	}()
+
+	return outputs
 }
 
 // ExecSudo executes a command with sudo on the remote host. The whole command
