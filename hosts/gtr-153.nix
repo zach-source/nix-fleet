@@ -96,7 +96,18 @@
         # (2026-10-05). Static YaRN applies at every length, so very short
         # prompts may lose a little quality; drop the rope/yarn/override-kv
         # flags and set ctxSize = 262144 to undo.
+        #
+        # 4 slots sharing ONE unified KV pool (--kv-unified): any request can
+        # still use the full 524288 window (the context_length override is the
+        # per-request cap), concurrent requests split the pool, and memory is
+        # the same as one pool of this size. Unified KV also turns on
+        # --cache-idle-slots, which llama-server otherwise disables: an idle
+        # slot's processed prompt is saved to the --cache-ram host cache
+        # (8 GiB default) and restored when that conversation returns, instead
+        # of re-prefilling it. Without it, a short request waited ~2 min behind
+        # an agent re-prefilling a 111k-token conversation (2026-10-05).
         ctxSize = 524288;
+        parallel = 4;
         # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
         # `strings` on the file shows qwen35.nextn_predict_layers and
         # blk.64.nextn.* tensors. An earlier revision also passed
@@ -136,6 +147,7 @@
           # llama-server caps every slot at the GGUF's declared training
           # context ("exceeds the training context of the model - capping"),
           # whatever the rope flags say, so declare the extended window too.
+          "--kv-unified"
           "--override-kv"
           "qwen35.context_length=int:524288"
         ];

@@ -77,13 +77,17 @@
         # prompts may lose a little quality; drop the rope/yarn/override-kv
         # flags and set ctxSize = 262144 to undo.
         #
-        # ctxSize is the TOTAL KV budget split across --parallel slots, so two
-        # slots of 524288 each. With one slot, a short request waited ~2 min
-        # behind an agent re-prefilling a 111k-token conversation (measured
-        # 2026-10-05). The MoE's KV is cheap (10 of 40 layers are full
-        # attention, q4_0), so the second slot costs ~6 GB.
+        # 4 slots sharing ONE unified KV pool (--kv-unified): any request can
+        # still use the full 524288 window (the context_length override is the
+        # per-request cap), concurrent requests split the pool, and memory is
+        # the same as one pool of this size. Unified KV also turns on
+        # --cache-idle-slots, which llama-server otherwise disables: an idle
+        # slot's processed prompt is saved to the --cache-ram host cache
+        # (8 GiB default) and restored when that conversation returns, instead
+        # of re-prefilling it. Without it, a short request waited ~2 min behind
+        # an agent re-prefilling a 111k-token conversation (2026-10-05).
         ctxSize = 1048576;
-        parallel = 2;
+        parallel = 4;
         newCli = true;
         mtp = {
           nMax = 3;
@@ -109,6 +113,7 @@
           # llama-server caps every slot at the GGUF's declared training
           # context ("exceeds the training context of the model - capping"),
           # whatever the rope flags say, so declare the extended window too.
+          "--kv-unified"
           "--override-kv"
           "qwen35moe.context_length=int:524288"
         ];
