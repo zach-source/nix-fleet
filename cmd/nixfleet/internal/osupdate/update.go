@@ -213,7 +213,7 @@ func (u *Updater) ApplyDistUpgrade(ctx context.Context, client *ssh.Client) (*Up
 }
 
 // IsRebootRequired checks if a reboot is required after updates
-func (u *Updater) IsRebootRequired(ctx context.Context, client *ssh.Client) (bool, error) {
+func (u *Updater) IsRebootRequired(ctx context.Context, client Execer) (bool, error) {
 	result, err := client.Exec(ctx, "test -f /var/run/reboot-required && echo 'yes' || echo 'no'")
 	if err != nil {
 		return false, fmt.Errorf("failed to check reboot status: %w", err)

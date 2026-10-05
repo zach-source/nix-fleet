@@ -67,8 +67,15 @@ func DefaultReleaseUpgradeConfig() ReleaseUpgradeConfig {
 	}
 }
 
+// Execer is the subset of *ssh.Client CheckReleaseInfo uses, so tests can
+// drive it with a double.
+type Execer interface {
+	Exec(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+	ExecSudo(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+}
+
 // CheckReleaseInfo gathers the host's release + upgrade availability. Read-only.
-func (u *Updater) CheckReleaseInfo(ctx context.Context, client *ssh.Client) (*ReleaseInfo, error) {
+func (u *Updater) CheckReleaseInfo(ctx context.Context, client Execer) (*ReleaseInfo, error) {
 	info := &ReleaseInfo{}
 
 	osRel, err := client.Exec(ctx, ". /etc/os-release && echo \"$VERSION_ID|$VERSION_CODENAME\"")
@@ -87,7 +94,12 @@ func (u *Updater) CheckReleaseInfo(ctx context.Context, client *ssh.Client) (*Re
 		info.ToolAvailable = strings.TrimSpace(tool.Stdout) == "yes"
 	}
 	if info.ToolAvailable {
-		check, _ := client.Exec(ctx, "do-release-upgrade -c 2>&1 || true")
+		// Exec returns a nil result with its error; an unreachable host leaves
+		// the upgrade fields unset rather than panicking.
+		check, err := client.Exec(ctx, "do-release-upgrade -c 2>&1 || true")
+		if err != nil {
+			return nil, fmt.Errorf("checking for a release upgrade: %w", err)
+		}
 		out := check.Stdout
 		// A target may be advertised even alongside an EOL notice, so detect both
 		// independently. Supported == "a target is offered" (do-release-upgrade can
