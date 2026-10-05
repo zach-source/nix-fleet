@@ -96,7 +96,7 @@ func TestActivationWriteUnmarshalsIntoHostState(t *testing.T) {
 // The activation script must merge rather than overwrite: the controller owns
 // the managed-file hashes, k0s inventory and OS info in the same file.
 func TestActivationScriptMergesState(t *testing.T) {
-	src, err := os.ReadFile("../../backends/ubuntu/compile.nix")
+	src, err := readRepoFile(t, "../../backends/ubuntu/compile.nix")
 	if err != nil {
 		t.Fatalf("reading compile.nix: %v", err)
 	}
@@ -107,6 +107,18 @@ func TestActivationScriptMergesState(t *testing.T) {
 	if strings.Contains(body, `cat > "$NIXFLEET_STATE/state.json"`) {
 		t.Error("activation script overwrites state.json, dropping controller-owned fields")
 	}
+}
+
+// readRepoFile reads a file from outside the Go module. The nix build copies
+// only cmd/nixfleet into its sandbox, so these files are absent there; the
+// checks run from a full checkout (`go test ./...`, and CI's Test job).
+func readRepoFile(t *testing.T, path string) ([]byte, error) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		t.Skipf("%s is not in this build's source tree", path)
+	}
+	return b, err
 }
 
 // hostStateJSONTags returns the set of JSON field names HostState accepts.
@@ -126,7 +138,7 @@ func hostStateJSONTags() map[string]bool {
 // including its closing brace.
 func stateJSONBody(t *testing.T, file, marker string) string {
 	t.Helper()
-	src, err := os.ReadFile(file)
+	src, err := readRepoFile(t, file)
 	if err != nil {
 		t.Fatalf("reading %s: %v", file, err)
 	}
