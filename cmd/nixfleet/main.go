@@ -2882,8 +2882,8 @@ API Endpoints:
 		},
 	}
 
-	cmd.Flags().StringVar(&listenAddr, "listen", ":8080", "Address to listen on")
-	cmd.Flags().StringVar(&apiToken, "api-token", "", "API authentication token (optional)")
+	cmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8080", "Address to listen on (non-loopback requires --api-token)")
+	cmd.Flags().StringVar(&apiToken, "api-token", "", "API bearer token (required unless listening on loopback)")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for notifications")
 	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Webhook secret for signing")
 	cmd.Flags().StringSliceVar(&webhookEvents, "webhook-events", []string{"drift", "apply", "health"}, "Events to send webhooks for")

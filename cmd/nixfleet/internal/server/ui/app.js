@@ -3,6 +3,28 @@
 const API_BASE = "/api";
 let refreshInterval = null;
 
+// fetch wrapper that sends the API token (stored in localStorage) and asks
+// for it once when the server answers 401.
+async function apiFetch(url, options = {}) {
+  const send = () =>
+    fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${localStorage.getItem("nixfleet-token") || ""}`,
+      },
+    });
+  let response = await send();
+  if (response.status === 401) {
+    const token = prompt("NixFleet API token:");
+    if (token) {
+      localStorage.setItem("nixfleet-token", token);
+      response = await send();
+    }
+  }
+  return response;
+}
+
 // Initialize dashboard
 document.addEventListener("DOMContentLoaded", () => {
   refreshAll();
@@ -20,7 +42,7 @@ async function loadHosts() {
   const grid = document.getElementById("hosts-grid");
 
   try {
-    const response = await fetch(`${API_BASE}/hosts`);
+    const response = await apiFetch(`${API_BASE}/hosts`);
     if (!response.ok) throw new Error("Failed to fetch hosts");
 
     const data = await response.json();
@@ -139,7 +161,7 @@ async function triggerApply(hostName) {
   addActivity(`Triggering apply on ${hostName}...`);
 
   try {
-    const response = await fetch(`${API_BASE}/hosts/${hostName}/apply`, {
+    const response = await apiFetch(`${API_BASE}/hosts/${hostName}/apply`, {
       method: "POST",
     });
 
@@ -160,9 +182,12 @@ async function checkDrift(hostName) {
   addActivity(`Checking drift on ${hostName}...`);
 
   try {
-    const response = await fetch(`${API_BASE}/drift/check?host=${hostName}`, {
-      method: "POST",
-    });
+    const response = await apiFetch(
+      `${API_BASE}/drift/check?host=${hostName}`,
+      {
+        method: "POST",
+      },
+    );
 
     if (!response.ok) throw new Error("Drift check failed");
 
@@ -181,7 +206,7 @@ async function checkAllDrift() {
   addActivity("Checking drift on all hosts...");
 
   try {
-    const response = await fetch(`${API_BASE}/drift/check`, {
+    const response = await apiFetch(`${API_BASE}/drift/check`, {
       method: "POST",
     });
 
@@ -199,9 +224,12 @@ async function triggerPull(hostName) {
   addActivity(`Triggering pull on ${hostName}...`);
 
   try {
-    const response = await fetch(`${API_BASE}/pull-mode/${hostName}/trigger`, {
-      method: "POST",
-    });
+    const response = await apiFetch(
+      `${API_BASE}/pull-mode/${hostName}/trigger`,
+      {
+        method: "POST",
+      },
+    );
 
     if (!response.ok) throw new Error("Pull trigger failed");
 
@@ -230,8 +258,8 @@ async function viewDetails(hostName) {
   try {
     // Fetch host details and OS info in parallel
     const [hostResponse, osInfoResponse] = await Promise.all([
-      fetch(`${API_BASE}/hosts/${hostName}`),
-      fetch(`${API_BASE}/hosts/${hostName}/os-info`),
+      apiFetch(`${API_BASE}/hosts/${hostName}`),
+      apiFetch(`${API_BASE}/hosts/${hostName}/os-info`),
     ]);
 
     if (!hostResponse.ok) throw new Error("Failed to fetch details");
@@ -380,7 +408,9 @@ async function checkAptUpdates(hostName) {
   addActivity(`Checking updates on ${hostName}...`);
 
   try {
-    const response = await fetch(`${API_BASE}/hosts/${hostName}/apt/updates`);
+    const response = await apiFetch(
+      `${API_BASE}/hosts/${hostName}/apt/updates`,
+    );
     if (!response.ok) throw new Error("Failed to check updates");
 
     const status = await response.json();
@@ -447,7 +477,7 @@ async function aptUpgrade(hostName, securityOnly) {
   addActivity(`Running ${action} on ${hostName}...`);
 
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `${API_BASE}/hosts/${hostName}/apt/upgrade${securityOnly ? "?security=true" : ""}`,
       { method: "POST" },
     );
@@ -481,7 +511,7 @@ async function aptAutoremove(hostName) {
   addActivity(`Running autoremove on ${hostName}...`);
 
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `${API_BASE}/hosts/${hostName}/apt/autoremove`,
       { method: "POST" },
     );
@@ -498,7 +528,7 @@ async function aptClean(hostName) {
   addActivity(`Cleaning apt cache on ${hostName}...`);
 
   try {
-    const response = await fetch(`${API_BASE}/hosts/${hostName}/apt/clean`, {
+    const response = await apiFetch(`${API_BASE}/hosts/${hostName}/apt/clean`, {
       method: "POST",
     });
     if (!response.ok) throw new Error("Clean failed");

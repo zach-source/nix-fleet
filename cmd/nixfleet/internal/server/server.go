@@ -3,9 +3,11 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -75,6 +77,10 @@ type Job struct {
 
 // New creates a new server instance
 func New(config Config) (*Server, error) {
+	if config.APIToken == "" && !isLoopbackAddr(config.ListenAddr) {
+		return nil, fmt.Errorf("refusing to listen on %s without an API token: set --api-token or bind to 127.0.0.1", config.ListenAddr)
+	}
+
 	flake, err := nix.ResolveFlakePath(config.FlakePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolving flake path: %w", err)
@@ -160,13 +166,32 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if s.config.APIToken != "" {
 			auth := r.Header.Get("Authorization")
 			expected := "Bearer " + s.config.APIToken
-			if auth != expected {
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 				s.jsonError(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 		}
 		next(w, r)
 	}
+}
+
+// handler wraps the routes with logging and CSRF protection. Cross-origin
+// browser POSTs are rejected so a web page can't drive a token-less loopback API.
+func (s *Server) handler() http.Handler {
+	return s.loggingMiddleware(http.NewCrossOriginProtection().Handler(s.mux))
+}
+
+// isLoopbackAddr reports whether a listen address only accepts local connections.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Start starts the HTTP server
@@ -176,7 +201,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	server := &http.Server{
 		Addr:         s.config.ListenAddr,
-		Handler:      s.loggingMiddleware(s.mux),
+		Handler:      s.handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -1307,8 +1332,8 @@ func (s *Server) handleAptInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Package == "" {
-		s.jsonError(w, "package name required", http.StatusBadRequest)
+	if err := apt.ValidatePackageName(req.Package); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -1352,8 +1377,8 @@ func (s *Server) handleAptRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Package == "" {
-		s.jsonError(w, "package name required", http.StatusBadRequest)
+	if err := apt.ValidatePackageName(req.Package); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
