@@ -9,7 +9,7 @@
 
 buildGoModule rec {
   pname = "nixfleet";
-  version = "0.1.0";
+  version = "0.1.5";
 
   src = ../../cmd/nixfleet;
 
@@ -35,7 +35,7 @@ buildGoModule rec {
 
   meta = with lib; {
     description = "Agentless fleet management with Nix";
-    homepage = "https://github.com/your-org/nixfleet";
+    homepage = "https://github.com/zach-source/nix-fleet";
     license = licenses.mit;
     maintainers = [ ];
     mainProgram = "nixfleet";

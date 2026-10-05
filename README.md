@@ -1,10 +1,14 @@
 # NixFleet
 
-Fleet management CLI for deploying Nix configurations to non-NixOS hosts (Ubuntu, macOS).
+Fleet management CLI for deploying Nix configurations over SSH, to hosts that
+are not running NixOS (Ubuntu, DGX OS) as well as to NixOS hosts.
 
 ## Features
 
-- **Multi-platform support**: Deploy to Ubuntu, NixOS, and macOS hosts
+- **Multi-platform support**: Deploy to Ubuntu, DGX OS, and NixOS hosts, plus
+  Synology NAS over the DSM API. A nix-darwin backend exists in
+  `backends/darwin/` but is not reachable yet — `nixfleet.host.base` has no
+  `"darwin"` value, so no macOS host can be configured through it.
 - **k0s Kubernetes**: Bootstrap and manage k0s clusters with Cilium CNI
 - **Fleet PKI**: Built-in CA for TLS certificates across your fleet
 - **Gateway API**: Shared ingress gateway with auto-generated certificates
@@ -52,29 +56,47 @@ curl -sSL https://raw.githubusercontent.com/zach-source/nix-fleet/main/scripts/b
 ### 2. Create inventory
 
 ```yaml
-# inventory/hosts.yaml
+# inventory/fleet.yaml  (see inventory/example.yaml for groups, roles,
+# os_updates and the per-host ssh_key pin)
 hosts:
   myhost:
-    name: myhost
-    addr: myhost.local
     base: ubuntu
+    addr: myhost.local
     ssh_user: nixbot
 ```
 
 ### 3. Create host configuration
 
+Everything lives under the `nixfleet.` prefix, and `nixfleet.host` is required:
+
 ```nix
 # hosts/myhost.nix
-{ config, pkgs, ... }:
+{ pkgs, ... }:
 {
-  packages = with pkgs; [
-    htop
-    vim
-    git
-  ];
+  nixfleet = {
+    host = {
+      name = "myhost";
+      base = "ubuntu";
+      addr = "myhost.local";
+    };
 
-  files."/etc/motd".text = "Welcome to myhost!";
+    packages = with pkgs; [
+      htop
+      vim
+      git
+    ];
+
+    files."/etc/motd".text = "Welcome to myhost!";
+  };
 }
+```
+
+Then register it in `flake.nix` under `nixfleetConfigurations`:
+
+```nix
+myhost = mkNixFleetConfiguration {
+  modules = [ ./hosts/myhost.nix ];
+};
 ```
 
 ### 4. Deploy
@@ -143,8 +165,18 @@ nixfleet apply -H myhost
 | `nixfleet server` | Start the web UI and API server |
 | `nixfleet os-update` | Manage OS package updates |
 | `nixfleet reboot` | Orchestrate host reboots |
-| `nixfleet drift` | Detect configuration drift |
+| `nixfleet drift` | Detect and fix configuration drift |
 | `nixfleet run` | Run ad-hoc commands on hosts |
+| `nixfleet state` | Inspect and manage NixFleet host state |
+| `nixfleet agents` | Manage fleet agents |
+| `nixfleet cache` | Manage the binary cache |
+| `nixfleet nix` | Manage the fleet's flake inputs (nixpkgs) |
+| `nixfleet juicefs` | Bootstrap and manage the shared JuiceFS filesystem |
+| `nixfleet spire` | SPIRE identity management for this host |
+| `nixfleet synology` | Manage a Synology NAS via the DSM API (Model B) |
+| `nixfleet node-status` | Run a node status HTTP server (for pull-mode nodes) |
+
+`nixfleet <command> --help` is authoritative; this table is a summary.
 
 ## Secrets Management
 
@@ -186,45 +218,46 @@ Enable GitOps-style deployments where hosts pull their own configurations:
 nixfleet pull-mode install -H myhost --repo git@github.com:org/fleet-config.git
 
 # Hosts will automatically:
-# 1. Pull from git every 5 minutes
+# 1. Pull from git on a timer (nixfleet.pullMode.interval, default 15min)
 # 2. Build the Nix configuration
 # 3. Apply changes
 # 4. Report status via webhook (optional)
 ```
 
+Disabling `pullMode` in a host config does **not** remove the units that were
+already installed — they stay and keep failing on their timer. Use
+`nixfleet pull-mode uninstall` to take them off the host.
+
 ## k0s Kubernetes
 
-NixFleet can bootstrap and manage k0s Kubernetes clusters with Cilium CNI:
+NixFleet can bootstrap and manage k0s Kubernetes clusters with Cilium CNI. The
+controller is bootstrapped by the CLI (`nixfleet k0s init`); the declarative
+surface is for **workers**, via `modules/k0s.nix`:
 
 ```nix
-# hosts/k8s-controller.nix
+# hosts/myworker.nix
 {
-  nixfleet.k0s = {
+  imports = [ ../modules/k0s.nix ];
+
+  nixfleet.k0s.worker = {
     enable = true;
-    role = "controller+worker";
 
-    network.cilium = {
-      loadBalancer = {
-        enabled = true;
-        ipPool = "192.168.3.100/32";  # Your LoadBalancer IP
-      };
-      gatewayAPI = {
-        enabled = true;
-        ingressGateway = {
-          enabled = true;
-          hostname = "*.example.com";
-          # Auto-generates TLS cert via Fleet CA
-        };
-      };
-    };
+    # Memory held back from kubelet, so pods cannot evict the inference
+    # processes that are not Kubernetes workloads. On a 122 GiB box, 78Gi
+    # leaves ~44 GiB allocatable.
+    systemReservedMemory = "78Gi";
 
-    network.certManager = {
-      enabled = true;
-      fleetCAIssuer.enabled = true;  # Use Fleet PKI for certs
-    };
+    # Optional
+    version = "v1.34.2+k0s.0";
+    tokenPath = "/etc/k0s/worker-join-token";
+    extraKubeletArgs = [ "--max-pods=200" ];
   };
 }
 ```
+
+Cilium LoadBalancer, Gateway API and cert-manager are deployed by the CLI
+during `nixfleet k0s init` / `nixfleet k0s certmanager`, not declared as Nix
+options.
 
 ### Bootstrap k0s
 
@@ -273,56 +306,73 @@ spec:
 
 ```nix
 {
-  # Packages to install via Nix
-  packages = [ pkgs.htop pkgs.vim ];
-
-  # Files to deploy
-  files."/etc/myconfig".text = "content";
-  files."/etc/myconfig".source = ./myconfig;
-
-  # Directories to create
-  directories."/var/lib/myapp" = {
-    owner = "myuser";
-    group = "mygroup";
-    mode = "0750";
-  };
-
-  # Users and groups
-  users.myuser = {
-    uid = 1001;
-    group = "mygroup";
-    home = "/home/myuser";
-    shell = "/bin/bash";
-  };
-
-  groups.mygroup.gid = 1001;
-
-  # Systemd services
-  systemd.services.myservice = {
-    description = "My Service";
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      ExecStart = "/usr/bin/myapp";
-      Restart = "always";
+  nixfleet = {
+    # Identity. Required.
+    host = {
+      name = "myhost";
+      # "ubuntu" | "nixos" | "dgx" | "synology". "dgx" deploys exactly like
+      # "ubuntu" but is never OS-updated; "synology" is driven over the DSM
+      # API rather than SSH.
+      base = "ubuntu";
+      addr = "myhost.local";
     };
-  };
 
-  # Health checks
-  healthChecks = [
-    {
-      name = "http";
+    # Packages to install via Nix. Hosts list only their extras — the
+    # fleet-wide set comes from importing modules/base-packages.nix.
+    packages = [ pkgs.htop pkgs.vim ];
+
+    # Files to deploy. `text` or `source`, plus optional restartUnits.
+    files."/etc/myconfig".text = "content";
+    files."/etc/other".source = ./other;
+
+    # Directories to create
+    directories."/var/lib/myapp" = {
+      owner = "myuser";
+      group = "mygroup";
+      mode = "0750";
+    };
+
+    # Users and groups
+    users.myuser = {
+      uid = 1001;
+      group = "mygroup";
+      home = "/home/myuser";
+      shell = "/bin/bash";
+    };
+
+    groups.mygroup.gid = 1001;
+
+    # Systemd units. NixFleet writes unit *text* verbatim — there is no
+    # systemd.services submodule with serviceConfig, as in NixOS.
+    systemd.units."myservice.service" = {
+      enabled = true;
+      text = ''
+        [Unit]
+        Description=My Service
+
+        [Service]
+        ExecStart=/usr/bin/myapp
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+      '';
+    };
+
+    # Health checks: an attribute set keyed by check name, not a list.
+    healthChecks.http = {
       type = "http";
       url = "http://localhost:8080/health";
       timeout = 10;
-    }
-  ];
+    };
 
-  # Secrets (age-encrypted)
-  secrets.items.api-key = {
-    source = ../secrets/api-key.age;
-    path = "/run/nixfleet-secrets/api-key";
-    owner = "root";
-    mode = "0400";
+    # Secrets (age-encrypted)
+    secrets.items.api-key = {
+      source = ../secrets/api-key.age;
+      path = "/run/nixfleet-secrets/api-key";
+      owner = "root";
+      mode = "0400";
+    };
   };
 }
 ```
@@ -358,15 +408,17 @@ spec:
 # Enter development shell
 nix develop
 
-# Build
-go build -o nixfleet ./cmd/nixfleet
+# Check that every host in nixfleetConfigurations still evaluates
+nix flake check
 
-# Run tests
-go test ./cmd/nixfleet/...
+# Format Nix, from the repo root
+nixfmt flake.nix modules/*.nix hosts/*.nix
 
-# Format
-go fmt ./cmd/nixfleet/...
-nixfmt modules/ lib/ backends/
+# The Go module is rooted at cmd/nixfleet, so go commands run from there
+cd cmd/nixfleet
+go build -o nixfleet .
+go test ./...
+go fmt ./...
 ```
 
 ## License
