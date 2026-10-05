@@ -20,12 +20,20 @@ var goVersionRe = regexp.MustCompile(`go-version:\s*'?"?([0-9]+\.[0-9]+)`)
 func TestWorkflowGoVersionMatchesGoMod(t *testing.T) {
 	want := goModVersion(t)
 
-	workflows, err := filepath.Glob(filepath.Join(repoRoot, ".github/workflows/*.yml"))
+	// pkgs/nixfleet sets src to cmd/nixfleet alone, so checkPhase inside a Nix
+	// build has no repo root to look at. Skip there rather than fail; the CI
+	// Test job and local `go test ./...` both run from a full checkout.
+	dir := filepath.Join(repoRoot, ".github/workflows")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Skipf("%s absent; running outside a full checkout", dir)
+	}
+
+	workflows, err := filepath.Glob(filepath.Join(dir, "*.yml"))
 	if err != nil {
 		t.Fatalf("glob workflows: %v", err)
 	}
 	if len(workflows) == 0 {
-		t.Fatal("no workflows found; did .github/workflows move?")
+		t.Fatalf("%s has no *.yml; did the workflows move?", dir)
 	}
 
 	checked := 0
