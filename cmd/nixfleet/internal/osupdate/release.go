@@ -155,7 +155,7 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 		// bash -c wrap so a compound hook (e.g. "systemctl stop a b || true; drain")
 		// runs entirely as root, not just its first command (ExecSudo only sudo's
 		// the leading token).
-		res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", shQuote(cfg.PreHook)))
+		res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", ssh.ShellQuote(cfg.PreHook)))
 		if err != nil {
 			return fmt.Errorf("pre-upgrade hook failed: %w", err)
 		}
@@ -216,14 +216,14 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 	// gone. The sentinel is removed up front so a stale value from a prior run
 	// can't be mistaken for this run's result.
 	runScript := fmt.Sprintf("rm -f %s; { %s ; } > %s 2>&1; echo $? > %s",
-		shQuote(exitFile), upgradeCmd, shQuote(cfg.LogPath), shQuote(exitFile))
+		ssh.ShellQuote(exitFile), upgradeCmd, ssh.ShellQuote(cfg.LogPath), ssh.ShellQuote(exitFile))
 	inner := fmt.Sprintf(
 		"mkdir -p %s && rm -f %s && systemd-run --unit=%s --collect --setenv=DEBIAN_FRONTEND=noninteractive "+
 			"/bin/bash -c %s",
-		shQuote(logDir), shQuote(exitFile), shQuote(cfg.Unit),
-		shQuote(runScript),
+		ssh.ShellQuote(logDir), ssh.ShellQuote(exitFile), ssh.ShellQuote(cfg.Unit),
+		ssh.ShellQuote(runScript),
 	)
-	res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", shQuote(inner)))
+	res, err := client.ExecSudo(ctx, fmt.Sprintf("bash -c %s", ssh.ShellQuote(inner)))
 	if err != nil {
 		return fmt.Errorf("launching detached upgrade: %w", err)
 	}
@@ -237,14 +237,14 @@ func (u *Updater) StartReleaseUpgrade(ctx context.Context, client *ssh.Client, i
 // transient unit is active; when it stops, exitCode is its main process exit
 // status (0 = success). tail is the last few log lines for progress display.
 func (u *Updater) ReleaseUpgradeStatus(ctx context.Context, client *ssh.Client, cfg ReleaseUpgradeConfig) (running bool, exitCode int, tail string, err error) {
-	act, err := client.Exec(ctx, fmt.Sprintf("systemctl is-active %s 2>/dev/null || true", shQuote(cfg.Unit)))
+	act, err := client.Exec(ctx, fmt.Sprintf("systemctl is-active %s 2>/dev/null || true", ssh.ShellQuote(cfg.Unit)))
 	if err != nil {
 		return false, -1, "", err
 	}
 	state := strings.TrimSpace(act.Stdout)
 	running = state == "active" || state == "activating" || state == "deactivating"
 
-	if t, e := client.Exec(ctx, fmt.Sprintf("tail -n 5 %s 2>/dev/null || true", shQuote(cfg.LogPath))); e == nil {
+	if t, e := client.Exec(ctx, fmt.Sprintf("tail -n 5 %s 2>/dev/null || true", ssh.ShellQuote(cfg.LogPath))); e == nil {
 		tail = strings.TrimRight(t.Stdout, "\n")
 	}
 
@@ -255,7 +255,7 @@ func (u *Updater) ReleaseUpgradeStatus(ctx context.Context, client *ssh.Client, 
 	exitCode = -1
 	if !running {
 		exitFile := cfg.LogPath + ".exit"
-		if s, e := client.Exec(ctx, fmt.Sprintf("cat %s 2>/dev/null || true", shQuote(exitFile))); e == nil {
+		if s, e := client.Exec(ctx, fmt.Sprintf("cat %s 2>/dev/null || true", ssh.ShellQuote(exitFile))); e == nil {
 			if v, perr := strconv.Atoi(strings.TrimSpace(s.Stdout)); perr == nil {
 				exitCode = v
 			}
@@ -299,9 +299,4 @@ func (u *Updater) VerifyRelease(ctx context.Context, client *ssh.Client, wantVer
 	}
 	got := strings.TrimSpace(res.Stdout)
 	return strings.HasPrefix(got, wantVersion), got, nil
-}
-
-// shQuote single-quotes a string for safe embedding in a /bin/sh command.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
