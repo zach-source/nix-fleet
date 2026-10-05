@@ -15,9 +15,10 @@ Refs: [OS and component update](https://docs.nvidia.com/dgx/dgx-spark/os-and-com
 
 ## 0. What is already wired
 
-`hosts/dgx-spark-{1,2}.nix`, `modules/dgx-spark-cluster.nix` and
-`modules/vllm.nix` exist, and both Sparks are registered in `flake.nix`
-(pinned to `aarch64-linux`) and `inventory/fleet.yaml`.
+`hosts/dgx-spark-{1,2}.nix`, `modules/dgx-spark-cluster.nix` and the two model
+modules `modules/dspark-dsv4.nix` and `modules/dspark-glm53.nix` exist, and both
+Sparks are registered in `flake.nix` (pinned to `aarch64-linux`) and
+`inventory/fleet.yaml`.
 
 Confirm before you start:
 
@@ -137,17 +138,19 @@ nixfleet secrets rekey
 
 Repeat for `dgx-spark-2`.
 
-## 5. First apply — with vLLM off
+## 5. First apply — with the model units off
 
-`hosts/dgx-spark-1.nix` imports `dgx-spark-dsv4.nix`, which declares a vLLM unit
-pointing at `/opt/dsv4/bin/dsv4-vllm-entrypoint`. That entrypoint ships with the
-vendor recipe and **is not on a fresh box**, so a first apply would enable and
-start a unit that immediately fails.
+`hosts/dgx-spark-1.nix` imports `dgx-spark-dsv4.nix`, which declares the
+DeepSeek-V4-Flash unit. That unit runs the vendor's Docker Compose recipe out of
+`modules.dsparkDsv4.recipeDir`, and neither the recipe checkout nor the 156 GB of
+weights are on a fresh box — so a first apply would enable and start a unit that
+immediately fails.
 
-Turn the service off for the onboarding apply — add to each host file:
+Turn the model services off for the onboarding apply — add to each host file:
 
 ```nix
-nixfleet.modules.vllm.services.dsv4-flash.enable = false;
+nixfleet.modules.dsparkDsv4.enable = false;
+nixfleet.modules.dsparkGlm53.enable = false;
 ```
 
 That drops the unit and its health check entirely, leaving only
@@ -279,18 +282,22 @@ anything over 1500.
 
 ## 8. Enable dsv4
 
-Only once `/opt/dsv4/bin/dsv4-vllm-entrypoint` and the pinned vLLM dev wheel
-(`0.21.1rc1.dev339+g1967a5627bc3`) exist on both boxes. Neither is packaged by
-NixFleet.
+Only once the pinned recipe checkout is in `modules.dsparkDsv4.recipeDir` and the
+weights are in the HF cache on **both** boxes. Neither is packaged by NixFleet —
+`modules/dspark-dsv4.nix` owns the image digest, the recipe commit, the settings
+and the lifecycle, but not the recipe or the checkpoint.
 
 Drop the `enable = false` lines from step 5, then apply **rank 1 first** — rank 0
-serves `:8000` and expects its peer to be waiting at the rendezvous:
+serves HTTP and expects its peer to be waiting at the rendezvous:
 
 ```bash
 nixfleet apply -H dgx-spark-2
 nixfleet apply -H dgx-spark-1
-curl -s localhost:8000/v1/models   # via an ssh -L tunnel to rank 0
+curl -s localhost:8888/v1/models   # via an ssh -L tunnel to rank 0
 ```
+
+Port **8888**, not 8000: every other fleet LLM uses 8000, and a probe aimed there
+reads "connection refused" while the model is perfectly healthy.
 
 `NCCL_SOCKET_IFNAME` is pinned to the CX7 interface in
 `hosts/dgx-spark-dsv4.nix`. Left unset, NCCL may quietly pick the 10GbE
