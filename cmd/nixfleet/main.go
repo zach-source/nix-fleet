@@ -4596,11 +4596,17 @@ Commands:
 
 func pkiCertManagerServeCmd() *cobra.Command {
 	var (
-		pkiDir     string
-		identities []string
-		listenAddr string
-		tlsCert    string
-		tlsKey     string
+		pkiDir      string
+		identities  []string
+		listenAddr  string
+		tlsCert     string
+		tlsKey      string
+		clientCA    string
+		tokenFile   string
+		signerName  string
+		allowDNS    []string
+		allowIP     []string
+		maxValidity string
 	)
 
 	cmd := &cobra.Command{
@@ -4611,11 +4617,20 @@ func pkiCertManagerServeCmd() *cobra.Command {
 This allows cert-manager to request certificates from the NixFleet CA
 without exposing the CA private key to the Kubernetes cluster.
 
-The webhook listens for signing requests and returns signed certificates.
+The webhook signs with the Fleet CA, so it will not start unless it is told
+which names it may sign for (--allow-dns / --allow-ip), and it will not listen
+off loopback without caller authentication (--token-file or --client-ca).
+
+Pass the bearer token by file or in NIXFLEET_WEBHOOK_TOKEN, never as a flag
+value: argv is readable by every local user.
 
 Examples:
-  nixfleet pki certmanager serve
-  nixfleet pki certmanager serve --listen :8443 --tls-cert server.crt --tls-key server.key`,
+  nixfleet pki certmanager serve --allow-dns '*.svc.cluster.local'
+
+  nixfleet pki certmanager serve --listen :8443 \
+    --tls-cert server.crt --tls-key server.key \
+    --client-ca cert-manager-ca.crt \
+    --allow-dns '*.nixfleet.stigen.ai' --allow-ip 192.168.3.0/24`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -4630,10 +4645,31 @@ Examples:
 				return fmt.Errorf("loading CA: %w", err)
 			}
 
+			token, err := readWebhookToken(tokenFile)
+			if err != nil {
+				return err
+			}
+
 			config := pki.DefaultCertManagerConfig()
 			config.ListenAddr = listenAddr
 			config.TLSCertFile = tlsCert
 			config.TLSKeyFile = tlsKey
+			config.ClientCAFile = clientCA
+			config.Token = token
+			config.SignerName = signerName
+			config.AllowedDNS = allowDNS
+			config.AllowedIPCIDRs = allowIP
+
+			if maxValidity != "" {
+				d, err := pki.ParseValidityDuration(maxValidity)
+				if err != nil {
+					return fmt.Errorf("invalid --max-validity: %w", err)
+				}
+				config.MaxValidity = d
+				if config.DefaultValidity > d {
+					config.DefaultValidity = d
+				}
+			}
 
 			webhook := pki.NewCertManagerWebhook(ca, config)
 
@@ -4641,6 +4677,13 @@ Examples:
 			if tlsCert != "" {
 				fmt.Println("TLS enabled")
 			}
+			if clientCA != "" {
+				fmt.Println("Client certificates required (mTLS)")
+			}
+			if token != "" {
+				fmt.Println("Bearer token required")
+			}
+			fmt.Printf("Signing for %s\n", config.SignerName)
 			fmt.Println("Endpoints:")
 			fmt.Println("  POST /sign   - Sign CSR")
 			fmt.Println("  GET  /health - Health check")
@@ -4651,11 +4694,35 @@ Examples:
 
 	cmd.Flags().StringVar(&pkiDir, "pki-dir", "secrets/pki", "Directory for PKI files")
 	cmd.Flags().StringSliceVar(&identities, "identity", nil, "Age identity files for decryption")
-	cmd.Flags().StringVar(&listenAddr, "listen", ":8443", "Address to listen on")
+	cmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8443", "Address to listen on")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS key file for HTTPS")
+	cmd.Flags().StringVar(&clientCA, "client-ca", "", "Require a client certificate issued by this CA (mTLS)")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "File holding the bearer token callers must present (or set NIXFLEET_WEBHOOK_TOKEN)")
+	cmd.Flags().StringVar(&signerName, "signer-name", pki.DefaultSignerName, "Only sign requests carrying this spec.signerName")
+	cmd.Flags().StringSliceVar(&allowDNS, "allow-dns", nil, "DNS name this webhook may sign, exact or *.example.com (repeatable)")
+	cmd.Flags().StringSliceVar(&allowIP, "allow-ip", nil, "CIDR an IP SAN must fall inside (repeatable)")
+	cmd.Flags().StringVar(&maxValidity, "max-validity", "", "Cap on a requested certificate validity, e.g. 90d")
 
 	return cmd
+}
+
+// readWebhookToken loads the webhook bearer token from a file or from
+// NIXFLEET_WEBHOOK_TOKEN. There is deliberately no --token flag: a flag value
+// is visible to every local user in ps output.
+func readWebhookToken(path string) (string, error) {
+	if path == "" {
+		return strings.TrimSpace(os.Getenv("NIXFLEET_WEBHOOK_TOKEN")), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading --token-file: %w", err)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", fmt.Errorf("--token-file %s is empty", path)
+	}
+	return token, nil
 }
 
 func pkiCertManagerExportCmd() *cobra.Command {

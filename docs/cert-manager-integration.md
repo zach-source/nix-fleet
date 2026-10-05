@@ -204,19 +204,46 @@ This approach keeps the CA private key outside of Kubernetes.
 
 ### Step 1: Start Webhook Server
 
-Run the webhook server on a trusted host (not in Kubernetes):
+Run the webhook server on a trusted host (not in Kubernetes).
+
+The webhook signs with the Fleet CA, so it refuses to start until you tell it
+which names it may sign for, and it refuses to listen off loopback until
+callers are authenticated:
 
 ```bash
 # Generate TLS cert for the webhook server itself
 nixfleet pki issue webhook-server --san webhook.example.com
+
+# The bearer token goes in a file or NIXFLEET_WEBHOOK_TOKEN, never in argv
+install -m 0600 /dev/null /etc/nixfleet/webhook-token
+openssl rand -hex 32 > /etc/nixfleet/webhook-token
 
 # Start the webhook server
 nixfleet pki certmanager serve \
   --listen :8443 \
   --tls-cert secrets/pki/hosts/webhook-server/host.crt \
   --tls-key secrets/pki/hosts/webhook-server/host.key \
-  --identity ~/.config/age/key.txt
+  --identity ~/.config/age/key.txt \
+  --token-file /etc/nixfleet/webhook-token \
+  --allow-dns '*.svc.cluster.local' \
+  --allow-dns '*.example.com' \
+  --allow-ip 10.1.0.0/16 \
+  --max-validity 90d
 ```
+
+| Flag | Purpose |
+|------|---------|
+| `--token-file` | Bearer token callers must send as `Authorization: Bearer <token>`. Required off loopback unless `--client-ca` is set. |
+| `--client-ca` | Require a client certificate issued by this CA (mTLS). Needs `--tls-cert`/`--tls-key`. |
+| `--allow-dns` | A DNS name the webhook may sign: exact, or `*.example.com` matching exactly one label. Repeatable. |
+| `--allow-ip` | A CIDR an IP SAN must fall inside. Repeatable. |
+| `--signer-name` | Only sign requests whose `spec.signerName` matches (default `nixfleet.io/fleet-ca`). |
+| `--max-validity` | Cap on a requested validity, e.g. `90d`. |
+
+At least one of `--allow-dns` / `--allow-ip` is mandatory. Beyond the name
+policy the signer also rejects CSRs that ask for a CA certificate, carry
+email/URI SANs, name no subject at all, or use an RSA key below 2048 bits.
+The certificate is issued over the CSR's own public key.
 
 ### Step 2: Configure cert-manager External Issuer
 
