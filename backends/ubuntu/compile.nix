@@ -193,6 +193,37 @@ let
   pullModeEnabled = pullCfg.enable;
   statusServerEnabled = pullModeEnabled && pullCfg.statusServer.enable;
 
+  # Every unit this generation puts in /etc/systemd/system, declared and
+  # otherwise. Activation writes this list to $NIXFLEET_STATE/managed-units and
+  # diffs the previous generation's copy against it to find units to remove.
+  #
+  # Pull mode's units have to be listed here explicitly: they are installed in
+  # step 10 rather than declared in nixfleet.systemd.units, so without them
+  # turning pullMode off would leave nixfleet-pull.timer behind, firing every
+  # 15 minutes against a config that no longer wants it.
+  managedUnits =
+    attrNames cfg.systemd.units
+    ++ optionals pullModeEnabled [
+      "nixfleet-pull.service"
+      "nixfleet-pull.timer"
+    ]
+    ++ optional statusServerEnabled "nixfleet-status.service";
+
+  # Units NixFleet installs under fixed names of its own choosing. Any of these
+  # that this generation does not declare can be removed without consulting the
+  # ledger: nothing else on the host can plausibly own a file called
+  # nixfleet-pull.timer, so there is no third-party unit to delete by mistake.
+  #
+  # Worth special-casing because the ledger necessarily starts empty. Hosts
+  # that already carry orphaned pull units — the ones that were failing every
+  # 15 minutes — have no previous ledger to diff against, so without this they
+  # would keep them.
+  nixfleetOwnedUnits = [
+    "nixfleet-pull.service"
+    "nixfleet-pull.timer"
+    "nixfleet-status.service"
+  ];
+
   # Generate pull script (only when pull mode is enabled)
   pullScript = pkgs.writeShellScript "nixfleet-pull" ''
     #!/bin/bash
@@ -810,8 +841,64 @@ let
       '') cfg.systemd.units
     )}
 
+    # Step 7b: Remove units the config no longer declares
+    #
+    # Step 7 only ever installs. A unit dropped from the config used to stay in
+    # /etc/systemd/system forever, still enabled, which is how a retired
+    # pull-mode timer went on firing every 15 minutes after pullMode was turned
+    # off.
+    #
+    # The ledger written at the end of this activation is the input for
+    # anything the config names: /etc/systemd/system is full of units NixFleet
+    # does not own, so scanning it and deleting the difference would be far
+    # worse than the bug.
+    MANAGED_UNITS_FILE="$NIXFLEET_STATE/managed-units"
+    DECLARED_UNITS="${concatStringsSep " " managedUnits}"
+    REMOVED_UNITS=""
+
+    # Candidates are NixFleet's own retired fixed-name units plus whatever the
+    # previous generation recorded. The first group needs no ledger, so a host
+    # whose orphans predate it still gets them cleaned.
+    STALE_CANDIDATES="${concatStringsSep " " (subtractLists managedUnits nixfleetOwnedUnits)}"
+    if [ -f "$MANAGED_UNITS_FILE" ]; then
+      # Read the ledger up front rather than looping over a redirect: systemctl
+      # inherits stdin and would eat the rest of the list. Unit names cannot
+      # contain whitespace, so word splitting is the whole parser.
+      STALE_CANDIDATES="$STALE_CANDIDATES $(cat "$MANAGED_UNITS_FILE")"
+    fi
+
+    # The unit this activation is itself running under, if any. Pull mode
+    # applies from inside nixfleet-pull.service, so turning pull mode off would
+    # otherwise have this script stop itself midway through. Disabling without
+    # stopping is enough: the run finishes and nothing starts it again.
+    SELF_UNIT="$(grep -oE '[a-zA-Z0-9@:._-]+\.service' /proc/self/cgroup 2>/dev/null | tail -1 || true)"
+
+    for unit in $STALE_CANDIDATES; do
+      case " $DECLARED_UNITS " in
+      *" $unit "*)
+        continue
+        ;;
+      esac
+      # The two candidate sources overlap, and a unit already gone is not news.
+      case " $REMOVED_UNITS " in
+      *" $unit "*)
+        continue
+        ;;
+      esac
+      [ -f "/etc/systemd/system/$unit" ] || continue
+
+      log "  Removing stale unit: $unit"
+      if [ "$unit" = "$SELF_UNIT" ]; then
+        systemctl disable "$unit" 2>/dev/null || true
+      else
+        systemctl disable --now "$unit" 2>/dev/null || true
+      fi
+      rm -f "/etc/systemd/system/$unit"
+      REMOVED_UNITS="$REMOVED_UNITS $unit"
+    done
+
     # Step 8: Reload systemd if units changed
-    if [ -n "$CHANGED_UNITS" ]; then
+    if [ -n "$CHANGED_UNITS$REMOVED_UNITS" ]; then
       log "Reloading systemd daemon..."
       systemctl daemon-reload
     fi
@@ -1011,6 +1098,18 @@ let
       "managedFiles": [${concatStringsSep "," (map (f: "\"${f}\"") (attrNames cfg.files))}]
     }
     STATE_EOF
+
+    # Record what this generation installed, for step 7b of the next
+    # activation. Separate from state.json on purpose: that file has more than
+    # one writer and a schema the CLI parses, whereas this is a plain list
+    # read by shell on a host that may not have jq.
+    #
+    # Written last, so a failed activation leaves the previous generation's
+    # ledger in place and the next run retries the same removals. Those are
+    # idempotent (`rm -f`, `disable || true`), so repeating them is free.
+    cat > "$MANAGED_UNITS_FILE" << 'UNITS_EOF'
+    ${concatStringsSep "\n" managedUnits}
+    UNITS_EOF
 
     log "Activation complete!"
   '';
