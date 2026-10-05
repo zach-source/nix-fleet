@@ -254,6 +254,28 @@
         }
       );
 
+      # Flake checks. `nix flake check` already runs in CI, so hanging the
+      # host-evaluation gate here means no extra workflow step.
+      checks = forAllSystems (system: {
+        # Every host in nixfleetConfigurations must still evaluate. Without
+        # this, a module rename or a bad option only surfaces when someone
+        # runs `nixfleet apply` against a real box.
+        #
+        # Reading `.drvPath` is what does the work: it instantiates each
+        # host's system derivation, which forces the whole module tree.
+        # The context is discarded on purpose — instantiating every host is
+        # the check, building their closures (the aarch64 Sparks especially)
+        # is not, and a build-time dependency would make CI do exactly that.
+        host-eval = nixpkgsFor.${system}.runCommand "nixfleet-host-eval" { } (
+          nixpkgs.lib.concatStringsSep "\n" (
+            nixpkgs.lib.mapAttrsToList (
+              name: cfg: "echo '${name} -> ${builtins.unsafeDiscardStringContext cfg.system.drvPath}'"
+            ) self.nixfleetConfigurations
+          )
+          + "\ntouch $out\n"
+        );
+      });
+
       # NixFleet library functions for host definitions
       lib = (import ./lib { inherit (nixpkgs) lib; }) // {
         inherit mkNixFleetConfiguration mkNixOSFleetConfiguration mkDarwinFleetConfiguration;
