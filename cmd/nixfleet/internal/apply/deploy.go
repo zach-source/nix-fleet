@@ -2,8 +2,8 @@ package apply
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nixfleet/nixfleet/internal/inventory"
@@ -31,26 +31,34 @@ type PhaseError struct {
 	Err   error
 }
 
-func (e *PhaseError) Error() string { return fmt.Sprintf("%s failed: %v", e.Phase, e.Err) }
+// phaseFailures is how each phase is reported when it fails. Both the CLI and
+// the server's job records read these words, so they live in one place.
+var phaseFailures = map[Phase]string{
+	PhaseBuild:    "build failed",
+	PhaseCopy:     "copy failed",
+	PhaseConnect:  "connection failed",
+	PhaseActivate: "activation failed",
+	PhaseState:    "recording state failed",
+}
+
+func (e *PhaseError) Error() string {
+	phrase, ok := phaseFailures[e.Phase]
+	if !ok {
+		phrase = string(e.Phase) + " failed"
+	}
+	return fmt.Sprintf("%s: %v", phrase, e.Err)
+}
+
 func (e *PhaseError) Unwrap() error { return e.Err }
 
-// FailureMessage renders a Run error the way the CLI and the pipeline have
-// always reported these failures.
+// FailureMessage renders a Run error the way the CLI reports it, capitalised
+// ("Build failed: ..."). The server's job records use err.Error() as-is.
 func FailureMessage(err error) string {
-	var phaseErr *PhaseError
-	if !errors.As(err, &phaseErr) {
-		return err.Error()
+	msg := err.Error()
+	if msg == "" {
+		return msg
 	}
-	switch phaseErr.Phase {
-	case PhaseBuild:
-		return fmt.Sprintf("Build failed: %v", phaseErr.Err)
-	case PhaseCopy:
-		return fmt.Sprintf("Copy failed: %v", phaseErr.Err)
-	case PhaseConnect:
-		return fmt.Sprintf("Connection failed: %v", phaseErr.Err)
-	default:
-		return fmt.Sprintf("Activation failed: %v", phaseErr.Err)
-	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
 }
 
 // Builder builds a host's closure. *nix.Evaluator satisfies it.

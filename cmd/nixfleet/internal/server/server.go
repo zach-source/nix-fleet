@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nixfleet/nixfleet/internal/apply"
 	"github.com/nixfleet/nixfleet/internal/apt"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/nix"
@@ -852,47 +853,31 @@ func (s *Server) applyOne(ctx context.Context, host *inventory.Host) (*applyOutc
 	lock.Lock()
 	defer lock.Unlock()
 
-	startTime := time.Now()
-
-	// Build
-	closure, err := s.evaluator.BuildHost(ctx, host.Name, host.Base)
+	deployed, err := s.hostDeploy().Run(ctx, host, apply.DeployOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("build failed: %w", err)
+		// *apply.PhaseError already reads "build failed: ...".
+		return nil, err
 	}
-
-	// Copy
-	if err := s.deployer.CopyToHost(ctx, closure, host); err != nil {
-		return nil, fmt.Errorf("copy failed: %w", err)
+	if deployed.StateError != "" {
+		log.Printf("[%s] Warning: failed to update state: %s", host.Name, deployed.StateError)
 	}
-
-	// Activate
-	client, err := s.pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
-	if err != nil {
-		return nil, fmt.Errorf("connection failed: %w", err)
-	}
-
-	switch inventory.NormalizeBase(host.Base) {
-	case "ubuntu":
-		err = s.deployer.ActivateUbuntu(ctx, client, closure)
-	case "nixos":
-		err = s.deployer.ActivateNixOS(ctx, client, closure, "switch")
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("activation failed: %w", err)
-	}
-
-	duration := time.Since(startTime)
-
-	// Update state
-	gen, _, _ := s.deployer.GetCurrentGeneration(ctx, client, host.Base)
-	s.stateMgr.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, duration)
 
 	return &applyOutcome{
-		StorePath:  closure.StorePath,
-		Generation: gen,
-		Duration:   duration,
+		StorePath:  deployed.Closure,
+		Generation: deployed.Generation,
+		Duration:   deployed.Duration,
 	}, nil
+}
+
+// hostDeploy builds the single-host deploy sequence from the server's
+// collaborators.
+func (s *Server) hostDeploy() apply.HostDeploy {
+	return apply.HostDeploy{
+		Builder:  s.evaluator,
+		Deployer: s.deployer,
+		Pool:     s.pool,
+		State:    s.stateMgr,
+	}
 }
 
 func (s *Server) runApplyJob(ctx context.Context, job *Job, host *inventory.Host) {
