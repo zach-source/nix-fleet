@@ -94,8 +94,8 @@
         # 512K context on a natively-262K model: static YaRN, factor 2 — the
         # factor Qwen's cards give for 524288. Same window on every gtr box
         # (2026-10-05). Static YaRN applies at every length, so very short
-        # prompts may lose a little quality; drop the three rope/yarn flags
-        # and set ctxSize = 262144 to undo.
+        # prompts may lose a little quality; drop the rope/yarn/override-kv
+        # flags and set ctxSize = 262144 to undo.
         ctxSize = 524288;
         # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
         # `strings` on the file shows qwen35.nextn_predict_layers and
@@ -133,6 +133,11 @@
           "2"
           "--yarn-orig-ctx"
           "262144"
+          # llama-server caps every slot at the GGUF's declared training
+          # context ("exceeds the training context of the model - capping"),
+          # whatever the rope flags say, so declare the extended window too.
+          "--override-kv"
+          "qwen35.context_length=int:524288"
         ];
       };
     };
