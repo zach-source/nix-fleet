@@ -226,7 +226,7 @@ func TestRunReportsProgressPerPhase(t *testing.T) {
 
 	var seen []Phase
 	if _, err := deployFor(f).Run(context.Background(), host, DeployOptions{
-		Progress: func(p Phase) { seen = append(seen, p) },
+		Progress: func(p Phase, _ *DeployResult) { seen = append(seen, p) },
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
