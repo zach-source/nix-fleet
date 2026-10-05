@@ -34,3 +34,8 @@ agents/.slack-apps.json
 __pycache__/
 .mcp.json
 .claude-uuid-session
+
+# Benchmark harness output (SWE-bench / swebench-docker writes these into the
+# repo root it is invoked from). Results worth keeping go in FLEET.md.
+/logs/
+/openai__*.json
