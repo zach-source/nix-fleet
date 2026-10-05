@@ -1,10 +1,9 @@
 # GTR-151 — AMD Ryzen AI MAX+ 395 (192.168.3.132)
-# The "Qwen3.6" node — both family variants co-hosted:
-#   :8084  Qwen3.6-35B-A3B MoE  + classic Qwen3.5-0.8B draft (~48 tok/s)
-#                                 (MTP crashes the recurrent MoE — see below)
-#   :8085  Qwen3.6-27B    dense + MTP self-speculation (~16 tok/s, pure 3.6)
-# Build: /opt/llama-rocm-latest (commit 6a257d4) — fork retired, PR #19493
-# natively handles qwen35 spec. 131GB unified VRAM, ROCm 7.13 (TheRock), gfx1151
+# The FAST tier (2026-10-05): one model, Qwen3.6-35B-A3B MoE with a classic
+# Qwen3.5-0.8B draft and thinking OFF by default — the fleet's "Haiku".
+# One model per box so the rest of the unified memory stays free for builds
+# and hosting. Qwen3.8-27B moved off this box (it remains on gtr-153).
+# Build: /opt/llama-rocm-latest, ROCm 7.13 (TheRock), gfx1151.
 { pkgs, ... }:
 
 {
@@ -25,9 +24,14 @@
       addr = "192.168.3.132";
     };
 
-    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
-    # allocatable (was an out-of-band 98Gi/24Gi); 78Gi stays for inference.
-    k0s.worker.enable = true;
+    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
+    # allocatable for builds and hosting. Was 78Gi (~44Gi allocatable) while
+    # this box ran several models; one model per box since 2026-10-05 needs
+    # ~30-45Gi, and 56Gi keeps ~10-15Gi of host headroom on top of it.
+    k0s.worker = {
+      enable = true;
+      systemReservedMemory = "56Gi";
+    };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
@@ -71,13 +75,18 @@
       #   dense (:8085) — MTP self-speculation (~16 tok/s, pure 3.6) — stable on
       #                   the dense (non-recurrent) arch.
       services.qwen36-spec = {
-        description = "Qwen3.6-35B-A3B MoE + classic draft (MTP unstable on MoE)";
+        description = "Qwen3.6-35B-A3B MoE + classic draft, thinking off (fast tier)";
         # Non-MTP GGUF (UD-Q6_K_XL, 29.7GB).
         model = "/srv/models/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf";
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8084;
-        ctxSize = 200000;
+        # 512K context on a natively-262K model: static YaRN, factor 2 — the
+        # factor Qwen's cards give for 524288. Same window on every gtr box
+        # (2026-10-05). Static YaRN applies at every length, so very short
+        # prompts may lose a little quality; drop these three flags and set
+        # ctxSize = 262144 to undo.
+        ctxSize = 524288;
         batchSize = 512;
         ubatchSize = 512;
         newCli = true; # new build: --draft-max renamed --spec-draft-n-max
@@ -96,101 +105,24 @@
           format = "deepseek";
           budget = 2048;
         };
-        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
-        # (qwen36-27b below intentionally KEEPS Qwen's official coding sampling
-        # — temp=0.6 top-k=20 — so don't blanket-nudge it.)
+        # Sampler nudge — see docs/llm-proxy-usage.md.
         extraFlags = [
           "--min-p 0.01"
           "--top-p 0.98"
-        ];
-      };
-
-      # Qwen3.6-27B DENSE — MOVED to gtr-153 (2026-07-17) to relieve GPU
-      # contention here: gtr-151 was pegged at 100% GPU with three big models
-      # (35B-A3B MoE + 27B + ornith) sharing one gfx1151, which spiked ornith's
-      # latency. The 27B now runs on gtr-153's otherwise-idle GPU
-      # (hosts/gtr-153.nix), and ornith's freed headroom goes to a larger
-      # context (65K -> 200K) below. See docs/llm-proxy-usage.md.
-
-      # Qwen3.8-27B dense — REPLACES Ornith-1.0-35B-MoE at this port
-      # (2026-08-15). Ornith was the fleet's coding-agent model; Qwen3.8 beats
-      # it on the agentic/coding evals it was chosen for, and unlike Ornith it
-      # is a dense 27B rather than a 35B-A3B MoE, so it sidesteps the qwen35moe
-      # MTP "unspecified launch failure" history documented on :8084 above.
-      # Ornith's GGUF stays on disk for a one-line revert.
-      #
-      # Q8_0 (29GB) — the highest practical quant, chosen because gtr-151 has
-      # the fleet's most headroom and because gtr-153's Q5_K_XL showed only
-      # 52-62% MTP draft acceptance vs the Qwen3.6-27B's 70-84%. This deploy
-      # tests both suspected causes at once: higher quant, and a single-repo
-      # MTP-merged GGUF instead of gtr-153's cross-repo pairing (unsloth
-      # weights + ggml-org draft head).
-      #
-      # Source is Jackrong/Qwen3.8-27B-MTP-GGUF, whose card claims the MTP head
-      # is bundled in ("No additional draft model is required"). Treat that as
-      # unverified — the card also reports "0.5B params" and architecture
-      # "clip", and its Q8_0 is within 1,696 bytes of unsloth's plain Q8_0
-      # while an MTP head is ~3.16GB. If the load log shows no MTP tensors,
-      # add `--spec-draft-model /srv/models/mtp-Qwen3.8-27B-Q8_0.gguf` to
-      # extraFlags (the gtr-153 pattern).
-      services.qwen38-27b = {
-        description = "Qwen3.8-27B dense Q8_0 (Jackrong MTP-merged) @ 250K ctx";
-        model = "/srv/models/Qwen3.8-27B-MTP-Q8_0.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
-        port = 8086;
-        # 250K baseline context, and ctx-size is the TOTAL KV budget split
-        # across --parallel slots — so parallel=1 to give a single request the
-        # full 250K (ornith ran 524288/2 for two 256K slots). The hybrid
-        # Gated-DeltaNet arch keeps this affordable: only 16 of 64 layers are
-        # full attention, so 250K of q4_0 KV is ~5G, not the ~20G a dense-
-        # attention 27B would need.
-        ctxSize = 250000;
-        parallel = 1;
-        # 2048 (not ornith's 512) because prefill is this model's real cost
-        # centre — measured 184 t/s at 50K on gtr-153, i.e. TTFT grows fast
-        # with context. Bigger batches buy prefill throughput.
-        batchSize = 2048;
-        ubatchSize = 2048;
-        newCli = true;
-        # nMax=2 per Jackrong's card (it benchmarks max-draft 2 at 77.9%
-        # acceptance); also matches the fleet's n_max=1-2 precedent.
-        mtp = {
-          nMax = 2;
-        };
-        # Kept so that a client which explicitly re-enables thinking still gets
-        # it parsed into `reasoning_content` and bounded to 2048 tokens. The
-        # default-off switch is `--chat-template-kwargs` in extraFlags below —
-        # NOT this. `--reasoning-budget 0` was tried first and does NOT stop
-        # generation: the model still produced reasoning, llama.cpp merely
-        # split it into the `reasoning_content` field, so the tokens were still
-        # paid for. Verified on this endpoint.
-        reasoning = {
-          format = "deepseek";
-          budget = 2048;
-        };
-        # Qwen3.8 non-thinking ("instruct") sampling from the model card —
-        # temp 0.7 / top_p 0.80 / presence_penalty 1.5, which differs from the
-        # thinking-mode preset (1.0 / 0.95 / 0.0) used on gtr-153:8085.
-        # presence_penalty curbs the repetition non-thinking mode is prone to;
-        # the card warns values above ~2 cause language mixing.
-        extraFlags = [
-          # THINKING OFF by default for every caller. Single-quoted so systemd
-          # preserves the inner double quotes — unquoted, systemd strips them
-          # and llama.cpp receives invalid JSON. A client can still opt back in
-          # per-request with chat_template_kwargs.enable_thinking = true.
+          # THINKING OFF by default — this is the fast tier. Single-quoted so
+          # systemd keeps the inner double quotes (see the same flag's history
+          # in git: unquoted, llama.cpp gets invalid JSON). `reasoning` above
+          # only bounds and parses thinking for a caller that opts back in per
+          # request with chat_template_kwargs.enable_thinking = true; on its
+          # own it does not stop the model reasoning.
           "--chat-template-kwargs"
           "'{\"enable_thinking\":false}'"
-          "--temp"
-          "0.7"
-          "--top-p"
-          "0.80"
-          "--top-k"
-          "20"
-          "--min-p"
-          "0.0"
-          "--presence-penalty"
-          "1.5"
+          "--rope-scaling"
+          "yarn"
+          "--rope-scale"
+          "2"
+          "--yarn-orig-ctx"
+          "262144"
         ];
       };
     };
