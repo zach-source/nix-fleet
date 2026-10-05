@@ -262,8 +262,9 @@
         import ./tests {
           inherit (nixpkgs) lib;
           pkgs = nixpkgsFor.${system};
-          inherit mkNixFleetConfiguration;
+          inherit mkNixFleetConfiguration mkDarwinFleetConfiguration;
           hostConfigs = self.nixfleetConfigurations;
+          hostConfigsDarwin = self.darwinConfigurations;
         }
         // {
           # Every host in nixfleetConfigurations must still evaluate. Without
@@ -325,6 +326,21 @@
         # Synology NAS — managed via the DSM API (Model B), not SSH.
         znas = mkNixFleetConfiguration {
           modules = [ ./hosts/znas.nix ];
+        };
+      };
+
+      # macOS hosts. `nixfleet apply` resolves a darwin host as
+      # darwinConfigurations.<name>.system, so a host missing from here cannot
+      # be deployed at all — which is what used to be true of every one of
+      # them, mac-1 included.
+      #
+      # Support is narrower than ubuntu's: packages, /etc files, users, groups,
+      # directories and hooks translate; nixfleet.systemd.units, secrets and
+      # apt do not, and the backend now asserts rather than dropping them. See
+      # docs/darwin.md.
+      darwinConfigurations = {
+        mac-1 = mkDarwinFleetConfiguration {
+          modules = [ ./hosts/mac-1.nix ];
         };
       };
 

@@ -6,9 +6,12 @@ are not running NixOS (Ubuntu, DGX OS) as well as to NixOS hosts.
 ## Features
 
 - **Multi-platform support**: Deploy to Ubuntu, DGX OS, and NixOS hosts, plus
-  Synology NAS over the DSM API. A nix-darwin backend exists in
-  `backends/darwin/` but is not reachable yet — `nixfleet.host.base` has no
-  `"darwin"` value, so no macOS host can be configured through it.
+  Synology NAS over the DSM API. macOS hosts (`base = "darwin"`, via
+  nix-darwin) are supported for a deliberately narrower set of options —
+  packages, `/etc` files, users, groups, directories and hooks. Systemd units,
+  secrets and apt are **not** supported there and the backend refuses them by
+  name at evaluation time rather than dropping them. See
+  [docs/darwin.md](docs/darwin.md).
 - **k0s Kubernetes**: Bootstrap and manage k0s clusters with Cilium CNI
 - **Fleet PKI**: Built-in CA for TLS certificates across your fleet
 - **Gateway API**: Shared ingress gateway with auto-generated certificates

@@ -276,48 +276,13 @@ let
     }
   );
 
-  # Assertion type (like NixOS)
-  assertionType = types.submodule {
-    options = {
-      assertion = mkOption {
-        type = types.bool;
-        description = "If false, the assertion fails and the build aborts";
-      };
-      message = mkOption {
-        type = types.str;
-        description = "Error message shown when the assertion fails";
-      };
-    };
-  };
-
 in
 {
-  # Top-level assertions (NixOS-compatible)
-  options.assertions = mkOption {
-    type = types.listOf assertionType;
-    default = [ ];
-    description = ''
-      List of assertions that must pass for the build to succeed.
-      Each assertion has an `assertion` boolean and a `message` string.
-    '';
-    example = [
-      {
-        assertion = true;
-        message = "Example assertion that always passes";
-      }
-    ];
-  };
-
-  # Top-level warnings (NixOS-compatible)
-  options.warnings = mkOption {
-    type = types.listOf types.str;
-    default = [ ];
-    description = ''
-      List of warning messages to display during evaluation.
-      Warnings do not fail the build but alert the user to potential issues.
-    '';
-    example = [ "This feature is deprecated" ];
-  };
+  # `assertions` and `warnings` are deliberately NOT declared here. nixos and
+  # nix-darwin declare both themselves, and a second declaration is a hard
+  # evaluation error, so declaring them in the shared options file breaks every
+  # host on those two backends. They live in ./assertions.nix, imported only by
+  # the backend that has no platform module to supply them.
 
   options.nixfleet = {
     # Host identification
@@ -331,6 +296,7 @@ in
         type = types.enum [
           "ubuntu"
           "nixos"
+          "darwin"
           "dgx"
           "synology"
         ];

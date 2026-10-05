@@ -139,8 +139,9 @@
     };
   };
 
-  # Security settings
-  security.pam.enableSudoTouchIdAuth = true;
+  # Touch ID for sudo. Renamed upstream: security.pam.enableSudoTouchIdAuth
+  # was removed, and the per-service form is what nix-darwin takes now.
+  security.pam.services.sudo_local.touchIdAuth = true;
 
   # Nix settings
   nix.settings = {
@@ -162,6 +163,11 @@
 
   # Shell configuration
   programs.zsh.enable = true;
+
+  # The user system.defaults above apply to. nix-darwin used to write them
+  # for whoever ran darwin-rebuild, which does not survive being driven over
+  # SSH by NixFleet, so it is now required to be explicit.
+  system.primaryUser = "ztaylor";
 
   # Required for nix-darwin
   system.stateVersion = 4;

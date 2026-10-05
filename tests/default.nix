@@ -8,7 +8,9 @@
   lib,
   pkgs,
   mkNixFleetConfiguration,
+  mkDarwinFleetConfiguration,
   hostConfigs,
+  hostConfigsDarwin,
 }:
 
 let
@@ -136,8 +138,118 @@ let
 
   dnsWaitFor = host: "until getent hosts ${host} >/dev/null 2>&1; do sleep 2; done";
 
+  # --- darwin ---------------------------------------------------------------
+  #
+  # Compile a darwin host and hand back the assertion messages that failed.
+  # The backend's whole contract now is "refuse the things you cannot do, by
+  # name", so the messages are the behaviour under test.
+  darwinFailures =
+    modules:
+    map (a: a.message) (
+      lib.filter (a: !a.assertion)
+        (mkDarwinFleetConfiguration {
+          modules = [
+            {
+              nixfleet.host = {
+                name = "test-mac";
+                base = "darwin";
+                addr = "127.0.0.1";
+              };
+              system.stateVersion = 4;
+            }
+          ]
+          ++ modules;
+        }).config.assertions
+    );
+
+  failsWith = modules: needle: lib.any (m: hasSubstring m needle) (darwinFailures modules);
+
 in
 {
+  # Portable: needs no nix-darwin, so it runs in CI (linux) too.
+  darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {
+    # `darwin` was missing from the enum, so hosts/mac-1.nix could not be
+    # evaluated by anything — the base the Go side has always had a case for
+    # was not expressible in a host config.
+    # Reading the option back is the test: the enum rejecting "darwin" is an
+    # option-type error raised when the value is forced, not a silent default.
+    "host.base accepts darwin" =
+      (mkNixFleetConfiguration {
+        modules = [
+          {
+            nixfleet.host = {
+              name = "test-mac";
+              base = "darwin";
+              addr = "127.0.0.1";
+            };
+          }
+        ];
+      }).config.nixfleet.host.base == "darwin";
+  };
+}
+// lib.optionalAttrs pkgs.stdenv.isDarwin {
+  # These evaluate a real nix-darwin system, which only works on a darwin
+  # builder. CI is linux-only, so they run on a dev Mac via `nix flake check`
+  # rather than in the pipeline.
+  darwin-host-evaluates = mkCheck "darwin-host-evaluates" {
+    # The whole darwin path was unreachable: `assertions` collided with
+    # nix-darwin's own declaration, `darwin` was not in the base enum, and the
+    # etc translation passed a null `source` to an option typed as an absolute
+    # path. Each one was a hard eval error, so no darwin host had ever been
+    # built.
+    "the shipped darwin host evaluates" =
+      lib.isString hostConfigsDarwin.mac-1.system.drvPath && hostConfigsDarwin.mac-1.system.drvPath != "";
+
+    "a minimal darwin host raises no assertions" = darwinFailures [ ] == [ ];
+  };
+
+  darwin-refuses-what-it-cannot-do = mkCheck "darwin-refuses-what-it-cannot-do" {
+    # Each of these used to be dropped or mistranslated in silence, which on a
+    # deployment tool means the apply succeeds and the host is not what the
+    # config says.
+    #
+    # Units are the worst of them: the old translation read `enabled` and threw
+    # the unit body away, compiling every declared service to a plist with no
+    # program to run.
+    "systemd units are refused by name" = failsWith [
+      {
+        nixfleet.systemd.units."web.service" = {
+          enabled = true;
+          text = "[Service]\nExecStart=/bin/true";
+        };
+      }
+    ] "web.service";
+
+    "files outside /etc are refused by name" = failsWith [
+      { nixfleet.files."/opt/app/config.json".text = "{}"; }
+    ] "/opt/app/config.json";
+
+    # environment.etc deploys store symlinks, so a declared mode or owner is
+    # not what lands on disk.
+    "a file asking for a mode it cannot get is refused" =
+      let
+        modules = [
+          {
+            nixfleet.files."/etc/app.conf" = {
+              text = "x";
+              mode = "0600";
+            };
+          }
+        ];
+      in
+      failsWith modules "cannot set mode/owner/group" && failsWith modules "/etc/app.conf";
+
+    "apt is refused" = failsWith [ { nixfleet.apt.packages = [ "nginx" ]; } ] "macOS has no apt";
+
+    # A plain /etc file with default permissions is the supported case and must
+    # still go through.
+    "an ordinary /etc file is accepted" =
+      darwinFailures [
+        { nixfleet.files."/etc/app.conf".text = "x"; }
+      ] == [ ];
+  };
+}
+// {
   dsv4-waits-for-dns = mkCheck "dsv4-waits-for-dns" {
     # network-online.target does not imply name resolution: on DGX OS
     # NetworkManager-wait-online is disabled, so the target is reached
