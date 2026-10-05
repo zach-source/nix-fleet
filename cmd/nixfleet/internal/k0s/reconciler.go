@@ -58,7 +58,7 @@ type ParsedK0sConfig struct {
 }
 
 // IsK0sEnabled checks if k0s is running on the host
-func (r *Reconciler) IsK0sEnabled(ctx context.Context, client *ssh.Client) bool {
+func (r *Reconciler) IsK0sEnabled(ctx context.Context, client state.Execer) bool {
 	result, err := client.Exec(ctx, "systemctl is-active k0scontroller.service 2>/dev/null || systemctl is-active k0sworker.service 2>/dev/null")
 	if err != nil || result.ExitCode != 0 {
 		return false
@@ -67,7 +67,7 @@ func (r *Reconciler) IsK0sEnabled(ctx context.Context, client *ssh.Client) bool 
 }
 
 // ParseCurrentConfig reads and parses the current k0s configuration
-func (r *Reconciler) ParseCurrentConfig(ctx context.Context, client *ssh.Client) (*ParsedK0sConfig, error) {
+func (r *Reconciler) ParseCurrentConfig(ctx context.Context, client state.Execer) (*ParsedK0sConfig, error) {
 	// Read k0s.yaml
 	result, err := client.Exec(ctx, fmt.Sprintf("cat %s 2>/dev/null", K0sConfigPath))
 	if err != nil || result.ExitCode != 0 {
@@ -166,7 +166,7 @@ func (r *Reconciler) parseManifestResources(file, content string) []state.K0sMan
 }
 
 // Reconcile compares previous and current state, cleaning up orphaned resources
-func (r *Reconciler) Reconcile(ctx context.Context, client *ssh.Client, previousState *state.K0sState, dryRun bool) (*ReconcileResult, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, client state.Execer, previousState *state.K0sState, dryRun bool) (*ReconcileResult, error) {
 	result := &ReconcileResult{Success: true}
 
 	// Parse current config
@@ -200,17 +200,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, client *ssh.Client, previous
 		}
 	}
 
-	// Find orphaned manifest resources
+	// Find orphaned manifest resources. Keep the resource alongside its key:
+	// indexing previousState.Manifests by the position in the filtered orphan
+	// list deleted whatever resource happened to sit at that index.
 	currentResources := make(map[string]bool)
 	for _, res := range currentConfig.Manifests {
 		key := fmt.Sprintf("%s/%s/%s", res.Kind, res.Namespace, res.Name)
 		currentResources[key] = true
 	}
 
+	orphans := make(map[string]state.K0sManifestState)
 	for _, prevRes := range previousState.Manifests {
 		key := fmt.Sprintf("%s/%s/%s", prevRes.Kind, prevRes.Namespace, prevRes.Name)
 		if !currentResources[key] {
 			result.OrphanedResources = append(result.OrphanedResources, key)
+			orphans[key] = prevRes
 		}
 	}
 
@@ -230,8 +234,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, client *ssh.Client, previous
 	}
 
 	// Delete orphaned manifest resources
-	for i, resKey := range result.OrphanedResources {
-		prevRes := previousState.Manifests[i]
+	for _, resKey := range result.OrphanedResources {
+		prevRes := orphans[resKey]
 
 		if dryRun {
 			log.Printf("[k0s] Would delete orphaned resource: %s", resKey)
@@ -254,24 +258,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, client *ssh.Client, previous
 }
 
 // deleteHelmChart deletes a Helm chart and its k0s Chart CR
-func (r *Reconciler) deleteHelmChart(ctx context.Context, client *ssh.Client, chartName string) error {
+func (r *Reconciler) deleteHelmChart(ctx context.Context, client state.Execer, chartName string) error {
 	// Find the namespace from helm releases
-	nsResult, _ := client.ExecSudo(ctx, fmt.Sprintf(
+	nsResult, err := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl get chart k0s-addon-chart-%s -n kube-system -o jsonpath='{.spec.namespace}' 2>/dev/null || echo ''",
 		K0sPath, chartName))
+	if err != nil {
+		return fmt.Errorf("looking up chart namespace: %w", err)
+	}
+	if nsResult == nil || nsResult.ExitCode != 0 {
+		return fmt.Errorf("looking up chart namespace: kubectl exit %d", execExitCode(nsResult))
+	}
 
 	namespace := strings.TrimSpace(strings.Trim(nsResult.Stdout, "'"))
 	if namespace == "" {
 		namespace = "kube-system" // fallback
 	}
 
-	// Delete helm release secrets (to fully clean up)
-	_, _ = client.ExecSudo(ctx, fmt.Sprintf(
+	// Delete helm release secrets (to fully clean up). Best effort: a leftover
+	// release secret is untidy, not a reason to abort the chart deletion.
+	if _, err := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl delete secret -n %s -l owner=helm,name=%s --ignore-not-found",
-		K0sPath, namespace, chartName))
+		K0sPath, namespace, chartName)); err != nil {
+		log.Printf("[k0s] Warning: deleting helm release secrets for %s: %v", chartName, err)
+	}
 
 	// Delete the k0s Chart CR
-	_, err := client.ExecSudo(ctx, fmt.Sprintf(
+	_, err = client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl delete chart k0s-addon-chart-%s -n kube-system --ignore-not-found",
 		K0sPath, chartName))
 	if err != nil {
@@ -280,22 +293,62 @@ func (r *Reconciler) deleteHelmChart(ctx context.Context, client *ssh.Client, ch
 
 	// Delete namespace if it's empty (and not kube-system)
 	if namespace != "kube-system" && namespace != "default" && namespace != "cert-manager" {
-		// Check if namespace is empty
-		podsResult, _ := client.ExecSudo(ctx, fmt.Sprintf(
-			"%s kubectl get pods -n %s --no-headers 2>/dev/null | wc -l",
-			K0sPath, namespace))
-		if strings.TrimSpace(podsResult.Stdout) == "0" {
-			_, _ = client.ExecSudo(ctx, fmt.Sprintf(
+		empty, err := r.namespaceIsEmpty(ctx, client, namespace)
+		if err != nil {
+			// Deleting a namespace we could not prove empty destroys whatever is
+			// still running in it, so give up on the namespace instead.
+			log.Printf("[k0s] Not deleting namespace %s: %v", namespace, err)
+			return nil
+		}
+		if empty {
+			if _, err := client.ExecSudo(ctx, fmt.Sprintf(
 				"%s kubectl delete namespace %s --ignore-not-found",
-				K0sPath, namespace))
+				K0sPath, namespace)); err != nil {
+				return fmt.Errorf("deleting namespace %s: %w", namespace, err)
+			}
 		}
 	}
 
 	return nil
 }
 
+// namespaceIsEmpty reports whether a namespace holds no pods.
+//
+// The previous form was `kubectl get pods ... 2>/dev/null | wc -l`, compared
+// against "0". A pipeline's exit status is wc's, which is always 0, so an
+// unreachable API server produced an empty listing and counted as zero pods —
+// and the namespace was deleted. Ask kubectl directly and surface its failure.
+func (r *Reconciler) namespaceIsEmpty(ctx context.Context, client state.Execer, namespace string) (bool, error) {
+	result, err := client.ExecSudo(ctx, fmt.Sprintf(
+		"%s kubectl get pods -n %s --no-headers -o name", K0sPath, namespace))
+	if err != nil {
+		return false, fmt.Errorf("listing pods: %w", err)
+	}
+	if result == nil || result.ExitCode != 0 {
+		return false, fmt.Errorf("listing pods: kubectl exit %d: %s",
+			execExitCode(result), strings.TrimSpace(execStderr(result)))
+	}
+	return strings.TrimSpace(result.Stdout) == "", nil
+}
+
+// execExitCode reads the exit code of a possibly-nil result.
+func execExitCode(r *ssh.ExecResult) int {
+	if r == nil {
+		return -1
+	}
+	return r.ExitCode
+}
+
+// execStderr reads the stderr of a possibly-nil result.
+func execStderr(r *ssh.ExecResult) string {
+	if r == nil {
+		return ""
+	}
+	return r.Stderr
+}
+
 // deleteResource deletes a Kubernetes resource
-func (r *Reconciler) deleteResource(ctx context.Context, client *ssh.Client, res state.K0sManifestState) error {
+func (r *Reconciler) deleteResource(ctx context.Context, client state.Execer, res state.K0sManifestState) error {
 	var cmd string
 	if res.Namespace != "" {
 		cmd = fmt.Sprintf("%s kubectl delete %s %s -n %s --ignore-not-found",
@@ -316,7 +369,7 @@ func (r *Reconciler) deleteResource(ctx context.Context, client *ssh.Client, res
 }
 
 // BuildNewState creates a new K0sState from the current config
-func (r *Reconciler) BuildNewState(ctx context.Context, client *ssh.Client) (*state.K0sState, error) {
+func (r *Reconciler) BuildNewState(ctx context.Context, client state.Execer) (*state.K0sState, error) {
 	if !r.IsK0sEnabled(ctx, client) {
 		return &state.K0sState{Enabled: false}, nil
 	}
@@ -336,7 +389,7 @@ func (r *Reconciler) BuildNewState(ctx context.Context, client *ssh.Client) (*st
 }
 
 // UpdateState updates the host state with current k0s state
-func (r *Reconciler) UpdateState(ctx context.Context, client *ssh.Client) error {
+func (r *Reconciler) UpdateState(ctx context.Context, client state.Execer) error {
 	hostState, err := r.stateMgr.ReadState(ctx, client)
 	if err != nil {
 		hostState = state.NewHostState("", "")
@@ -352,7 +405,7 @@ func (r *Reconciler) UpdateState(ctx context.Context, client *ssh.Client) error 
 }
 
 // GetStatus returns the current k0s cluster status
-func (r *Reconciler) GetStatus(ctx context.Context, client *ssh.Client) (*K0sStatus, error) {
+func (r *Reconciler) GetStatus(ctx context.Context, client state.Execer) (*K0sStatus, error) {
 	status := &K0sStatus{
 		Enabled: r.IsK0sEnabled(ctx, client),
 	}
@@ -362,8 +415,8 @@ func (r *Reconciler) GetStatus(ctx context.Context, client *ssh.Client) (*K0sSta
 	}
 
 	// Get node status
-	nodesResult, _ := client.ExecSudo(ctx, fmt.Sprintf("%s kubectl get nodes -o json", K0sPath))
-	if nodesResult.ExitCode == 0 {
+	nodesResult, err := client.ExecSudo(ctx, fmt.Sprintf("%s kubectl get nodes -o json", K0sPath))
+	if err == nil && nodesResult != nil && nodesResult.ExitCode == 0 {
 		var nodeList struct {
 			Items []struct {
 				Metadata struct {
@@ -392,10 +445,10 @@ func (r *Reconciler) GetStatus(ctx context.Context, client *ssh.Client) (*K0sSta
 	}
 
 	// Get helm releases
-	chartsResult, _ := client.ExecSudo(ctx, fmt.Sprintf(
+	chartsResult, err := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl get chart -n kube-system -o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.status.releaseName}{\" \"}{.status.appVersion}{\"\\n\"}{end}'",
 		K0sPath))
-	if chartsResult.ExitCode == 0 {
+	if err == nil && chartsResult != nil && chartsResult.ExitCode == 0 {
 		for _, line := range strings.Split(chartsResult.Stdout, "\n") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
@@ -413,10 +466,10 @@ func (r *Reconciler) GetStatus(ctx context.Context, client *ssh.Client) (*K0sSta
 	}
 
 	// Get CiliumLoadBalancerIPPool
-	poolsResult, _ := client.ExecSudo(ctx, fmt.Sprintf(
+	poolsResult, err := client.ExecSudo(ctx, fmt.Sprintf(
 		"%s kubectl get ciliumloadbalancerippool -o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.blocks[0].cidr}{\"\\n\"}{end}'",
 		K0sPath))
-	if poolsResult.ExitCode == 0 {
+	if err == nil && poolsResult != nil && poolsResult.ExitCode == 0 {
 		for _, line := range strings.Split(poolsResult.Stdout, "\n") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
