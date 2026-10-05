@@ -174,6 +174,14 @@ func NewHostState(hostname, base string) *HostState {
 	}
 }
 
+// Execer is the subset of *ssh.Client that state operations use. Taking the
+// interface rather than the concrete client lets tests drive these methods
+// with ssh.MockClient.
+type Execer interface {
+	Exec(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+	ExecSudo(ctx context.Context, cmd string) (*ssh.ExecResult, error)
+}
+
 // Manager handles state operations on remote hosts
 type Manager struct{}
 
@@ -183,7 +191,7 @@ func NewManager() *Manager {
 }
 
 // ReadState reads the current state from a host
-func (m *Manager) ReadState(ctx context.Context, client *ssh.Client) (*HostState, error) {
+func (m *Manager) ReadState(ctx context.Context, client Execer) (*HostState, error) {
 	// Read with sudo, mirroring WriteState's `sudo tee`. The state dir is
 	// root-owned and bootstrap-ubuntu.sh creates it 0750, so an unprivileged
 	// cat fails — and it fails *silently*, because the `|| echo '{}'` fallback
@@ -213,7 +221,7 @@ func (m *Manager) ReadState(ctx context.Context, client *ssh.Client) (*HostState
 }
 
 // WriteState writes state to a host
-func (m *Manager) WriteState(ctx context.Context, client *ssh.Client, state *HostState) error {
+func (m *Manager) WriteState(ctx context.Context, client Execer, state *HostState) error {
 	state.UpdatedAt = time.Now()
 
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -243,7 +251,7 @@ func (m *Manager) WriteState(ctx context.Context, client *ssh.Client, state *Hos
 }
 
 // UpdateAfterApply updates state after a successful apply
-func (m *Manager) UpdateAfterApply(ctx context.Context, client *ssh.Client, storePath, manifestHash string, generation int, duration time.Duration) error {
+func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath, manifestHash string, generation int, duration time.Duration) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
 		state = NewHostState("", "")
@@ -259,7 +267,7 @@ func (m *Manager) UpdateAfterApply(ctx context.Context, client *ssh.Client, stor
 }
 
 // UpdateRebootStatus updates the reboot status in state
-func (m *Manager) UpdateRebootStatus(ctx context.Context, client *ssh.Client, required bool, packages []string) error {
+func (m *Manager) UpdateRebootStatus(ctx context.Context, client Execer, required bool, packages []string) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
 		state = NewHostState("", "")
@@ -272,7 +280,7 @@ func (m *Manager) UpdateRebootStatus(ctx context.Context, client *ssh.Client, re
 }
 
 // UpdateServiceHealth updates service health status
-func (m *Manager) UpdateServiceHealth(ctx context.Context, client *ssh.Client, services map[string]ServiceStatus) error {
+func (m *Manager) UpdateServiceHealth(ctx context.Context, client Execer, services map[string]ServiceStatus) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
 		state = NewHostState("", "")
@@ -284,7 +292,7 @@ func (m *Manager) UpdateServiceHealth(ctx context.Context, client *ssh.Client, s
 }
 
 // CheckDrift compares managed files against their expected state
-func (m *Manager) CheckDrift(ctx context.Context, client *ssh.Client, expectedFiles map[string]FileState) ([]DriftResult, error) {
+func (m *Manager) CheckDrift(ctx context.Context, client Execer, expectedFiles map[string]FileState) ([]DriftResult, error) {
 	var results []DriftResult
 
 	for path, expected := range expectedFiles {
@@ -293,22 +301,34 @@ func (m *Manager) CheckDrift(ctx context.Context, client *ssh.Client, expectedFi
 			Expected: expected,
 		}
 
-		// Get current file hash
-		hashCmd := fmt.Sprintf("sha256sum %s 2>/dev/null | cut -d' ' -f1", path)
+		// Get current file hash. Do not pipe through `cut`: the exit status of a
+		// pipeline is the *last* command's, and cut exits 0 for empty input, so
+		// a missing file came back as a successful empty hash and was reported
+		// as content drift. No file could ever reach DriftStatusMissing.
+		hashCmd := fmt.Sprintf("sha256sum %s 2>/dev/null", path)
 		hashResult, err := client.Exec(ctx, hashCmd)
-		if err != nil || hashResult.ExitCode != 0 {
+		if err != nil || hashResult == nil || hashResult.ExitCode != 0 {
 			result.Status = DriftStatusMissing
 			results = append(results, result)
 			continue
 		}
 
-		currentHash := strings.TrimSpace(hashResult.Stdout)
+		// Output is "<hash>  <path>"; an empty first field means sha256sum
+		// printed nothing despite exiting 0, which we also treat as missing.
+		fields := strings.Fields(hashResult.Stdout)
+		if len(fields) == 0 {
+			result.Status = DriftStatusMissing
+			results = append(results, result)
+			continue
+		}
+
+		currentHash := fields[0]
 		result.Actual.Hash = currentHash
 
 		// Get current permissions
 		statCmd := fmt.Sprintf("stat -c '%%a %%U %%G' %s 2>/dev/null", path)
 		statResult, err := client.Exec(ctx, statCmd)
-		if err == nil && statResult.ExitCode == 0 {
+		if err == nil && statResult != nil && statResult.ExitCode == 0 {
 			parts := strings.Fields(statResult.Stdout)
 			if len(parts) >= 3 {
 				result.Actual.Mode = parts[0]
@@ -358,7 +378,7 @@ func (r DriftResult) HasDrift() bool {
 }
 
 // FixDrift restores a file to its expected state
-func (m *Manager) FixDrift(ctx context.Context, client *ssh.Client, drift DriftResult, content []byte) error {
+func (m *Manager) FixDrift(ctx context.Context, client Execer, drift DriftResult, content []byte) error {
 	if drift.Status == DriftStatusOK {
 		return nil
 	}
@@ -385,7 +405,7 @@ func (m *Manager) FixDrift(ctx context.Context, client *ssh.Client, drift DriftR
 }
 
 // GatherOSInfo collects operating system information from a remote host
-func (m *Manager) GatherOSInfo(ctx context.Context, client *ssh.Client) (*OSInfo, error) {
+func (m *Manager) GatherOSInfo(ctx context.Context, client Execer) (*OSInfo, error) {
 	info := &OSInfo{}
 
 	// Parse /etc/os-release for distribution info
@@ -441,7 +461,7 @@ func (m *Manager) GatherOSInfo(ctx context.Context, client *ssh.Client) (*OSInfo
 }
 
 // UpdateOSInfo updates the OS information in state
-func (m *Manager) UpdateOSInfo(ctx context.Context, client *ssh.Client) error {
+func (m *Manager) UpdateOSInfo(ctx context.Context, client Execer) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
 		state = NewHostState("", "")
