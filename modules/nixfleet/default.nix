@@ -9,6 +9,10 @@
 {
   imports = [
     ./options.nix
+    # Supplies `assertions`/`warnings`, which bare evalModules has no platform
+    # module to provide. nixos and nix-darwin bring their own, so they must not
+    # import this.
+    ./assertions.nix
     ./synology.nix
     ../../backends/ubuntu/compile.nix
   ];
