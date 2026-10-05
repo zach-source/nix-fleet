@@ -129,17 +129,17 @@ chmod 750 /var/lib/nixfleet
 chmod 700 /etc/.nixfleet/staging
 chmod 700 /run/nixfleet-secrets
 
+# Keys match the Go schema in cmd/nixfleet/internal/state (HostState) -- the
+# single schema for this file.
 cat > /var/lib/nixfleet/state.json <<STATE
 {
-  "bootstrapped": "$(date -Iseconds)",
-  "generation": 0,
-  "manifestHash": null,
-  "lastApply": null,
-  "osUpdate": {
-    "lastRun": null,
-    "lastPackages": []
-  },
-  "rebootNeeded": false
+  "hostname": "$(hostname)",
+  "base": "ubuntu",
+  "current_generation": 0,
+  "manifest_hash": "",
+  "reboot_required": false,
+  "state_version": 1,
+  "updated_at": "$(date -Iseconds)"
 }
 STATE
 

@@ -285,10 +285,14 @@ func (s *Server) gatherStateInfo() *StateInfo {
 		return nil
 	}
 
+	// Field names are the Go state schema (internal/state.HostState), which is
+	// what both nixfleet and the activation script write. The response struct
+	// above keeps its own camelCase names: that is this server's HTTP API, not
+	// the on-disk schema.
 	var raw struct {
-		Generation   int    `json:"generation"`
-		ManifestHash string `json:"manifestHash"`
-		LastApply    string `json:"lastApply"`
+		Generation   int    `json:"current_generation"`
+		ManifestHash string `json:"manifest_hash"`
+		LastApply    string `json:"last_apply"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
