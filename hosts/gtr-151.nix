@@ -24,13 +24,14 @@
       addr = "192.168.3.132";
     };
 
-    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
+    # k0s worker, declaratively managed. system-reserved=72Gi -> ~50Gi k8s
     # allocatable for builds and hosting. Was 78Gi (~44Gi allocatable) while
-    # this box ran several models; one model per box since 2026-10-05 needs
-    # ~30-45Gi, and 56Gi keeps ~10-15Gi of host headroom on top of it.
+    # this box ran several models. One model with 4 slots on a unified 1M-token
+    # KV pool measured ~59-61Gi of GPU memory (2026-10-05); 72Gi covers that
+    # plus host headroom. gtr-150/153 run smaller footprints and stay at 56Gi.
     k0s.worker = {
       enable = true;
-      systemReservedMemory = "56Gi";
+      systemReservedMemory = "72Gi";
     };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
