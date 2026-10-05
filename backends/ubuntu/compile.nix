@@ -555,6 +555,20 @@ let
     log "Starting NixFleet activation..."
     log "Manifest hash: ${manifestHash}"
 
+    # Step 0: Run pre-activate hook
+    #
+    # Ordered ahead of everything else because that is what the option
+    # promises, and because the one in-tree caller depends on it:
+    # modules/k0s.nix installs the pinned k0s binary here, and
+    # k0sworker.service (deployed in step 7, started in step 9) carries
+    # ConditionFileIsExecutable=/usr/local/bin/k0s. Running the hook later —
+    # or, as this backend used to, not at all — leaves the unit skipped on
+    # every fresh worker. nixos and darwin have always honoured it.
+    ${optionalString (cfg.hooks.preActivate != "") ''
+      log "Running pre-activate hook..."
+      ${cfg.hooks.preActivate}
+    ''}
+
     # Step 1: Create/update the system profile
     #
     # The profile points at the system, not at the packages closure. Pointing
