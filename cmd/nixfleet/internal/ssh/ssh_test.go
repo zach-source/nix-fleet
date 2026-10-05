@@ -3,7 +3,10 @@ package ssh
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMockClient(t *testing.T) {
@@ -262,5 +265,48 @@ func TestExecResult(t *testing.T) {
 	}
 	if result.ExitCode != 1 {
 		t.Errorf("Unexpected exit code: %d", result.ExitCode)
+	}
+}
+
+// TestDrainOutputStderrFirst reproduces the exec deadlock: a remote that fills
+// its stderr window stops producing stdout until stderr is drained. io.Pipe is
+// unbuffered, so each write blocks until it is read -- reading the two streams
+// one after the other hangs here forever.
+func TestDrainOutputStderrFirst(t *testing.T) {
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+
+	go func() {
+		_, _ = io.WriteString(stderrW, "warning: noisy build\n")
+		stderrW.Close()
+		_, _ = io.WriteString(stdoutW, "done\n")
+		stdoutW.Close()
+	}()
+
+	select {
+	case out := <-drainOutput(stdoutR, stderrR):
+		if string(out.stdout) != "done\n" {
+			t.Errorf("stdout = %q, want %q", out.stdout, "done\n")
+		}
+		if string(out.stderr) != "warning: noisy build\n" {
+			t.Errorf("stderr = %q, want %q", out.stderr, "warning: noisy build\n")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("drainOutput deadlocked: stderr was not read until stdout finished")
+	}
+}
+
+// TestDrainOutputBufferedOnAbandon covers the cancelled-context path: Exec
+// returns without receiving, so delivery must not block the goroutine forever.
+func TestDrainOutputBufferedOnAbandon(t *testing.T) {
+	outputs := drainOutput(strings.NewReader("out"), strings.NewReader("err"))
+
+	// Nobody receives for a moment; the send must still complete.
+	out := <-outputs
+	if string(out.stdout) != "out" || string(out.stderr) != "err" {
+		t.Errorf("got stdout=%q stderr=%q", out.stdout, out.stderr)
+	}
+	if cap(outputs) < 1 {
+		t.Error("outputs channel must be buffered so an abandoned drain can finish")
 	}
 }
