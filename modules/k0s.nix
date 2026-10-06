@@ -25,7 +25,7 @@ in
 
     version = lib.mkOption {
       type = lib.types.str;
-      default = "v1.35.8+k0s.1";
+      default = "v1.36.4+k0s.1";
       description = "k0s version installed at /usr/local/bin/k0s (downloaded if missing/mismatched).";
     };
 
