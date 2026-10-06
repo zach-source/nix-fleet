@@ -25,7 +25,7 @@ in
 
     version = lib.mkOption {
       type = lib.types.str;
-      default = "v1.34.2+k0s.0";
+      default = "v1.35.8+k0s.1";
       description = "k0s version installed at /usr/local/bin/k0s (downloaded if missing/mismatched).";
     };
 
@@ -74,12 +74,15 @@ in
 
     # The worker unit (mirrors `k0s install worker`, with the args templated).
     # nixfleet restarts it on text change → re-rolls the kubelet with the new cap.
+    # The version is in the text for the same reason: preActivate only swaps
+    # the binary, and without a unit change the old k0s would keep running.
     nixfleet.systemd.units."k0sworker.service" = {
       enabled = true;
       text = ''
         [Unit]
         Description=k0s - Zero Friction Kubernetes
         Documentation=https://docs.k0sproject.io
+        X-K0s-Version=${cfg.version}
         ConditionFileIsExecutable=/usr/local/bin/k0s
         After=network-online.target
         Wants=network-online.target
