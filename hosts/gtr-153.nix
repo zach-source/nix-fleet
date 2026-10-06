@@ -1,6 +1,8 @@
 # GTR-153 — AMD Ryzen AI MAX+ 395 (192.168.3.130)
-# Qwopus3.5-9B-Coder + Judge0 code execution sandbox
-# 131GB unified VRAM, ROCm (stock lemonade build), gfx1151
+# The THINKING tier (2026-10-05): one model, Qwen3.8-27B dense with MTP
+# self-speculation and thinking on, plus the Judge0 code execution sandbox.
+# One model per box so the rest of the unified memory stays free for builds
+# and hosting.
 # Note: Judge0 runs via Docker Compose (needs privileged containers for isolate)
 # History: previously hosted MiniMax-M2.7 229B; removed to try DeepSeek
 # V4-Flash, which proved un-runnable on AMD (CUDA/Metal-only dsv4 ops).
@@ -26,9 +28,14 @@
       addr = "192.168.3.130";
     };
 
-    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
-    # allocatable (was an out-of-band 98Gi/24Gi); 78Gi stays for inference.
-    k0s.worker.enable = true;
+    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
+    # allocatable for builds and hosting. Was 78Gi (~44Gi allocatable) while
+    # this box ran several models; one model per box since 2026-10-05 needs
+    # ~30-45Gi, and 56Gi keeps ~10-15Gi of host headroom on top of it.
+    k0s.worker = {
+      enable = true;
+      systemReservedMemory = "56Gi";
+    };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
@@ -66,9 +73,6 @@
 
     modules.llmInference = {
       enable = true;
-      # 2026-07-26: Ornith-AEON abliterated REMOVED (was here) — replaced by
-      # HauhauCS-Aggressive-MTP (see below), deployed on this node + gtr-152.
-
       # Qwen3.8-27B DENSE — succeeds the Qwen3.6-27B that held this slot
       # (:8085) from 2026-07-17 until it was disabled 2026-07-27 for memory.
       # Same GGUF architecture string (`qwen35`) as the 3.6 it replaces, so the
@@ -87,7 +91,23 @@
         binary = "/opt/llama-rocm-latest/llama-server";
         ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8085;
-        ctxSize = 131072;
+        # 512K context on a natively-262K model: static YaRN, factor 2 — the
+        # factor Qwen's cards give for 524288. Same window on every gtr box
+        # (2026-10-05). Static YaRN applies at every length, so very short
+        # prompts may lose a little quality; drop the rope/yarn/override-kv
+        # flags and set ctxSize = 262144 to undo.
+        #
+        # 4 slots sharing ONE unified KV pool (--kv-unified): any request can
+        # still use the full 524288 window (the context_length override is the
+        # per-request cap), concurrent requests split the pool, and memory is
+        # the same as one pool of this size. Unified KV also turns on
+        # --cache-idle-slots, which llama-server otherwise disables: an idle
+        # slot's processed prompt is saved to the --cache-ram host cache
+        # (8 GiB default) and restored when that conversation returns, instead
+        # of re-prefilling it. Without it, a short request waited ~2 min behind
+        # an agent re-prefilling a 111k-token conversation (2026-10-05).
+        ctxSize = 524288;
+        parallel = 4;
         # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
         # `strings` on the file shows qwen35.nextn_predict_layers and
         # blk.64.nextn.* tensors. An earlier revision also passed
@@ -105,8 +125,8 @@
           budget = 2048;
         };
         extraFlags = [
-          # --fit off for the same reason as hauhaucs below: /srv is ZFS and the
-          # auto memory-fit step re-reads the whole GGUF to measure.
+          # --fit off: gtr-153's /srv is ZFS, and the auto memory-fit step
+          # re-reads the whole GGUF to measure (~8min cold load observed).
           "--fit"
           "off"
           # Qwen3.8 model card, thinking mode (3.6 used temp 0.6; 3.8 asks 1.0).
@@ -118,49 +138,18 @@
           "20"
           "--min-p"
           "0.0"
-        ];
-      };
-
-      # 2026-07-26: replaces the removed Ornith-AEON-abliterated service at
-      # the same port. New uncensored fine-tune: HauhauCS-Aggressive
-      # (wang-yang's MTP-grafted Q6_K_P — see gtr-152's sibling deploy for
-      # provenance). n_max=2 matches gtr-152 + this node's own qwen36-27b
-      # precedent (upstream benchmarked n_max=1-2 as the best operating
-      # point). UNVERIFIED on our gfx1151/ROCm hardware — watch startup logs,
-      # benchmark once live.
-      services.hauhaucs-uncensored = {
-        description = "Qwen3.6-35B-A3B Uncensored (HauhauCS-Aggressive) + MTP";
-        model = "/srv/models/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P-MTP.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
-        port = 8086;
-        # REVERTED 262144 -> 131072 (2026-07-26): the 256K bump pushed this
-        # node's swap to fully maxed (8.0Gi/8.0Gi) alongside qwen36-27b, with
-        # only ~14Gi system memory left. gtr-152 (more headroom) stays at
-        # 256K. If gtr-153 needs 256K again, free memory some other way
-        # first (see gtr-inference-fleet memory for options weighed).
-        ctxSize = 131072;
-        newCli = true;
-        mtp = {
-          nMax = 2;
-        };
-        reasoning = {
-          format = "deepseek";
-          budget = 2048;
-        };
-        # --fit off: gtr-153's /srv is ZFS; the auto memory-fit step re-reads
-        # the whole GGUF to measure (~8min cold load observed on the old
-        # Q8_0 Ornith AEON deploy here). Skip it — -ngl 99 with known-free
-        # GPU memory loads in seconds instead.
-        extraFlags = [
-          "--fit"
-          "off"
-          "--temp"
-          "0.6"
-          "--top-p"
-          "0.95"
-          "--top-k"
-          "20"
+          "--rope-scaling"
+          "yarn"
+          "--rope-scale"
+          "2"
+          "--yarn-orig-ctx"
+          "262144"
+          # llama-server caps every slot at the GGUF's declared training
+          # context ("exceeds the training context of the model - capping"),
+          # whatever the rope flags say, so declare the extended window too.
+          "--kv-unified"
+          "--override-kv"
+          "qwen35.context_length=int:524288"
         ];
       };
     };
@@ -175,23 +164,13 @@
       rules = [
         {
           from = "192.168.0.0/16";
-          port = 8086;
-          comment = "Ornith llama-server from LAN/cluster (LiteLLM gateway)";
-        }
-        {
-          from = "192.168.0.0/16";
           port = 8085;
           comment = "Qwen3.8-27B llama-server from LAN/cluster (LiteLLM gateway)";
         }
         # The LiteLLM pod egresses to this node WITHOUT SNAT (arrives with the
         # k8s pod-CIDR source, not the node IP), so the LAN rules above don't
         # match it and default-deny drops it. Allow the pod CIDR explicitly for
-        # both inference ports (same pattern as :18080 below).
-        {
-          from = "10.244.0.0/16";
-          port = 8086;
-          comment = "Ornith llama-server from k8s pod CIDR (LiteLLM)";
-        }
+        # the inference port (same pattern as :18080 below).
         {
           from = "10.244.0.0/16";
           port = 8085;

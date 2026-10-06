@@ -1,5 +1,8 @@
 # GTR-150 — AMD Ryzen AI MAX+ 395 (192.168.3.133)
-# Multi-role node: Primary LLM + embeddings + safety + code completion + orchestrator + whisper
+# The SUPPORT box (2026-10-05): embeddings, rerankers, the Qwen3Guard safety
+# classifier and whisper — the small models every other tier leans on. Its
+# chat LLM (Gemma 4 26B-A4B) was retired so each gtr box carries one big
+# model at most; the gateway's "gemma4" name is now an alias for gtr-151.
 # 131GB unified VRAM, ROCm (stock lemonade build), gfx1151
 { pkgs, ... }:
 
@@ -21,9 +24,14 @@
       addr = "192.168.3.133";
     };
 
-    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
-    # allocatable (was an out-of-band 98Gi/24Gi); 78Gi stays for inference.
-    k0s.worker.enable = true;
+    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
+    # allocatable for builds and hosting. Was 78Gi (~44Gi allocatable) while
+    # this box ran several models; one model per box since 2026-10-05 needs
+    # ~30-45Gi, and 56Gi keeps ~10-15Gi of host headroom on top of it.
+    k0s.worker = {
+      enable = true;
+      systemReservedMemory = "56Gi";
+    };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
     modules.iscsi.enable = true;
@@ -53,20 +61,6 @@
     modules.llmInference = {
       enable = true;
 
-      # Primary LLM
-      services.gemma4 = {
-        description = "Gemma 4 26B-A4B Q4_K_M";
-        model = "/srv/models/mythos/gemma-4-26B-A4B-it-Q4_K_M.gguf";
-        port = 8080;
-        ctxSize = 262144;
-        noMmap = true;
-        # Sampler nudge — see hosts/gtr-152.nix / docs/llm-proxy-usage.md.
-        extraFlags = [
-          "--min-p 0.01"
-          "--top-p 0.98"
-        ];
-      };
-
       # Embeddings (768-dim, for RAG pipelines)
       services.embeddings = {
         description = "Nomic Embed Text v2 MoE - Embeddings";
@@ -78,19 +72,9 @@
         rocmEnv = { }; # no ROCm env needed for small model
       };
 
-      # Safety filter
-      services.safety = {
-        description = "ShieldGemma 2B - Safety Filter";
-        model = "/srv/models/support/shieldgemma-2b-Q8_0.gguf";
-        port = 8091;
-        ctxSize = 8192;
-        parallel = 2;
-        rocmEnv = { };
-      };
-
-      # Modern safety classifier — Qwen3Guard-Gen-4B. Added alongside
-      # ShieldGemma (:8091, English-only, binary safe/unsafe) so existing
-      # safety consumers keep working until migrated. Qwen3Guard-Gen covers
+      # Safety classifier — Qwen3Guard-Gen-4B, the gateway's ENFORCED pre-call
+      # guardrail since 2026-10-05 (replaced ShieldGemma 2B, retired from this
+      # box the same day; English-only, one call per policy). Qwen3Guard-Gen covers
       # 119 languages with 3-tier severity (safe / controversial / unsafe)
       # and a richer category taxonomy. The "Gen" variant generates the
       # verdict via its chat template (jinja on); not a reasoning model.
