@@ -16,7 +16,14 @@
 let
   cfg = config.nixfleet.k0s.worker;
   kubeletExtraArgs = lib.concatStringsSep " " (
-    [ "--system-reserved=memory=${cfg.systemReservedMemory}" ] ++ cfg.extraKubeletArgs
+    [
+      "--system-reserved=memory=${cfg.systemReservedMemory}"
+      # Must match the apiserver's gates in gti's /etc/k0s/k0s.yaml. These
+      # Beta features are off by default in 1.36, and the kubelet serves the
+      # podCertificate / clusterTrustBundle projected volumes.
+      "--feature-gates=ClusterTrustBundle=true,ClusterTrustBundleProjection=true,PodCertificateRequest=true"
+    ]
+    ++ cfg.extraKubeletArgs
   );
 in
 {
