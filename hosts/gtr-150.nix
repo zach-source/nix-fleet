@@ -1,6 +1,7 @@
 # GTR-150 — AMD Ryzen AI MAX+ 395 (192.168.3.133)
 # The SUPPORT box (2026-10-05): embeddings, rerankers, the Qwen3Guard safety
-# classifier and whisper — the small models every other tier leans on. Its
+# classifier and whisper — the small models every other tier leans on —
+# plus Qwen3.8-27B, the thinking tier, since gtr-153 was drained (2026-10-10). Its
 # chat LLM (Gemma 4 26B-A4B) was retired so each gtr box carries one big
 # model at most; the gateway's "gemma4" name is now an alias for gtr-151.
 # 131GB unified VRAM, ROCm (stock lemonade build), gfx1151
@@ -24,13 +25,13 @@
       addr = "192.168.3.133";
     };
 
-    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
-    # allocatable for builds and hosting. Was 78Gi (~44Gi allocatable) while
-    # this box ran several models; one model per box since 2026-10-05 needs
-    # ~30-45Gi, and 56Gi keeps ~10-15Gi of host headroom on top of it.
+    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
+    # allocatable. Was 56Gi from 2026-10-05 while this box ran only the
+    # support models (~28Gi GTT); Qwen3.8-27B (~42Gi) moved here 2026-10-10,
+    # so inference is ~70Gi again.
     k0s.worker = {
       enable = true;
-      systemReservedMemory = "56Gi";
+      systemReservedMemory = "78Gi";
     };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
@@ -188,6 +189,98 @@
         extraFlags = [
           "--reranking"
           "--pooling rank"
+        ];
+      };
+
+      # Qwen3.8-27B DENSE — the THINKING tier. Moved here from gtr-153 on
+      # 2026-10-10 (that node is being removed); the only box with room for
+      # it unchanged (~42GiB GTT at 512K). Needs /opt/llama-rocm-latest,
+      # /opt/rocm-sdk AND /opt/build/llama.cpp/build-qwen36-spec/bin (the
+      # binary's RPATH — it loads its libllama/ggml .so files from there),
+      # all copied from gtr-153 out of band. The stock /opt/llama-rocm build
+      # the support models use is too old for qwen35 MTP.
+      #
+      # History: succeeds the Qwen3.6-27B that held this slot
+      # (:8085) from 2026-07-17 until it was disabled 2026-07-27 for memory.
+      # Same GGUF architecture string (`qwen35`) as the 3.6 it replaces, so the
+      # existing /opt/llama-rocm-latest build loads it unchanged; the old 3.6
+      # GGUF stays on disk for a one-line revert.
+      #
+      # Deliberately Q5_K_XL (20.2GB), not the Q6_K_XL (25.9GB) the 3.6 used:
+      # this node co-hosts hauhaucs-uncensored + k0s pods and was swap-thrashing
+      # at the 26GB size. ctxSize also stays at the slot's proven 131072 even
+      # though 3.8 is natively 262144 — raise it only after watching `free -g`
+      # here, since the hybrid Gated-DeltaNet arch keeps KV cheap (only 16 of 64
+      # layers are full attention) and the headroom may well be there.
+      services.qwen38-27b = {
+        description = "Qwen3.8-27B dense (quality/coding/agentic) + MTP self-speculation";
+        model = "/srv/models/Qwen3.8-27B-UD-Q5_K_XL.gguf";
+        binary = "/opt/llama-rocm-latest/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
+        # 8099, not the 8085 it used on gtr-153: ate-system's atelet DaemonSet
+        # (2026-10-06) claims hostPort 8085 on every k0s node, so the CNI
+        # forwards <node>:8085 to atelet and llama-server never sees a request.
+        # That silently broke this model on gtr-153 from 2026-10-06.
+        port = 8099;
+        # 512K context on a natively-262K model: static YaRN, factor 2 — the
+        # factor Qwen's cards give for 524288. Same window on every gtr box
+        # (2026-10-05). Static YaRN applies at every length, so very short
+        # prompts may lose a little quality; drop the rope/yarn/override-kv
+        # flags and set ctxSize = 262144 to undo.
+        #
+        # 4 slots sharing ONE unified KV pool (--kv-unified): any request can
+        # still use the full 524288 window (the context_length override is the
+        # per-request cap), concurrent requests split the pool, and memory is
+        # the same as one pool of this size. Unified KV also turns on
+        # --cache-idle-slots, which llama-server otherwise disables: an idle
+        # slot's processed prompt is saved to the --cache-ram host cache
+        # (8 GiB default) and restored when that conversation returns, instead
+        # of re-prefilling it. Without it, a short request waited ~2 min behind
+        # an agent re-prefilling a 111k-token conversation (2026-10-05).
+        ctxSize = 524288;
+        parallel = 4;
+        # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
+        # `strings` on the file shows qwen35.nextn_predict_layers and
+        # blk.64.nextn.* tensors. An earlier revision also passed
+        # `--spec-draft-model /srv/models/mtp-Qwen3.8-27B-Q8_0.gguf`, which
+        # overrode that built-in head with ggml-org's Q8_0 one against these
+        # Q5_K_XL weights. Measured draft acceptance was 57% on a code-gen
+        # benchmark, against 81% for gtr-151's single-repo merged-MTP build on
+        # the same workload. The external draft file is now dropped; it stays
+        # on disk but is unused.
+        mtp = {
+          nMax = 2;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        extraFlags = [
+          # --fit off: skip the auto memory-fit step, which re-reads the whole
+          # GGUF to measure (~8min cold load observed on gtr-153's ZFS /srv).
+          "--fit"
+          "off"
+          # Qwen3.8 model card, thinking mode (3.6 used temp 0.6; 3.8 asks 1.0).
+          "--temp"
+          "1.0"
+          "--top-p"
+          "0.95"
+          "--top-k"
+          "20"
+          "--min-p"
+          "0.0"
+          "--rope-scaling"
+          "yarn"
+          "--rope-scale"
+          "2"
+          "--yarn-orig-ctx"
+          "262144"
+          # llama-server caps every slot at the GGUF's declared training
+          # context ("exceeds the training context of the model - capping"),
+          # whatever the rope flags say, so declare the extended window too.
+          "--kv-unified"
+          "--override-kv"
+          "qwen35.context_length=int:524288"
         ];
       };
     };

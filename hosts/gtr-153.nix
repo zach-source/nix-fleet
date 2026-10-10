@@ -1,8 +1,6 @@
 # GTR-153 — AMD Ryzen AI MAX+ 395 (192.168.3.130)
-# The THINKING tier (2026-10-05): one model, Qwen3.8-27B dense with MTP
-# self-speculation and thinking on, plus the Judge0 code execution sandbox.
-# One model per box so the rest of the unified memory stays free for builds
-# and hosting.
+# BEING REMOVED from the fleet (2026-10-10): drained, and its one model
+# (Qwen3.8-27B, the thinking tier) moved to gtr-150.
 # Note: Judge0 runs via Docker Compose (needs privileged containers for isolate)
 # History: previously hosted MiniMax-M2.7 229B; removed to try DeepSeek
 # V4-Flash, which proved un-runnable on AMD (CUDA/Metal-only dsv4 ops).
@@ -73,85 +71,8 @@
 
     modules.llmInference = {
       enable = true;
-      # Qwen3.8-27B DENSE — succeeds the Qwen3.6-27B that held this slot
-      # (:8085) from 2026-07-17 until it was disabled 2026-07-27 for memory.
-      # Same GGUF architecture string (`qwen35`) as the 3.6 it replaces, so the
-      # existing /opt/llama-rocm-latest build loads it unchanged; the old 3.6
-      # GGUF stays on disk for a one-line revert.
-      #
-      # Deliberately Q5_K_XL (20.2GB), not the Q6_K_XL (25.9GB) the 3.6 used:
-      # this node co-hosts hauhaucs-uncensored + k0s pods and was swap-thrashing
-      # at the 26GB size. ctxSize also stays at the slot's proven 131072 even
-      # though 3.8 is natively 262144 — raise it only after watching `free -g`
-      # here, since the hybrid Gated-DeltaNet arch keeps KV cheap (only 16 of 64
-      # layers are full attention) and the headroom may well be there.
-      services.qwen38-27b = {
-        description = "Qwen3.8-27B dense (quality/coding/agentic) + MTP self-speculation";
-        model = "/srv/models/Qwen3.8-27B-UD-Q5_K_XL.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
-        port = 8085;
-        # 512K context on a natively-262K model: static YaRN, factor 2 — the
-        # factor Qwen's cards give for 524288. Same window on every gtr box
-        # (2026-10-05). Static YaRN applies at every length, so very short
-        # prompts may lose a little quality; drop the rope/yarn/override-kv
-        # flags and set ctxSize = 262144 to undo.
-        #
-        # 4 slots sharing ONE unified KV pool (--kv-unified): any request can
-        # still use the full 524288 window (the context_length override is the
-        # per-request cap), concurrent requests split the pool, and memory is
-        # the same as one pool of this size. Unified KV also turns on
-        # --cache-idle-slots, which llama-server otherwise disables: an idle
-        # slot's processed prompt is saved to the --cache-ram host cache
-        # (8 GiB default) and restored when that conversation returns, instead
-        # of re-prefilling it. Without it, a short request waited ~2 min behind
-        # an agent re-prefilling a 111k-token conversation (2026-10-05).
-        ctxSize = 524288;
-        parallel = 4;
-        # CORRECTION 2026-08-15: this GGUF already carries its own MTP head —
-        # `strings` on the file shows qwen35.nextn_predict_layers and
-        # blk.64.nextn.* tensors. An earlier revision also passed
-        # `--spec-draft-model /srv/models/mtp-Qwen3.8-27B-Q8_0.gguf`, which
-        # overrode that built-in head with ggml-org's Q8_0 one against these
-        # Q5_K_XL weights. Measured draft acceptance was 57% on a code-gen
-        # benchmark, against 81% for gtr-151's single-repo merged-MTP build on
-        # the same workload. The external draft file is now dropped; it stays
-        # on disk but is unused.
-        mtp = {
-          nMax = 2;
-        };
-        reasoning = {
-          format = "deepseek";
-          budget = 2048;
-        };
-        extraFlags = [
-          # --fit off: gtr-153's /srv is ZFS, and the auto memory-fit step
-          # re-reads the whole GGUF to measure (~8min cold load observed).
-          "--fit"
-          "off"
-          # Qwen3.8 model card, thinking mode (3.6 used temp 0.6; 3.8 asks 1.0).
-          "--temp"
-          "1.0"
-          "--top-p"
-          "0.95"
-          "--top-k"
-          "20"
-          "--min-p"
-          "0.0"
-          "--rope-scaling"
-          "yarn"
-          "--rope-scale"
-          "2"
-          "--yarn-orig-ctx"
-          "262144"
-          # llama-server caps every slot at the GGUF's declared training
-          # context ("exceeds the training context of the model - capping"),
-          # whatever the rope flags say, so declare the extended window too.
-          "--kv-unified"
-          "--override-kv"
-          "qwen35.context_length=int:524288"
-        ];
-      };
+      # Qwen3.8-27B (the thinking tier) MOVED to gtr-150 on 2026-10-10 so
+      # this node can be drained and removed from the fleet.
     };
 
     # UFW rules — gtr-153 has ufw active (vestigial k0s-node setup, unlike
@@ -162,20 +83,6 @@
     modules.ufw = {
       enable = true;
       rules = [
-        {
-          from = "192.168.0.0/16";
-          port = 8085;
-          comment = "Qwen3.8-27B llama-server from LAN/cluster (LiteLLM gateway)";
-        }
-        # The LiteLLM pod egresses to this node WITHOUT SNAT (arrives with the
-        # k8s pod-CIDR source, not the node IP), so the LAN rules above don't
-        # match it and default-deny drops it. Allow the pod CIDR explicitly for
-        # the inference port (same pattern as :18080 below).
-        {
-          from = "10.244.0.0/16";
-          port = 8085;
-          comment = "Qwen3.8-27B llama-server from k8s pod CIDR (LiteLLM)";
-        }
         {
           from = "10.244.0.0/16";
           port = 18080;
