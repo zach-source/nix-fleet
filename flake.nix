@@ -309,9 +309,6 @@
         gtr-152 = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr-152.nix ];
         };
-        gtr-153 = mkNixFleetConfiguration {
-          modules = [ ./hosts/gtr-153.nix ];
-        };
         # DGX Sparks are aarch64 (GB10 Grace Blackwell), so they must be
         # evaluated for aarch64-linux — the default x86_64-linux would resolve
         # the wrong nixpkgs and produce a closure the box cannot run.

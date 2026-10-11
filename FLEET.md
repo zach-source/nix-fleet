@@ -2,7 +2,7 @@
 
 ## Fleet Overview
 
-4x AMD Ryzen AI MAX+ 395 nodes (131GB unified VRAM each) running local LLM inference via llama.cpp with ROCm/HIP on Radeon 8060S iGPUs (gfx1151).
+3x AMD Ryzen AI MAX+ 395 nodes (131GB unified VRAM each) running local LLM inference via llama.cpp with ROCm/HIP on Radeon 8060S iGPUs (gfx1151).
 
 **Total fleet capacity: ~250 tok/s aggregate across 4 primary models.**
 
@@ -33,13 +33,6 @@ Custom llama.cpp fork: [github.com/zach-source/llama.cpp](https://github.com/zac
 |------|-------|------|----|
 | 8082 | Qwen3-Coder-30B-A3B + 0.6B draft | Fast coding | 95-124 tok/s |
 
-### gtr-153 (192.168.3.130) — SOTA + Code Sandbox
-
-| Port | Model | Role | TG |
-|------|-------|------|----|
-| 8082 | MiniMax-M2.7 229B IQ4_XS | SOTA 229B model | 23 tok/s |
-| 2358 | Judge0 | Code execution (47 langs) | — |
-
 ## AI Gateway
 
 **LiteLLM Proxy** at `https://llm.stigen.home` (k0s cluster)
@@ -57,7 +50,6 @@ API Key:  a virtual key, op://Personal Agents/litellm-<consumer>/credential
 | `qwen3.5-35b` | gtr-151:8084 | Quality reasoning |
 | `qwen3-coder` | gtr-152:8082 | Fast coding |
 | `gemma4` | gtr-150:8080 | General |
-| `minimax-m27` | gtr-153:8082 | SOTA |
 | `qwen-coder-1.5b` | gtr-150:8092 | Code completion |
 | `qwen3.5-9b` | gtr-150:8093 | Orchestration |
 | `shieldgemma` | gtr-150:8091 | Safety |
@@ -74,19 +66,6 @@ API Key:  a virtual key, op://Personal Agents/litellm-<consumer>/credential
 | LibreChat | `https://libre.stigen.home` | MCP agents, register |
 | LobeChat | `https://lobe.stigen.home` | Access code: `nixfleet` |
 
-## Code Execution
-
-Judge0 on gtr-153 via Docker Compose.
-
-```bash
-curl -X POST 'http://192.168.3.130:2358/submissions?wait=true' \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: nixfleet-judge0-auth" \
-  -d '{"language_id":71,"source_code":"print(42)","stdin":""}'
-```
-
-47 languages: Python, C, C++, Rust, Go, Java, JavaScript, Bash, and more.
-
 ## SSH Access
 
 All nodes use the `~/.ssh/nixfleet` key (ed25519, no passphrase, no 1Password dependency).
@@ -95,7 +74,6 @@ All nodes use the `~/.ssh/nixfleet` key (ed25519, no passphrase, no 1Password de
 ssh gtr-150  # via ~/.ssh/nixfleet-hosts.conf
 ssh gtr-151
 ssh gtr-152
-ssh gtr-153
 ```
 
 ## Benchmarks
