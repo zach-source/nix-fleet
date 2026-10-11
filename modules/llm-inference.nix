@@ -289,6 +289,9 @@ let
         ++ (
           if svc.newCli then
             [
+              # Current builds default --spec-type to none: a draft model is
+              # loaded but never used unless the type is named.
+              "--spec-type draft-simple"
               "--spec-draft-n-max ${toString svc.draft.max}"
               "--spec-draft-n-min ${toString svc.draft.min}"
             ]
