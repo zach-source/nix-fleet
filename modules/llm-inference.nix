@@ -4,7 +4,7 @@
 # Usage in host config:
 #   nixfleet.modules.llmInference = {
 #     enable = true;
-#     rocmLibPath = "/opt/llama-rocm";
+#     rocmLibPath = "/opt/llama-rocm-master";
 #     services.qwen35 = {
 #       model = "/srv/models/Qwen3.5-35B-A3B-Q4_K_M.gguf";
 #       port = 8084;
@@ -92,7 +92,15 @@ let
         };
         ldLibraryPath = mkOption {
           type = types.str;
-          default = cfg.rocmLibPath;
+          default = concatStringsSep ":" (
+            [ cfg.rocmLibPath ]
+            ++ map (d: "${cfg.rocmRuntimePath}/${d}") [
+              "lib"
+              "lib/rocm_sysdeps/lib"
+              "lib/llvm/lib"
+              "lib/host-math/lib"
+            ]
+          );
         };
 
         # Context & batching
@@ -166,7 +174,7 @@ let
         # MTP (Multi-Token Prediction) self-speculation — uses the model's
         # built-in MTP head instead of a separate draft model. Requires an
         # MTP GGUF and a build with `--spec-type draft-mtp` (llama.cpp b9180+,
-        # e.g. /opt/llama-rocm-latest). Mutually exclusive with `draft`;
+        # e.g. /opt/llama-rocm-master). Mutually exclusive with `draft`;
         # takes precedence if both are set.
         mtp = mkOption {
           type = types.nullOr (
@@ -190,9 +198,9 @@ let
 
         # Use the renamed llama.cpp speculation CLI (--spec-draft-n-max /
         # --spec-draft-n-min) for the classic draft path. Upstream removed
-        # --draft-max/--draft-min. Set true on hosts running the new build
-        # (/opt/llama-rocm-latest); leave false for old-build nodes
-        # (/opt/llama-rocm) that still accept the legacy flags.
+        # --draft-max/--draft-min. Set true on services using a draft model
+        # with the current build (/opt/llama-rocm-master); false only for a
+        # service pinned to an old build that still accepts the legacy flags.
         newCli = mkOption {
           type = types.bool;
           default = false;
@@ -255,7 +263,8 @@ let
         "--parallel ${toString svc.parallel}"
       ]
       ++ optional svc.flashAttn "--flash-attn on"
-      ++ optional svc.noMmap "--no-mmap"
+      # Current llama.cpp removed --no-mmap; --load-mode none is its replacement.
+      ++ optional svc.noMmap "--load-mode none"
       ++ optional svc.mlock "--mlock"
       ++ optional svc.jinja "--jinja"
       ++ optional svc.embedding "--embedding"
@@ -350,10 +359,20 @@ in
   options.nixfleet.modules.llmInference = {
     enable = mkEnableOption "LLM inference services";
 
+    # Fleet build since 2026-10-11: upstream llama.cpp c83f3058b for gfx1151,
+    # linked against TheRock 10.1. Both directories are copied onto each node
+    # out of band (not built by nix). Avoid HIP builds from 2026-07-16 to
+    # 2026-09-08: they return wrong output on gfx1151 (llama.cpp #27579, #28211).
     rocmLibPath = mkOption {
       type = types.str;
-      default = "/opt/llama-rocm";
+      default = "/opt/llama-rocm-master";
       description = "Path to ROCm-enabled llama.cpp libs";
+    };
+
+    rocmRuntimePath = mkOption {
+      type = types.str;
+      default = "/opt/rocm-10.1";
+      description = "ROCm (TheRock) runtime the llama.cpp build links against";
     };
 
     startStaggerSec = mkOption {

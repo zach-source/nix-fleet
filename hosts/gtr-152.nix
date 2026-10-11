@@ -2,7 +2,7 @@
 # The CODING tier (2026-10-05): one model, Ornith-1.5-35B-A3B with MTP
 # self-speculation and thinking on. One model per box so the rest of the
 # unified memory stays free for builds and hosting.
-# Build: /opt/llama-rocm-latest, ROCm 7.13 (TheRock), gfx1151.
+# Build: /opt/llama-rocm-master (llama.cpp c83f3058b), TheRock 10.1, gfx1151 (module default).
 { pkgs, ... }:
 
 {
@@ -69,8 +69,6 @@
       services.ornith = {
         description = "Ornith-1.5-35B-A3B coding agent + MTP self-speculation";
         model = "/srv/models/Ornith-1.5-35B-A3B-Q6_K.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8086;
         # 512K context on a natively-262K model: static YaRN, factor 2 — the
         # factor Qwen's cards give for 524288. Same window on every gtr box

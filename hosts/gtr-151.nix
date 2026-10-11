@@ -3,7 +3,7 @@
 # Qwen3.5-0.8B draft and thinking OFF by default — the fleet's "Haiku".
 # One model per box so the rest of the unified memory stays free for builds
 # and hosting. Qwen3.8-27B moved off this box (it now runs on gtr-150).
-# Build: /opt/llama-rocm-latest, ROCm 7.13 (TheRock), gfx1151.
+# Build: /opt/llama-rocm-master (llama.cpp c83f3058b), TheRock 10.1, gfx1151 (module default).
 { pkgs, ... }:
 
 {
@@ -60,8 +60,8 @@
 
     modules.llmInference = {
       enable = true;
-      # Runs on LATEST UPSTREAM llama.cpp built for gfx1151 at
-      # /opt/llama-rocm-latest (commit 6a257d4). Replaces the old custom fork:
+      # Runs on upstream llama.cpp built for gfx1151 at /opt/llama-rocm-master
+      # (c83f3058b since 2026-10-11; was 6a257d4). Replaces the old custom fork:
       # upstream PR #19493 natively handles qwen35 hybrid speculation, so the
       # 6 fork patches are obsolete (verified empirically — native spec gives
       # 100% draft acceptance). The build also adds --spec-type draft-mtp.
@@ -79,8 +79,6 @@
         description = "Qwen3.6-35B-A3B MoE + classic draft, thinking off (fast tier)";
         # Non-MTP GGUF (UD-Q6_K_XL, 29.7GB).
         model = "/srv/models/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8084;
         # 512K context on a natively-262K model: static YaRN, factor 2 — the
         # factor Qwen's cards give for 524288. Same window on every gtr box
