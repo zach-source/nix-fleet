@@ -1,9 +1,9 @@
 # GTR-151 — AMD Ryzen AI MAX+ 395 (192.168.3.132)
-# The FAST tier (2026-10-05): one model, Qwen3.6-35B-A3B MoE with a classic
-# Qwen3.5-0.8B draft and thinking OFF by default — the fleet's "Haiku".
+# The FAST tier (2026-10-05): one model, Qwen3.6-35B-A3B MoE (no draft model
+# since 2026-10-11) and thinking OFF by default — the fleet's "Haiku".
 # One model per box so the rest of the unified memory stays free for builds
 # and hosting. Qwen3.8-27B moved off this box (it now runs on gtr-150).
-# Build: /opt/llama-rocm-latest, ROCm 7.13 (TheRock), gfx1151.
+# Build: /opt/llama-rocm-master (llama.cpp c83f3058b), TheRock 10.1, gfx1151 (module default).
 { pkgs, ... }:
 
 {
@@ -60,13 +60,14 @@
 
     modules.llmInference = {
       enable = true;
-      # Runs on LATEST UPSTREAM llama.cpp built for gfx1151 at
-      # /opt/llama-rocm-latest (commit 6a257d4). Replaces the old custom fork:
+      # Runs on upstream llama.cpp built for gfx1151 at /opt/llama-rocm-master
+      # (c83f3058b since 2026-10-11; was 6a257d4). Replaces the old custom fork:
       # upstream PR #19493 natively handles qwen35 hybrid speculation, so the
       # 6 fork patches are obsolete (verified empirically — native spec gives
       # 100% draft acceptance). The build also adds --spec-type draft-mtp.
       #
-      # Speculation, after benchmarking AND stability-testing on gfx1151:
+      # Speculation history (the May build; the MoE now runs without a draft
+      # model, see qwen36-spec below):
       #   MoE (:8084)   — CLASSIC Qwen3.5-0.8B draft (~48 tok/s). MTP on the
       #                   recurrent MoE is UNSTABLE here: it crashes with
       #                   "ROCm error: unspecified launch failure" during
@@ -76,11 +77,9 @@
       #   dense (:8085) — MTP self-speculation (~16 tok/s, pure 3.6) — stable on
       #                   the dense (non-recurrent) arch.
       services.qwen36-spec = {
-        description = "Qwen3.6-35B-A3B MoE + classic draft, thinking off (fast tier)";
+        description = "Qwen3.6-35B-A3B MoE, thinking off (fast tier)";
         # Non-MTP GGUF (UD-Q6_K_XL, 29.7GB).
         model = "/srv/models/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         port = 8084;
         # 512K context on a natively-262K model: static YaRN, factor 2 — the
         # factor Qwen's cards give for 524288. Same window on every gtr box
@@ -105,14 +104,12 @@
         # No fork workarounds: upstream handles qwen35 recurrent memory + the
         # prompt-cache restore bug. Defaults apply (ctx-checkpoints=32,
         # cache-reuse=256).
-        draft = {
-          model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf";
-          # n-max 4->6 + pMin 0.6->0.5: benchmarked +8.5% (62.8 -> 68.1 tok/s) on
-          # gfx1151 via deeper draft (accept 138 -> 217). 2026-07-04.
-          max = 6;
-          min = 1;
-          pMin = 0.5;
-        };
+        # No draft model since the master build (2026-10-11). Measured here,
+        # same build: with the Qwen3.5-0.8B draft (n-max 6, pMin 0.5, ~0.67
+        # accept) 4-concurrent throughput was 48.5 tok/s and 28K prefill 1128
+        # t/s; without it, 99.4 tok/s and 1306 t/s, single-stream decode about
+        # equal. To restore it:
+        #   draft = { model = "/srv/models/Qwen3.5-0.8B-Q4_K_M.gguf"; max = 6; min = 1; pMin = 0.5; };
         reasoning = {
           format = "deepseek";
           budget = 2048;

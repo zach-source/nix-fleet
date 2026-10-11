@@ -194,11 +194,8 @@
 
       # Qwen3.8-27B DENSE — the THINKING tier. Moved here from gtr-153 on
       # 2026-10-10 (that node is being removed); the only box with room for
-      # it unchanged (~42GiB GTT at 512K). Needs /opt/llama-rocm-latest,
-      # /opt/rocm-sdk AND /opt/build/llama.cpp/build-qwen36-spec/bin (the
-      # binary's RPATH — it loads its libllama/ggml .so files from there),
-      # all copied from gtr-153 out of band. The stock /opt/llama-rocm build
-      # the support models use is too old for qwen35 MTP.
+      # it unchanged (~42GiB GTT at 512K). Runs on the fleet build (module
+      # default /opt/llama-rocm-master), like the support models above.
       #
       # History: succeeds the Qwen3.6-27B that held this slot
       # (:8085) from 2026-07-17 until it was disabled 2026-07-27 for memory.
@@ -215,8 +212,6 @@
       services.qwen38-27b = {
         description = "Qwen3.8-27B dense (quality/coding/agentic) + MTP self-speculation";
         model = "/srv/models/Qwen3.8-27B-UD-Q5_K_XL.gguf";
-        binary = "/opt/llama-rocm-latest/llama-server";
-        ldLibraryPath = "/opt/llama-rocm-latest:/opt/rocm-sdk/lib:/opt/rocm-sdk/lib/rocm_sysdeps/lib:/opt/rocm-sdk/lib/llvm/lib:/opt/rocm-sdk/lib/host-math/lib";
         # 8099, not the 8085 it used on gtr-153: ate-system's atelet DaemonSet
         # (2026-10-06) claims hostPort 8085 on every k0s node, so the CNI
         # forwards <node>:8085 to atelet and llama-server never sees a request.
