@@ -53,7 +53,6 @@ that is no longer true, and it is no longer in git.
 | Model name | Type | What it is | Host | Notes |
 |---|---|---|---|---|
 | **`qwen3-coder`** | chat | Qwen3-Coder-30B, ~95–124 tok/s | gtr-152 | **Recommended default** — fast & reliable |
-| `qwopus` | chat | Qwopus3.5-9B-Coder | gtr-153 | small/fast coder |
 | `gemma4` | chat (**vision**) | Gemma 4 26B-A4B, multimodal | gtr-150 | accepts image input |
 | `qwen3.5-9b` | chat | Qwen3.5-9B | gtr-150 | general |
 | `qwen-coder-1.5b` | chat | Qwen2.5-Coder-1.5B | gtr-150 | tiny/fast (titles, classification) |

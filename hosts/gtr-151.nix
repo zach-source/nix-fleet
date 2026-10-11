@@ -2,7 +2,7 @@
 # The FAST tier (2026-10-05): one model, Qwen3.6-35B-A3B MoE with a classic
 # Qwen3.5-0.8B draft and thinking OFF by default — the fleet's "Haiku".
 # One model per box so the rest of the unified memory stays free for builds
-# and hosting. Qwen3.8-27B moved off this box (it remains on gtr-153).
+# and hosting. Qwen3.8-27B moved off this box (it now runs on gtr-150).
 # Build: /opt/llama-rocm-latest, ROCm 7.13 (TheRock), gfx1151.
 { pkgs, ... }:
 

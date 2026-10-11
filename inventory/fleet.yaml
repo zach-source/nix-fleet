@@ -7,7 +7,6 @@ groups:
       - gtr-150
       - gtr-151
       - gtr-152
-      - gtr-153
     vars:
       max_parallel: 4
       hardware: "Ryzen AI MAX+ 395"
@@ -154,28 +153,6 @@ hosts:
         tok_s: 95-124
         draft: Qwen3-0.6B-Q4_K_M
         notes: "Throughput king. SWE-bench 40%."
-      - port: 50052
-        role: rpc-worker
-
-  gtr-153:
-    base: ubuntu
-    addr: 192.168.3.130
-    ssh_user: deploy
-    roles:
-      - base
-      - k0s-worker
-      - llm-inference
-      - code-sandbox
-      - rpc-worker
-    services:
-      - port: 8082
-        model: Qwopus3.5-9B-coder-Exp-Q8_0
-        role: primary-llm
-        notes: "Coder (qwen35 arch); replaced MiniMax-M2.7"
-      - port: 2358
-        model: judge0
-        role: code-sandbox
-        notes: "47 languages, Docker Compose, privileged"
       - port: 50052
         role: rpc-worker
 
