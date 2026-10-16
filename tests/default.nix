@@ -388,6 +388,20 @@ in
       hasSubstring pullOffScript "SELF_UNIT=" && hasSubstring pullOffScript ''"$unit" = "$SELF_UNIT"'';
   };
 
+  # gti ran two PXE responders on one LAN. nixfleet-netboot-server.service
+  # (pixiecore, from modules.netbootServer) had no artifacts under
+  # /srv/netboot/artifacts/gtr. nixfleet-installer-pxe.service (pixiecore
+  # API mode, from modules.installer) is the unit that serves gtr.
+  # The dead unit crash-looped every ~10s (NRestarts > 189000) and kept gti
+  # in systemd's "degraded" state. See nix-fleet-hosts-iei.
+  gti-netboot-server-retired = mkCheck "gti-netboot-server-retired" {
+    "the orphan pixiecore unit is gone from gti's config" =
+      !(hostConfigs.gti.config.nixfleet.systemd.units ? "nixfleet-netboot-server.service");
+
+    "the real PXE path for gtr stays declared" =
+      hostConfigs.gti.config.nixfleet.systemd.units ? "nixfleet-installer-pxe.service";
+  };
+
   hooks-preactivate-runs = mkCheck "hooks-preactivate-runs" {
     "preActivate body is compiled into the activation script" =
       hasSubstring preActivateScript "echo PRE_ACTIVATE_MARKER";
