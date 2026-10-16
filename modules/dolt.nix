@@ -179,19 +179,24 @@ in
     nixfleet = {
       packages = [ cfg.package ];
 
-      # NixFleet's activate script runs Step 2 "directories" BEFORE Step 3/4
-      # "groups"/"users", and there's no pre-activate hook (the schema accepts
-      # one but the activate script never invokes it). So a directory declared
-      # with `owner = cfg.user` would crash Step 2 with
-      #   chown: invalid user: '<user>:<group>'
-      # and abort the entire activation.
+      # The NixFleet ubuntu activate script runs Step 2/3 "groups" and "users"
+      # before Step 4 "directories". This order applies since nix-fleet#24,
+      # 7b69aae. A directory can now declare `owner = cfg.user`. The owner
+      # value stays correct. When Step 4 runs, useradd has already created
+      # ${cfg.user}.
       #
-      # Work around it by:
-      #   1) leaving the dataDir owner/group at the default root:root so Step 2
-      #      can chown successfully, and
-      #   2) using ExecStartPre=+/bin/chown on the systemd unit (the `+` prefix
-      #      runs as root regardless of User=) to set the right ownership at
-      #      service-start time — by which point Step 4 has created the user.
+      # This is the durable fix for dataDir ownership. The old design left
+      # dataDir at root:root. It relied on dolt-server.service's
+      # ExecStartPre=+chown to repair the owner at service-start time. That
+      # chown runs only when the unit (re)starts.
+      #
+      # Each `nixfleet apply` between restarts set the owner to root:root
+      # again. A root-owned directory blocks `mkdir` for a new dolt database.
+      # Existing databases, however, stayed readable and writable. The extra
+      # o+x in 0751 allows dolt to traverse in.
+      #
+      # When you declare ownership here, every apply leaves dataDir
+      # dolt-owned, not only every restart.
       groups.${cfg.group} = {
         system = true;
       };
@@ -205,18 +210,12 @@ in
       };
 
       directories.${cfg.dataDir} = {
-        # 0751 (not 0750): every `nixfleet apply` re-asserts this dir as its
-        # declared owner (root:root, per the workaround above) BEFORE the
-        # ExecStartPre chown can restore dolt ownership — and if the unit didn't
-        # change, dolt-server isn't restarted at all, so the chown never runs.
-        # A root-owned 0750 dir is untraversable by the dolt process, which
-        # locks it out of its own databases (remotesapi returns HTTP 500,
-        # "permission denied" on .dolt/noms/*). The extra o+x lets dolt traverse
-        # in regardless of the ownership race; data files stay 0600-dolt, so the
-        # dir being world-traversable does not expose secrets.
-        mode = "0751";
-        # owner/group intentionally left at the root:root default — see comment
-        # above. ExecStartPre on dolt-server.service re-chowns at startup.
+        # 0750: only ${cfg.user}:${cfg.group} need access. dolt-server and
+        # dolt-ensure-gascity-backup-db-style helper units both run as
+        # User=${cfg.user}, and no other user reads dataDir.
+        mode = "0750";
+        owner = cfg.user;
+        group = cfg.group;
       };
 
       directories."/etc/dolt" = {
@@ -244,10 +243,10 @@ in
           User=${cfg.user}
           Group=${cfg.group}
           WorkingDirectory=${cfg.dataDir}
-          # ExecStartPre runs as root (+ prefix) to repair dataDir ownership.
-          # The directories step left it root:root because the user didn't
-          # exist yet; by now it does, so this chown succeeds and the main
-          # ExecStart can write as dolt:dolt.
+          # ExecStartPre runs as root (+ prefix). It repairs ownership of
+          # subdirectories under dataDir, one per dolt database, that the
+          # directories step's top-level chown does not reach. The top-level
+          # directory itself is already dolt:dolt (see modules/dolt.nix).
           ExecStartPre=+/bin/chown -R ${cfg.user}:${cfg.group} ${cfg.dataDir}
           # Ensure remotesapi grants exist (see grantScript). Runs as ${cfg.user}
           # (no + prefix); server isn't started yet, so the offline `dolt sql`
