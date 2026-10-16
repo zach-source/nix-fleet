@@ -1,5 +1,8 @@
-# GTI — NVIDIA box (192.168.3.131)
-# Ubuntu 24.04 host managed by NixFleet.
+# GTI — k0s control-plane box (192.168.3.131)
+# Ubuntu 26.04 host managed by NixFleet.
+# The discrete NVIDIA GPU was pulled 2026-09; only the Intel iGPU is left.
+# The hostname is still ztaylor-gti-nvidia — it is baked into the k0s API
+# server cert SANs, so renaming it is not worth the reissue.
 # Serves as the PXE netboot server for GTR and LAN DNS server.
 { pkgs, ... }:
 
