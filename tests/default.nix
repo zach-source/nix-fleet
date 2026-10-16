@@ -544,7 +544,8 @@ in
     # useradd for "dolt" must run before Step 4 chowns to it, or the chown
     # targets a user that does not exist yet.
     "the dolt user is created before dataDir is chowned to it" =
-      occursBefore doltActivation "Creating user: dolt" ''chown dolt:dolt "/srv/dolt"'';
+      occursBefore doltActivation "Creating user: dolt"
+        ''chown dolt:dolt "/srv/dolt"'';
 
     # The service-start repair stays: it fixes ownership of subdirectories
     # dolt itself creates under dataDir (each dolt database), which Step 4's
