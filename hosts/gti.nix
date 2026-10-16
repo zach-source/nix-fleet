@@ -204,10 +204,17 @@
     };
 
     # ============================================================================
-    # Netboot server — serves GTR NixOS image over PXE
+    # Netboot server — disabled.
+    # /srv/netboot/artifacts/gtr has had no bzImage or initrd since
+    # 2026-04-21. pixiecore crash-looped every ~10s (NRestarts > 189000).
+    # This kept gti in systemd's "degraded" state.
+    # modules.installer (above) already serves gtr's PXE install, over
+    # pixiecore API mode. Both units together run two ProxyDHCP responders
+    # on one LAN. See nix-fleet-hosts-iei.
+    # To bring this unit back, set enable = true.
     # ============================================================================
     modules.netbootServer = {
-      enable = true;
+      enable = false;
       target = "gtr";
       httpPort = 8888;
     };
