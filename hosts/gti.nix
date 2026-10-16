@@ -234,6 +234,21 @@
       insecureDomains = [
         "cluster.local"
       ];
+      # dolt-server runs on gti itself (nix-fleet-hosts-lce). It must answer
+      # with 192.168.3.131 fleet-wide, including off-LAN.
+      #
+      # The companion repo nix-fleet-hosts sets a stigen.home wildcard.
+      # That wildcard sends dolt.stigen.home to 192.168.3.240 instead.
+      # 192.168.3.240 is the Cilium L2 gateway VIP. Off-LAN clients cannot
+      # reach that VIP.
+      #
+      # Unbound picks the longest matching static zone. By that rule, this
+      # record wins over the wildcard. It wins no matter which repo's gti
+      # config is live.
+      extraLocalRecords = [
+        ''local-zone: "dolt.stigen.home." static''
+        ''local-data: "dolt.stigen.home. IN A 192.168.3.131"''
+      ];
       adblock.enable = true;
       extraConfig = ''
         # k0s CoreDNS — Kubernetes service discovery (via NodePort 30053)
