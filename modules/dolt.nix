@@ -16,7 +16,8 @@
 #
 # Storage management (e.g. ZFS quotas) is intentionally NOT handled here so the
 # module stays portable — set up the dataDir filesystem in the host config
-# (see hosts/gti.nix for an example with a ZFS dataset + 100G quota).
+# (see zach-source/nix-fleet-hosts hosts/gti.nix for an example with a ZFS
+# dataset + 100G quota; gti's host config lives there now).
 #
 # Usage:
 #   imports = [ ../modules/dolt.nix ];

@@ -294,9 +294,6 @@
 
       # NixFleet host configurations (Ubuntu hosts managed by NixFleet CLI)
       nixfleetConfigurations = {
-        gti = mkNixFleetConfiguration {
-          modules = [ ./hosts/gti.nix ];
-        };
         gtr = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr.nix ];
         };

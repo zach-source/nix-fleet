@@ -405,6 +405,13 @@ spec:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+`gti`'s host config is managed in a companion repo:
+[zach-source/nix-fleet-hosts](https://github.com/zach-source/nix-fleet-hosts)
+`hosts/gti.nix`. This repo still owns the `nixfleetSrc` modules that
+`gti` imports (`netboot-server.nix`, `installer.nix`, `dolt.nix`). See
+nixfleet-771 for the fate of `dns.nix` and `ufw.nix`, which `gti` no
+longer imports from here.
+
 ## Development
 
 ```bash
