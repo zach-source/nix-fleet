@@ -425,20 +425,6 @@ in
     "gti is not a nixfleetConfigurations entry here" = !(hostConfigs ? gti);
   };
 
-  # gti ran two PXE responders on one LAN. nixfleet-netboot-server.service
-  # (pixiecore, from modules.netbootServer) had no artifacts under
-  # /srv/netboot/artifacts/gtr. nixfleet-installer-pxe.service (pixiecore
-  # API mode, from modules.installer) is the unit that serves gtr.
-  # The dead unit crash-looped every ~10s (NRestarts > 189000) and kept gti
-  # in systemd's "degraded" state. See nix-fleet-hosts-iei.
-  gti-netboot-server-retired = mkCheck "gti-netboot-server-retired" {
-    "the orphan pixiecore unit is gone from gti's config" =
-      !(hostConfigs.gti.config.nixfleet.systemd.units ? "nixfleet-netboot-server.service");
-
-    "the real PXE path for gtr stays declared" =
-      hostConfigs.gti.config.nixfleet.systemd.units ? "nixfleet-installer-pxe.service";
-  };
-
   hooks-preactivate-runs = mkCheck "hooks-preactivate-runs" {
     "preActivate body is compiled into the activation script" =
       hasSubstring preActivateScript "echo PRE_ACTIVATE_MARKER";
@@ -467,74 +453,6 @@ in
     "the pre-activate block is emitted when a hook is declared" =
       hasSubstring preActivateScript ''log "Running pre-activate hook..."'';
   };
-
-  # --- gti DNS: dolt.stigen.home must not resolve to the wildcard VIP ------
-  #
-  # This check runs the real unbound-host binary against the generated
-  # local-records.conf of gti. It does not use a string assertion.
-  # The bug is in the longest-match rule of unbound itself.
-  # A substring check cannot test that rule.
-  #
-  # gti answers for the zone that modules/dns.nix sets with domain = "stigen.lan".
-  # Fleet clients reach dolt as dolt.stigen.home, which is in another zone.
-  # The companion repo nix-fleet-hosts owns a wildcard for "stigen.home.".
-  #
-  # That wildcard redirects names to 192.168.3.240.
-  # 192.168.3.240 is the Cilium L2 gateway VIP.
-  # Off-LAN clients cannot reach that VIP.
-  #
-  # The gti configs in both repos replace the whole unbound.conf on apply.
-  # The repo that applies last wins.
-  # This check adds the wildcard to its own test config.
-  # It does not read the other repo.
-  #
-  # This check proves that the gti extraLocalRecords override ranks higher
-  # than the wildcard.
-  # It uses the static-zone longest-match rule of unbound itself.
-  # This result stays true when both configs load together.
-  gti-dolt-dns-override =
-    let
-      # The file gti's modules.dns.extraLocalRecords (modules/dns.nix:234)
-      # renders into, included inside unbound's server: block.
-      localRecordsConf = hostConfigs.gti.config.nixfleet.files."/etc/unbound/local-records.conf".text;
-
-      testConf = pkgs.writeText "gti-dolt-dns-test.conf" ''
-        server:
-            chroot: ""
-            username: ""
-            directory: "."
-            pidfile: ""
-            local-zone: "stigen.home." redirect
-            local-data: "stigen.home. IN A 192.168.3.240"
-        ${localRecordsConf}
-      '';
-    in
-    pkgs.runCommand "check-gti-dolt-dns-override" { nativeBuildInputs = [ pkgs.unbound ]; } ''
-      unbound-checkconf ${testConf}
-
-      dolt=$(unbound-host -C ${testConf} -t A dolt.stigen.home)
-      echo "$dolt"
-      echo "$dolt" | grep -q "has address 192.168.3.131" || {
-        echo "dolt.stigen.home did not resolve to 192.168.3.131" >&2
-        exit 1
-      }
-      if echo "$dolt" | grep -q "192.168.3.240"; then
-        echo "dolt.stigen.home still resolves to the wildcard VIP 192.168.3.240" >&2
-        exit 1
-      fi
-
-      # Not vacuous: a name with no specific override must still fall to the
-      # wildcard, or the assertion above would pass by disabling the
-      # wildcard outright instead of out-ranking it for this one name.
-      grafana=$(unbound-host -C ${testConf} -t A grafana.stigen.home)
-      echo "$grafana"
-      echo "$grafana" | grep -q "has address 192.168.3.240" || {
-        echo "grafana.stigen.home no longer falls to the wildcard -- the test is vacuous" >&2
-        exit 1
-      }
-
-      touch $out
-    '';
 
   dolt-datadir-is-dolt-owned = mkCheck "dolt-datadir-is-dolt-owned" {
     # The declared directory chown/chmod must land on dolt:dolt 0750, not

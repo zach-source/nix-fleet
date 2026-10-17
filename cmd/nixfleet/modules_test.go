@@ -28,11 +28,15 @@ var reachedByFlake = map[string]bool{"nix-config.nix": true}
 // unmerged branch, or may be the only implementation of something the fleet
 // docs describe as running.
 var knownUnimported = map[string]string{
-	"dolt.nix":    "the fleet's dolt remote runs on gti; the module is not imported on main",
-	"juicefs.nix": "paired with the `nixfleet juicefs` command and internal/juicefs",
-	"pki.nix":     "nothing reads nixfleet.pki; cert deployment is Go-side in internal/pki",
-	"base.nix":    "superseded by base-packages.nix, but `base` is an inventory role name",
-	"nginx.nix":   "`nginx` is an inventory role name in inventory/example.yaml",
+	"dolt.nix":           "the fleet's dolt remote runs on gti; the module is not imported on main",
+	"juicefs.nix":        "paired with the `nixfleet juicefs` command and internal/juicefs",
+	"pki.nix":            "nothing reads nixfleet.pki; cert deployment is Go-side in internal/pki",
+	"base.nix":           "superseded by base-packages.nix, but `base` is an inventory role name",
+	"nginx.nix":          "`nginx` is an inventory role name in inventory/example.yaml",
+	"dns.nix":            "gti's host config moved to nix-fleet-hosts, which has its own modules/dns.nix",
+	"ufw.nix":            "gti's host config moved to nix-fleet-hosts, which has its own modules/ufw.nix",
+	"netboot-server.nix": "imported by nix-fleet-hosts hosts/gti.nix:52 via nixfleetSrc, not by a host here",
+	"installer.nix":      "imported by nix-fleet-hosts hosts/gti.nix:54 via nixfleetSrc, not by a host here",
 }
 
 // TestNoUnexplainedUnimportedModules fails when a module is imported by nothing
