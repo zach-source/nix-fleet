@@ -405,6 +405,10 @@ spec:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+`gti`'s host config is managed in a companion repo:
+[zach-source/nix-fleet-hosts](https://github.com/zach-source/nix-fleet-hosts)
+`hosts/gti.nix`. This repo still owns the modules `gti` uses.
+
 ## Development
 
 ```bash
