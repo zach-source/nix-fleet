@@ -417,6 +417,14 @@ in
       hasSubstring pullOffScript "SELF_UNIT=" && hasSubstring pullOffScript ''"$unit" = "$SELF_UNIT"'';
   };
 
+  # gti's host config moved to the companion repo, zach-source/nix-fleet-hosts
+  # (hosts/gti.nix there, merged in nix-fleet-hosts#295).
+  # This repo must not grow a new nixfleetConfigurations.gti entry.
+  # Two repos applying gti's config would race: whichever runs last wins.
+  gti-owned-by-nix-fleet-hosts = mkCheck "gti-owned-by-nix-fleet-hosts" {
+    "gti is not a nixfleetConfigurations entry here" = !(hostConfigs ? gti);
+  };
+
   # gti ran two PXE responders on one LAN. nixfleet-netboot-server.service
   # (pixiecore, from modules.netbootServer) had no artifacts under
   # /srv/netboot/artifacts/gtr. nixfleet-installer-pxe.service (pixiecore
