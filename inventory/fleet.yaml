@@ -38,9 +38,18 @@ groups:
       - dgx
 
 hosts:
-  # gti's Nix config lives in the companion repo, zach-source/nix-fleet-hosts
-  # (hosts/gti.nix there). This inventory entry stays: nixfleet commands for
-  # k0s, agent monitoring and juicefs still target gti by name.
+  # The companion repo zach-source/nix-fleet-hosts holds gti's Nix config, in
+  # hosts/gti.nix. This inventory entry stays here: nixfleet commands for
+  # k0s, agent monitoring and juicefs still use the name gti.
+  #
+  # `nixfleet plan` and `nixfleet apply` fail for gti without a host flag.
+  # Without -H or -g, these commands call inv.AllHosts() (main.go:153-154),
+  # which includes gti. gti has no entry in nixfleetConfigurations, so the
+  # build fails for gti.
+  #
+  # `nixfleet plan -g infra` and `nixfleet apply -g infra` always fail for
+  # the same reason. To target one other host, pass -H with that host's
+  # name.
   gti:
     base: ubuntu
     addr: 192.168.3.131
