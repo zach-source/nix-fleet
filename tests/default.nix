@@ -344,6 +344,18 @@ in
       touch $out
     '';
 
+  dsv4-sparse-mla-barrier =
+    assert occursBefore dsv4Unit "hotfix-sparse-mla-barrier.py" "ExecStart=/opt";
+    assert occursBefore dsv4Unit "flashinfer-4732.patch" "ExecStart=/opt";
+    pkgs.runCommand "check-dsv4-sparse-mla-barrier" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      mkdir patches tests
+      cp ${../patches/hotfix-sparse-mla-barrier.py} patches/hotfix-sparse-mla-barrier.py
+      cp ${../patches/flashinfer-4732.patch} patches/flashinfer-4732.patch
+      cp ${./test_sparse_mla_barrier.py} tests/test_sparse_mla_barrier.py
+      python3 tests/test_sparse_mla_barrier.py
+      touch $out
+    '';
+
   dsv4-dns-wait-follows-image = mkCheck "dsv4-dns-wait-follows-image" {
     # The host waited on is derived from `image`, not hardcoded. That option
     # exists so the image can be repointed at a mirror, and waiting on ghcr.io

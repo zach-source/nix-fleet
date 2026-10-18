@@ -286,6 +286,10 @@ in
           # Preload module data before serving can require CUDA context synchronization.
           # The recipe copies this compose file to the peer before starting it.
           ExecStartPre=/bin/sh -c 'git -C ${cfg.recipeDir} apply --check ${../patches/dspark-cuda-data-loading.patch} && git -C ${cfg.recipeDir} apply ${../patches/dspark-cuda-data-loading.patch} || git -C ${cfg.recipeDir} apply --reverse --check ${../patches/dspark-cuda-data-loading.patch}'
+          # Backport FlashInfer #4732 before either rank imports its CUDA kernels.
+          ExecStartPre=/usr/bin/install -m 0644 ${../patches/hotfix-sparse-mla-barrier.py} ${cfg.recipeDir}/patches/hotfix-sparse-mla-barrier.py
+          ExecStartPre=/usr/bin/install -m 0644 ${../patches/flashinfer-4732.patch} ${cfg.recipeDir}/patches/flashinfer-4732.patch
+          ExecStartPre=/bin/sh -c 'git -C ${cfg.recipeDir} apply --check ${../patches/dspark-sparse-mla-barrier.patch} && git -C ${cfg.recipeDir} apply ${../patches/dspark-sparse-mla-barrier.patch} || git -C ${cfg.recipeDir} apply --reverse --check ${../patches/dspark-sparse-mla-barrier.patch}'
           # The other half of the mutual exclusion with GLM-5.3-Flash — see the
           # long note in modules/dspark-glm53.nix for why this is ExecStartPre
           # and not Conflicts=. `-` because that unit only exists on a host that

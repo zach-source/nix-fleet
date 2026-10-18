@@ -1,0 +1,24 @@
+--- a/docker-compose.dspark.yml
++++ b/docker-compose.dspark.yml
+@@ -107,5 +107,5 @@
+       CUTE_DSL_ARCH: "${CUTE_DSL_ARCH:-sm_121a}"
+       FLASHINFER_DISABLE_VERSION_CHECK: "${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
+-      FLASHINFER_WORKSPACE_BASE: "${FLASHINFER_WORKSPACE_BASE:-/cache/huggingface/flashinfer}"
++      FLASHINFER_WORKSPACE_BASE: /cache/huggingface/flashinfer-4732-d2090811
+       TILELANG_CLEANUP_TEMP_FILES: "${TILELANG_CLEANUP_TEMP_FILES:-1}"
+       # Persist TileLang compiled kernels on the HF cache volume (issue #65).
+@@ -161,4 +161,5 @@
+       - -lc
+       - >
++        python3 /opt/dspark-patches/hotfix-sparse-mla-barrier.py || exit 1;
+         export PATH="/usr/local/cuda/bin:/usr/local/bin:$${PATH:-}";
+         export CUDA_HOME="$${CUDA_HOME:-/usr/local/cuda}";
+--- a/start-deepseek-v4-flash-dspark.sh
++++ b/start-deepseek-v4-flash-dspark.sh
+@@ -580,5 +580,5 @@
+ fi
+ # DSV4 v0.27 .sh hotfixes — entrypoint applies them before exec vllm (issue #38).
+-for _hf_sync in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-adaptive-topk-50004.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do
++for _hf_sync in hotfix-sparse-mla-barrier.py flashinfer-4732.patch hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-adaptive-topk-50004.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do
+   if [ -f "$SCRIPT_DIR/patches/$_hf_sync" ]; then
+     echo "Syncing $_hf_sync to ${WORKER_HOST}:${WORKER_DIR}/patches/"
