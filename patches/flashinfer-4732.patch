@@ -1,0 +1,39 @@
+--- a/include/flashinfer/attention/sparse_mla_sm120/arch/barrier.cuh
++++ b/include/flashinfer/attention/sparse_mla_sm120/arch/barrier.cuh
+@@ -43,0 +44,19 @@
++// Producer/consumer handshakes where the arriving side does not block must alternate
++// between two barrier ids: the non-blocking side may be one iteration ahead, and
++// arriving twice in one phase is invalid and desynchronizes the barrier (#3700).
++template <int ID_EVEN, int ID_ODD, int CNT>
++__device__ __forceinline__ void bar_arrive_alt(int parity) {
++  if (parity)
++    bar_arrive_t<ID_ODD, CNT>();
++  else
++    bar_arrive_t<ID_EVEN, CNT>();
++}
++
++template <int ID_EVEN, int ID_ODD, int CNT>
++__device__ __forceinline__ void bar_sync_alt(int parity) {
++  if (parity)
++    bar_sync_t<ID_ODD, CNT>();
++  else
++    bar_sync_t<ID_EVEN, CNT>();
++}
++
+--- a/include/flashinfer/attention/sparse_mla_sm120/prefill_kernel.cuh
++++ b/include/flashinfer/attention/sparse_mla_sm120/prefill_kernel.cuh
+@@ -157 +157 @@
+-      bar_sync_t<1, BLOCK_THREADS>();
++      bar_sync_alt<1, 5, BLOCK_THREADS>(ti & 1);
+@@ -522 +522 @@
+-      bar_arrive_t<1, BLOCK_THREADS>();
++      bar_arrive_alt<1, 5, BLOCK_THREADS>(ti & 1);
+@@ -784 +784 @@
+-        bar_sync_t<1, BLOCK_THREADS>();
++        bar_sync_alt<1, 5, BLOCK_THREADS>(ti & 1);
+@@ -825 +825 @@
+-        bar_sync_t<1, BLOCK_THREADS>();
++        bar_sync_alt<1, 5, BLOCK_THREADS>(ti & 1);
+@@ -1516 +1516 @@
+-      bar_arrive_t<1, BLOCK_THREADS>();
++      bar_arrive_alt<1, 5, BLOCK_THREADS>(ti & 1);
