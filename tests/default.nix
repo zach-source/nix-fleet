@@ -300,8 +300,49 @@ in
     "the DNS wait precedes ExecStart" = occursBefore dsv4Unit (dnsWaitFor "ghcr.io") "ExecStart=/opt";
 
     # The module this was modelled on must keep its own wait.
+    "compose validation precedes the GLM eviction" =
+      occursBefore dsv4Unit "apply --check"
+        "systemctl stop glm53-flash.service";
+
     "glm53 still waits too" = hasSubstring glm53Unit (dnsWaitFor "ghcr.io");
   };
+
+  dsv4-cuda-data-loading =
+    let
+      line = lib.findFirst (lib.hasPrefix "ExecStartPre=/bin/sh -c 'git -C") "" (
+        lib.splitString "\n" dsv4Unit
+      );
+      command = builtins.replaceStrings [ "/opt/dspark" ] [ "$PWD/recipe" ] (
+        lib.removePrefix "ExecStartPre=" line
+      );
+    in
+    assert line != "";
+    pkgs.runCommand "check-dsv4-cuda-data-loading" { nativeBuildInputs = [ pkgs.git ]; } ''
+      mkdir recipe
+      git -C recipe init -q
+      cat > recipe/docker-compose.dspark.yml <<'EOF'
+      services:
+        vllm-dspark:
+          image: pinned
+          environment:
+            HF_HOME: /cache/huggingface
+            UNRELATED: retained
+      EOF
+      ${command}
+      cp recipe/docker-compose.dspark.yml once
+      ${command}
+      cmp once recipe/docker-compose.dspark.yml
+      grep -qx '      CUDA_MODULE_DATA_LOADING: EAGER' once
+      grep -qx '      UNRELATED: retained' once
+      sed -i 's/CUDA_MODULE_DATA_LOADING: EAGER/CUDA_MODULE_DATA_LOADING: LAZY/' recipe/docker-compose.dspark.yml
+      cp recipe/docker-compose.dspark.yml conflict
+      if ${command}; then
+        echo 'conflicting CUDA setting was accepted' >&2
+        exit 1
+      fi
+      cmp conflict recipe/docker-compose.dspark.yml
+      touch $out
+    '';
 
   dsv4-dns-wait-follows-image = mkCheck "dsv4-dns-wait-follows-image" {
     # The host waited on is derived from `image`, not hardcoded. That option

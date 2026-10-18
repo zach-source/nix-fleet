@@ -1,0 +1,6 @@
+--- a/docker-compose.dspark.yml
++++ b/docker-compose.dspark.yml
+@@ -55,2 +55,3 @@
+     environment:
++      CUDA_MODULE_DATA_LOADING: EAGER
+       HF_HOME: /cache/huggingface
