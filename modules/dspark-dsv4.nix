@@ -283,6 +283,9 @@ in
           # variables in the loop — systemd expands $NAME in Exec lines before
           # sh ever sees it — so the bound comes from timeout(1) instead.
           ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until getent hosts ${registryHost} >/dev/null 2>&1; do sleep 2; done'
+          # Preload module data before serving can require CUDA context synchronization.
+          # The recipe copies this compose file to the peer before starting it.
+          ExecStartPre=/bin/sh -c 'git -C ${cfg.recipeDir} apply --check ${../patches/dspark-cuda-data-loading.patch} && git -C ${cfg.recipeDir} apply ${../patches/dspark-cuda-data-loading.patch} || git -C ${cfg.recipeDir} apply --reverse --check ${../patches/dspark-cuda-data-loading.patch}'
           # The other half of the mutual exclusion with GLM-5.3-Flash — see the
           # long note in modules/dspark-glm53.nix for why this is ExecStartPre
           # and not Conflicts=. `-` because that unit only exists on a host that
