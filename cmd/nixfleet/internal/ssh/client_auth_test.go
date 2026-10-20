@@ -68,7 +68,7 @@ func startAgent(t *testing.T, keys ...ed25519.PrivateKey) {
 			if err != nil {
 				return
 			}
-			go func() { agent.ServeAgent(kr, c); c.Close() }()
+			go func() { _ = agent.ServeAgent(kr, c); c.Close() }()
 		}
 	}()
 	t.Setenv("SSH_AUTH_SOCK", sock)
@@ -77,7 +77,7 @@ func startAgent(t *testing.T, keys ...ed25519.PrivateKey) {
 // authAgainst runs a handshake with methods against an in-process server that
 // accepts only the key `accept`. It returns the client error and the public
 // keys the server saw, in order.
-func authAgainst(t *testing.T, methods []ssh.AuthMethod, accept ssh.PublicKey) (error, [][]byte) {
+func authAgainst(t *testing.T, methods []ssh.AuthMethod, accept ssh.PublicKey) ([][]byte, error) {
 	t.Helper()
 	hostSigner, _ := newTestSigner(t)
 	var mu sync.Mutex
@@ -132,7 +132,7 @@ func authAgainst(t *testing.T, methods []ssh.AuthMethod, accept ssh.PublicKey) (
 	cc.Close()
 	mu.Lock()
 	defer mu.Unlock()
-	return err, offered
+	return offered, err
 }
 
 func TestAuthFallsBackToAgentWhenFileKeyRejected(t *testing.T) {
@@ -144,7 +144,7 @@ func TestAuthFallsBackToAgentWhenFileKeyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err, _ := authAgainst(t, methods, agentSigner.PublicKey()); err != nil {
+	if _, err := authAgainst(t, methods, agentSigner.PublicKey()); err != nil {
 		t.Fatalf("agent key should be offered after the file key is rejected: %v", err)
 	}
 }
@@ -158,7 +158,7 @@ func TestAuthOffersFileKeyBeforeAgentKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err, offered := authAgainst(t, methods, fileSigner.PublicKey())
+	offered, err := authAgainst(t, methods, fileSigner.PublicKey())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestAuthDoesNotOfferDuplicateKey(t *testing.T) {
 	}
 	// Server accepts nothing useful: every offered key is recorded.
 	other, _ := newTestSigner(t)
-	_, offered := authAgainst(t, methods, other.PublicKey())
+	offered, _ := authAgainst(t, methods, other.PublicKey())
 	n := 0
 	for _, o := range offered {
 		if bytes.Equal(o, sA.PublicKey().Marshal()) {
