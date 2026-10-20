@@ -219,6 +219,25 @@ func TestCombinedSignersIgnoreAgentError(t *testing.T) {
 	}
 }
 
+func TestCombinedSignersDedupAndOrder(t *testing.T) {
+	a, ka := newTestSigner(t)
+	b, kb := newTestSigner(t)
+	kr := agent.NewKeyring()
+	for _, k := range []ed25519.PrivateKey{kb, ka} {
+		if err := kr.Add(agent.AddedKey{PrivateKey: k}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := combinedSigners([]ssh.Signer{a}, kr)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("got %d signers, err %v; want 2", len(got), err)
+	}
+	if !bytes.Equal(got[0].PublicKey().Marshal(), a.PublicKey().Marshal()) ||
+		!bytes.Equal(got[1].PublicKey().Marshal(), b.PublicKey().Marshal()) {
+		t.Fatal("want file signer first, then the agent-only signer")
+	}
+}
+
 func TestBuildAuthMethodsNoMethods(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 	bad := filepath.Join(t.TempDir(), "garbage")
