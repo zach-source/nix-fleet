@@ -157,6 +157,10 @@ func sshAgentAuth() ssh.AuthMethod {
 	return ssh.PublicKeysCallback(agentClient.Signers)
 }
 
+func combinedSigners(files []ssh.Signer, a agent.Agent) ([]ssh.Signer, error) {
+	return files, nil
+}
+
 func publicKeyAuth(keyFile string) (ssh.AuthMethod, error) {
 	key, err := os.ReadFile(keyFile)
 	if err != nil {
