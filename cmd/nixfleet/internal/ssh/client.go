@@ -109,8 +109,6 @@ func NewClient(host string, cfg *ClientConfig) (*Client, error) {
 }
 
 func buildAuthMethods(cfg *ClientConfig) ([]ssh.AuthMethod, error) {
-	var methods []ssh.AuthMethod
-
 	// Dedicated key files come first, the agent second.
 	//
 	// The agent offers every key it holds, and each one the server rejects
@@ -123,26 +121,57 @@ func buildAuthMethods(cfg *ClientConfig) ([]ssh.AuthMethod, error) {
 	// This stayed hidden on established hosts whose authorized_keys happened to
 	// include an agent key, and only appeared on a freshly bootstrapped host
 	// carrying the fleet key alone — i.e. the normal case for every new host.
+	//
+	// All keys go into ONE publickey method. x/crypto/ssh skips every later
+	// method with the same name once one fails, so a rejected key file would
+	// otherwise hide the agent keys.
+	var files []ssh.Signer
 	for _, keyFile := range cfg.KeyFiles {
-		if auth, err := publicKeyAuth(keyFile); err == nil {
-			methods = append(methods, auth)
+		if signer, err := keyFileSigner(keyFile); err == nil {
+			files = append(files, signer)
 		}
 	}
 
+	var ag agent.Agent
 	if cfg.UseAgent {
-		if agentAuth := sshAgentAuth(); agentAuth != nil {
-			methods = append(methods, agentAuth)
-		}
+		ag = dialAgent()
 	}
 
-	if len(methods) == 0 {
+	if len(files) == 0 && ag == nil {
 		return nil, fmt.Errorf("no authentication methods available")
 	}
 
-	return methods, nil
+	return []ssh.AuthMethod{ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+		return combinedSigners(files, ag)
+	})}, nil
 }
 
-func sshAgentAuth() ssh.AuthMethod {
+// combinedSigners returns the file signers, then the agent signers whose public
+// key is not already in the list. It ignores an agent error: the file signers
+// must still be offered.
+func combinedSigners(files []ssh.Signer, a agent.Agent) ([]ssh.Signer, error) {
+	out := append([]ssh.Signer(nil), files...)
+	if a == nil {
+		return out, nil
+	}
+	seen := make(map[string]bool, len(files))
+	for _, s := range files {
+		seen[string(s.PublicKey().Marshal())] = true
+	}
+	agentSigners, err := a.Signers()
+	if err != nil {
+		return out, nil
+	}
+	for _, s := range agentSigners {
+		if k := string(s.PublicKey().Marshal()); !seen[k] {
+			seen[k] = true
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+func dialAgent() agent.Agent {
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
 		return nil
@@ -153,26 +182,16 @@ func sshAgentAuth() ssh.AuthMethod {
 		return nil
 	}
 
-	agentClient := agent.NewClient(conn)
-	return ssh.PublicKeysCallback(agentClient.Signers)
+	return agent.NewClient(conn)
 }
 
-func combinedSigners(files []ssh.Signer, a agent.Agent) ([]ssh.Signer, error) {
-	return files, nil
-}
-
-func publicKeyAuth(keyFile string) (ssh.AuthMethod, error) {
+func keyFileSigner(keyFile string) (ssh.Signer, error) {
 	key, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, err
 	}
 
-	signer, err := ssh.ParsePrivateKey(key)
-	if err != nil {
-		return nil, err
-	}
-
-	return ssh.PublicKeys(signer), nil
+	return ssh.ParsePrivateKey(key)
 }
 
 // Connect establishes the SSH connection
