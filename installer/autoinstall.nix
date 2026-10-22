@@ -21,6 +21,8 @@
   installerPort ? 8889,
   luksPassphrase ? "nixfleet-init-${hostConfig.nixfleet.host.name}",
   targetDisk ? "/dev/sda",
+  # false = plain ZFS root, no LUKS keystore or TPM2 (for hosts without a TPM)
+  encrypt ? true,
 }:
 
 let
@@ -62,6 +64,7 @@ let
           DISK=${targetDisk}
           HOSTNAME=${hostname}
           LUKS_PASSPHRASE="${luksPassphrase}"
+          ENCRYPT=${if encrypt then "1" else "0"}
           bash
 
       # Tell autoinstall not to touch storage (we handle it in early-commands)
@@ -95,6 +98,7 @@ let
           --ssh-key "${sshKey}"
           --hostname ${hostname}
           --luks-passphrase "${luksPassphrase}"
+          ${lib.optionalString (!encrypt) "--no-encrypt"}
           --mgmt-host "${installerHost}"'
   '';
 

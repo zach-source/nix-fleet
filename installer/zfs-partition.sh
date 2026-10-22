@@ -9,7 +9,8 @@
 #
 # Environment:
 #   DISK           Target disk (default: /dev/sda)
-#   LUKS_PASSPHRASE  Initial LUKS passphrase for keystore (required)
+#   LUKS_PASSPHRASE  Initial LUKS passphrase for keystore (required unless ENCRYPT=0)
+#   ENCRYPT        1 (default) = LUKS keystore zvol + crypttab; 0 = plain ZFS root
 #   HOSTNAME       Host name (used in pool naming, default: nixfleet)
 #
 # Usage:
@@ -19,7 +20,10 @@ set -euo pipefail
 
 DISK="${DISK:-/dev/sda}"
 HOSTNAME="${HOSTNAME:-nixfleet}"
-LUKS_PASSPHRASE="${LUKS_PASSPHRASE:?LUKS_PASSPHRASE is required}"
+ENCRYPT="${ENCRYPT:-1}"
+if [ "$ENCRYPT" = 1 ]; then
+  LUKS_PASSPHRASE="${LUKS_PASSPHRASE:?LUKS_PASSPHRASE is required}"
+fi
 
 log() { echo "[zfs-partition] $*"; }
 
@@ -118,23 +122,25 @@ mount "$PART1" /target/boot/efi
 # ============================================================================
 # Step 7: Create LUKS keystore zvol
 # ============================================================================
-log "Creating keystore zvol (64 MB)..."
-zfs create -V 64M rpool/keystore
+if [ "$ENCRYPT" = 1 ]; then
+  log "Creating keystore zvol (64 MB)..."
+  zfs create -V 64M rpool/keystore
 
-# Wait for zvol device to appear
-sleep 2
-KEYSTORE_DEV="/dev/zvol/rpool/keystore"
-while [ ! -b "$KEYSTORE_DEV" ]; do
-  log "Waiting for $KEYSTORE_DEV..."
-  sleep 1
-done
+  # Wait for zvol device to appear
+  sleep 2
+  KEYSTORE_DEV="/dev/zvol/rpool/keystore"
+  while [ ! -b "$KEYSTORE_DEV" ]; do
+    log "Waiting for $KEYSTORE_DEV..."
+    sleep 1
+  done
 
-log "Formatting keystore with LUKS2..."
-echo -n "$LUKS_PASSPHRASE" | cryptsetup luksFormat \
-  --type luks2 \
-  --label "keystore-$HOSTNAME" \
-  --pbkdf argon2id \
-  "$KEYSTORE_DEV" -
+  log "Formatting keystore with LUKS2..."
+  echo -n "$LUKS_PASSPHRASE" | cryptsetup luksFormat \
+    --type luks2 \
+    --label "keystore-$HOSTNAME" \
+    --pbkdf argon2id \
+    "$KEYSTORE_DEV" -
+fi
 
 # ============================================================================
 # Step 8: Write fstab entries for boot/EFI
@@ -150,16 +156,20 @@ FSTAB
 # ============================================================================
 # Step 9: Write crypttab for TPM2 auto-unlock
 # ============================================================================
-log "Writing crypttab..."
-cat > /target/etc/crypttab <<CRYPTTAB
+if [ "$ENCRYPT" = 1 ]; then
+  log "Writing crypttab..."
+  cat > /target/etc/crypttab <<CRYPTTAB
 # NixFleet keystore — TPM2 auto-unlock (enrolled on first boot)
 keystore-rpool /dev/zvol/rpool/keystore none luks,discard,tpm2-device=auto
 CRYPTTAB
+fi
 
 log "Partitioning complete"
 log "  Disk:      $DISK"
 log "  EFI:       $PART1 (512 MB, FAT32)"
 log "  Boot:      $PART2 (1 GB, ext4)"
 log "  ZFS pool:  rpool on $PART3"
-log "  Keystore:  rpool/keystore (64 MB, LUKS2)"
+if [ "$ENCRYPT" = 1 ]; then
+  log "  Keystore:  rpool/keystore (64 MB, LUKS2)"
+fi
 log "  Datasets:  rpool/ROOT/ubuntu, rpool/home, rpool/var"

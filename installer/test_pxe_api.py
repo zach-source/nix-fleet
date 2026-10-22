@@ -90,6 +90,18 @@ def test_existing_modes_unchanged():
     assert "ip=dhcp" in rec["cmdline"]
 
 
+def test_install_iso_is_configurable():
+    """The install ISO comes from ISO_NAME, not a hardcoded release."""
+    old = pxe_api.ISO_NAME
+    try:
+        pxe_api.ISO_NAME = "ubuntu-26.04.1-live-server-amd64.iso"
+        cmd = pxe_api.build_install_config("hs-1")["cmdline"]
+        assert "/boot/ubuntu-26.04.1-live-server-amd64.iso " in cmd, cmd
+        assert "25.04" not in cmd, cmd
+    finally:
+        pxe_api.ISO_NAME = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -87,6 +87,14 @@ fi
 
 umount "$MOUNT_DIR"
 
+# The installer streams the whole ISO (url= on the kernel cmdline) from the
+# HTTP root, so it must sit next to the kernel. Set the installer module's
+# isoName to this file name.
+if [[ ! -f "$DEST/$(basename "$ISO_FILE")" ]]; then
+  log "Copying ISO into $DEST..."
+  cp "$ISO_FILE" "$DEST/"
+fi
+
 # ============================================================================
 # Step 3: Verify
 # ============================================================================
