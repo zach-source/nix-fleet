@@ -86,11 +86,22 @@ def build_install_config(host):
 
 
 def build_recovery_config():
-    """Build boot config for recovery mode (live Ubuntu, no autoinstall)."""
+    """Build boot config for recovery mode (live Ubuntu, no autoinstall).
+
+    casper only starts a live system when it can fetch the ISO (url=); with
+    just ip=dhcp it had no root and dropped to an initramfs shell. Without
+    `autoinstall` the server ISO runs the interactive installer, which also
+    offers Help -> Enter shell for rescue work.
+    """
     return {
         "kernel": f"file://{BOOT_DIR}/vmlinuz",
         "initrd": [f"file://{BOOT_DIR}/initrd"],
-        "cmdline": ("ip=dhcp " "---"),
+        "cmdline": (
+            f"root=/dev/ram0 ramdisk_size=1500000 "
+            f"ip=dhcp "
+            f"url={INSTALLER_URL}/boot/{ISO_NAME} "
+            "---"
+        ),
     }
 
 

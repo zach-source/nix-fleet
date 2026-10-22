@@ -90,6 +90,15 @@ def test_existing_modes_unchanged():
     assert "ip=dhcp" in rec["cmdline"]
 
 
+def test_recovery_boots_the_iso_without_autoinstall():
+    """casper needs the ISO (url=) to start a live system; recovery must not install."""
+    rec = pxe_api.build_recovery_config()
+    assert (
+        f"url={pxe_api.INSTALLER_URL}/boot/{pxe_api.ISO_NAME} " in rec["cmdline"]
+    ), rec
+    assert "autoinstall" not in rec["cmdline"], rec
+
+
 def test_install_iso_is_configurable():
     """The install ISO comes from ISO_NAME, not a hardcoded release."""
     old = pxe_api.ISO_NAME
