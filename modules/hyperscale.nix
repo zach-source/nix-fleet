@@ -130,6 +130,27 @@ in
         '';
       };
     }
+    # /var/lib/k0s must be the scratch pool before the kubelet or the kubevirt
+    # bind writes to it. Before= in the pool unit orders a boot only. These
+    # drop-ins also order a first activation.
+    // lib.optionalAttrs hasScratch (
+      lib.genAttrs
+        [
+          "/etc/systemd/system/k0sworker.service.d/10-hyperscale-zpool.conf"
+          "/etc/systemd/system/nixfleet-kubevirt-kubelet-bind.service.d/10-hyperscale-zpool.conf"
+        ]
+        (_: {
+          mode = "0644";
+          owner = "root";
+          group = "root";
+          text = ''
+            # Managed by NixFleet hyperscale module
+            [Unit]
+            Requires=nixfleet-hyperscale-zpool.service
+            After=nixfleet-hyperscale-zpool.service
+          '';
+        })
+    )
     // lib.optionalAttrs hasPools {
       "${script}" = {
         mode = "0755";
