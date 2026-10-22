@@ -306,6 +306,12 @@
         gtr-152 = mkNixFleetConfiguration {
           modules = [ ./hosts/gtr-152.nix ];
         };
+        hs-1 = mkNixFleetConfiguration {
+          modules = [ ./hosts/hs-1.nix ];
+        };
+        hs-2 = mkNixFleetConfiguration {
+          modules = [ ./hosts/hs-2.nix ];
+        };
         # DGX Sparks are aarch64 (GB10 Grace Blackwell), so they must be
         # evaluated for aarch64-linux — the default x86_64-linux would resolve
         # the wrong nixpkgs and produce a closure the box cannot run.
@@ -349,6 +355,28 @@
             inherit pkgs;
             hostConfig = self.nixfleetConfigurations.gtr.config;
             sshPubKey = ./secrets/deploy.pub;
+          };
+          hs-1 = import ./installer/autoinstall.nix {
+            inherit (nixpkgs) lib;
+            inherit pkgs;
+            hostConfig = self.nixfleetConfigurations.hs-1.config;
+            sshPubKey = ./secrets/deploy.pub;
+            # No TPM in the DL380 Gen9: plain ZFS root, no LUKS keystore.
+            encrypt = false;
+            # PLACEHOLDER: /dev/sda is a guess. Set the boot disk's
+            # /dev/disk/by-id path once the box has booted the installer.
+            targetDisk = "/dev/sda";
+          };
+          hs-2 = import ./installer/autoinstall.nix {
+            inherit (nixpkgs) lib;
+            inherit pkgs;
+            hostConfig = self.nixfleetConfigurations.hs-2.config;
+            sshPubKey = ./secrets/deploy.pub;
+            # No TPM in the DL380 Gen9: plain ZFS root, no LUKS keystore.
+            encrypt = false;
+            # PLACEHOLDER: /dev/sda is a guess. Set the boot disk's
+            # /dev/disk/by-id path once the box has booted the installer.
+            targetDisk = "/dev/sda";
           };
         };
     };
