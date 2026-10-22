@@ -31,11 +31,21 @@ groups:
       backend: "CUDA"
       fabric: "ConnectX-7 200GbE direct-attach"
 
+  hyperscale:
+    hosts:
+      - hs-1
+      - hs-2
+    vars:
+      max_parallel: 1
+      hardware: "HPE DL380 Gen9, 2x E5-2650 v3"
+      storage: "LINSTOR/DRBD (Piraeus) thin-LVM"
+
   all:
     children:
       - infra
       - gtr
       - dgx
+      - hyperscale
 
 hosts:
   # The companion repo zach-source/nix-fleet-hosts holds gti's Nix config, in
@@ -195,6 +205,29 @@ hosts:
     services:
       - role: dsv4-rank-1
         notes: "Serves no HTTP — joins rank 0 over the CX7 fabric."
+
+  # HPE DL380 Gen9 hyperscale workers (modules/hyperscale.nix). Installed by
+  # hand from the live ISO, then bootstrapped with the deploy user. The
+  # deploy user authorizes ~/.ssh/nixfleet only, so pin it.
+  hs-1:
+    base: ubuntu
+    addr: 192.168.3.144
+    ssh_user: deploy
+    ssh_key: ~/.ssh/nixfleet
+    roles:
+      - base
+      - k0s-worker
+      - hyperscale
+
+  hs-2:
+    base: ubuntu
+    addr: 192.168.3.145
+    ssh_user: deploy
+    ssh_key: ~/.ssh/nixfleet
+    roles:
+      - base
+      - k0s-worker
+      - hyperscale
 
 # K8s services (on gti k0s cluster, managed by Flux)
 k8s:
