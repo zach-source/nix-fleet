@@ -10,7 +10,9 @@
 #     LINSTOR makes zvols in it. The LINSTOR storage pool is ZFS_THIN on
 #     zpool `linstor`.
 #   - zpool `scratch`: one mirror, mounted at /var/lib/k0s. It holds
-#     container images, emptyDir data and kubelet data.
+#     container images, emptyDir data and kubelet data. Dataset scratch/ate
+#     is mounted at /var/lib/ate, the image and snapshot cache of the
+#     Agent Substrate atelet.
 #
 # What it does:
 #   - installs the distro zfsutils-linux and linux-headers-<running kernel>
@@ -59,7 +61,10 @@ let
 
   execStarts = lib.concatStringsSep "\n" (
     lib.optional hasLinstor "ExecStart=${script} linstor none ${linstorSpec}"
-    ++ lib.optional hasScratch "ExecStart=${script} scratch /var/lib/k0s ${scratchSpec}"
+    ++ lib.optionals hasScratch [
+      "ExecStart=${script} scratch /var/lib/k0s ${scratchSpec}"
+      "ExecStart=/bin/sh -c 'zfs list -H scratch/ate >/dev/null 2>&1 || zfs create -o mountpoint=/var/lib/ate scratch/ate'"
+    ]
   );
 in
 {
