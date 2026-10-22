@@ -16,7 +16,8 @@
 #     --ssh-key "ssh-ed25519 ..." \
 #     --hostname myhostname \
 #     --luks-passphrase "nixfleet-init-myhostname" \
-#     --mgmt-host "192.168.3.131"
+#     --mgmt-host "192.168.3.131" \
+#     [--no-encrypt]    # skip TPM2/LUKS steps 5-6 (hosts without a TPM)
 
 set -euo pipefail
 
@@ -25,6 +26,7 @@ DEPLOY_USER="deploy"
 SSH_KEY=""
 HOSTNAME=""
 LUKS_PASSPHRASE=""
+ENCRYPT=1
 MGMT_HOST=""
 
 log() { echo "[nixfleet-bootstrap] $*"; }
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-key)     SSH_KEY="$2"; shift 2 ;;
     --hostname)    HOSTNAME="$2"; shift 2 ;;
     --luks-passphrase) LUKS_PASSPHRASE="$2"; shift 2 ;;
+    --no-encrypt)  ENCRYPT=0; shift ;;
     --mgmt-host)   MGMT_HOST="$2"; shift 2 ;;
     *) log "Unknown option: $1"; exit 1 ;;
   esac
@@ -43,7 +46,9 @@ done
 
 : "${HOSTNAME:?--hostname is required}"
 : "${SSH_KEY:?--ssh-key is required}"
-: "${LUKS_PASSPHRASE:?--luks-passphrase is required}"
+if [ "$ENCRYPT" = 1 ]; then
+  : "${LUKS_PASSPHRASE:?--luks-passphrase is required}"
+fi
 
 # ============================================================================
 # Step 1: Install Nix multi-user daemon
@@ -142,6 +147,12 @@ cat > /var/lib/nixfleet/state.json <<STATE
   "updated_at": "$(date -Iseconds)"
 }
 STATE
+
+# ============================================================================
+# Steps 5-6 (TPM2 initramfs hooks + firstboot enrollment) are skipped with
+# --no-encrypt: hosts without a TPM have no LUKS keystore to unlock.
+# ============================================================================
+if [ "$ENCRYPT" = 1 ]; then
 
 # ============================================================================
 # Step 5: Install TPM2 initramfs hooks
@@ -305,10 +316,12 @@ SERVICE
 
 systemctl enable nixfleet-firstboot.service
 
+fi
+
 # ============================================================================
 # Step 7: Update initramfs
 # ============================================================================
-log "Building initramfs with TPM2 hooks..."
+log "Building initramfs..."
 update-initramfs -u -k all
 
 # ============================================================================
@@ -317,5 +330,7 @@ update-initramfs -u -k all
 log "NixFleet bootstrap complete"
 log "  Deploy user: $DEPLOY_USER"
 log "  Nix daemon:  $(systemctl is-active nix-daemon 2>/dev/null || echo 'pending')"
-log "  Firstboot:   nixfleet-firstboot.service (enabled)"
-log "  TPM2 enrollment will run on first reboot"
+if [ "$ENCRYPT" = 1 ]; then
+  log "  Firstboot:   nixfleet-firstboot.service (enabled)"
+  log "  TPM2 enrollment will run on first reboot"
+fi
