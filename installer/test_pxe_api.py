@@ -17,6 +17,8 @@ spec = importlib.util.spec_from_file_location(
 pxe_api = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pxe_api)
 
+MAC = "aa:bb:cc:dd:ee:ff"
+
 
 def test_dgx_spark_cmdline():
     cfg = pxe_api.build_dgx_spark_config({"iso_url": "http://srv/base_os_7.0.0.iso"})
@@ -82,21 +84,30 @@ def test_fastos_requires_url():
 
 def test_existing_modes_unchanged():
     """The Ubuntu paths must keep booting from the shared BOOT_DIR."""
-    inst = pxe_api.build_install_config("gtr-150")
+    inst = pxe_api.build_install_config("gtr-150", MAC)
     assert inst["kernel"].endswith("/vmlinuz"), inst["kernel"]
     assert "/dgx-spark/" not in inst["kernel"], inst["kernel"]
     assert "ds=nocloud-net" in inst["cmdline"]
-    rec = pxe_api.build_recovery_config()
+    rec = pxe_api.build_recovery_config(MAC)
     assert "ip=dhcp" in rec["cmdline"]
 
 
 def test_recovery_boots_the_iso_without_autoinstall():
     """casper needs the ISO (url=) to start a live system; recovery must not install."""
-    rec = pxe_api.build_recovery_config()
+    rec = pxe_api.build_recovery_config(MAC)
     assert (
         f"url={pxe_api.INSTALLER_URL}/boot/{pxe_api.ISO_NAME} " in rec["cmdline"]
     ), rec
     assert "autoinstall" not in rec["cmdline"], rec
+
+
+def test_ubuntu_modes_pin_dhcp_to_boot_nic():
+    """casper must DHCP only on the PXE NIC, not keep the first lease of any NIC."""
+    for cfg in (
+        pxe_api.build_install_config("hs-1", MAC),
+        pxe_api.build_recovery_config(MAC),
+    ):
+        assert "BOOTIF=01-aa-bb-cc-dd-ee-ff " in cfg["cmdline"], cfg
 
 
 def test_install_iso_is_configurable():
@@ -104,7 +115,7 @@ def test_install_iso_is_configurable():
     old = pxe_api.ISO_NAME
     try:
         pxe_api.ISO_NAME = "ubuntu-26.04.1-live-server-amd64.iso"
-        cmd = pxe_api.build_install_config("hs-1")["cmdline"]
+        cmd = pxe_api.build_install_config("hs-1", MAC)["cmdline"]
         assert "/boot/ubuntu-26.04.1-live-server-amd64.iso " in cmd, cmd
         assert "25.04" not in cmd, cmd
     finally:

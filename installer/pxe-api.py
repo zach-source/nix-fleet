@@ -68,14 +68,24 @@ def normalize_mac(mac):
     return mac
 
 
-def build_install_config(host):
+def bootif(mac):
+    """BOOTIF=01-aa-bb-.. pins initramfs DHCP to the NIC that PXE booted.
+
+    Without it, dhcpcd runs on every NIC in oneshot mode and keeps the first
+    lease. On hs-1 that lease came from 192.168.1.1 on another NIC, so the
+    default route went there and the ISO fetch from INSTALLER_URL timed out.
+    """
+    return "BOOTIF=01-" + mac.replace(":", "-")
+
+
+def build_install_config(host, mac):
     """Build boot config for install mode."""
     return {
         "kernel": f"file://{BOOT_DIR}/vmlinuz",
         "initrd": [f"file://{BOOT_DIR}/initrd"],
         "cmdline": (
             f"root=/dev/ram0 ramdisk_size=1500000 "
-            f"ip=dhcp "
+            f"ip=dhcp {bootif(mac)} "
             f"url={INSTALLER_URL}/boot/{ISO_NAME} "
             f"autoinstall "
             f"ds=nocloud-net\\;s={INSTALLER_URL}/{host}/ "
@@ -85,7 +95,7 @@ def build_install_config(host):
     }
 
 
-def build_recovery_config():
+def build_recovery_config(mac):
     """Build boot config for recovery mode (live Ubuntu, no autoinstall).
 
     casper only starts a live system when it can fetch the ISO (url=); with
@@ -98,7 +108,7 @@ def build_recovery_config():
         "initrd": [f"file://{BOOT_DIR}/initrd"],
         "cmdline": (
             f"root=/dev/ram0 ramdisk_size=1500000 "
-            f"ip=dhcp "
+            f"ip=dhcp {bootif(mac)} "
             f"url={INSTALLER_URL}/boot/{ISO_NAME} "
             "---"
         ),
@@ -213,10 +223,10 @@ class PXEAPIHandler(BaseHTTPRequestHandler):
         try:
             if mode == "install":
                 host = target.get("host", "unknown")
-                config = build_install_config(host)
+                config = build_install_config(host, mac)
                 self.log_message(f"INSTALL {mac} -> host={host}")
             elif mode == "recovery":
-                config = build_recovery_config()
+                config = build_recovery_config(mac)
                 self.log_message(f"RECOVERY {mac}")
             elif mode == "dgx-spark":
                 config = build_dgx_spark_config(target)
