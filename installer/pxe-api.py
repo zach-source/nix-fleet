@@ -44,6 +44,8 @@ from pathlib import Path
 BOOT_DIR = os.environ.get("BOOT_DIR", "/srv/installer/boot")
 TARGETS_FILE = os.environ.get("TARGETS_FILE", "/srv/installer/pxe-targets.json")
 INSTALLER_URL = os.environ.get("INSTALLER_URL", "http://192.168.3.131:8889")
+# ISO the installer streams, relative to the installer HTTP root's boot/.
+ISO_NAME = os.environ.get("INSTALLER_ISO", "ubuntu-25.04.iso")
 API_PORT = int(os.environ.get("API_PORT", "8891"))
 
 
@@ -74,7 +76,7 @@ def build_install_config(host):
         "cmdline": (
             f"root=/dev/ram0 ramdisk_size=1500000 "
             f"ip=dhcp "
-            f"url={INSTALLER_URL}/boot/ubuntu-25.04.iso "
+            f"url={INSTALLER_URL}/boot/{ISO_NAME} "
             f"autoinstall "
             f"ds=nocloud-net\\;s={INSTALLER_URL}/{host}/ "
             f"cloud-config-url=/dev/null "
@@ -247,7 +249,7 @@ class PXEAPIHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global BOOT_DIR, TARGETS_FILE, INSTALLER_URL
+    global BOOT_DIR, TARGETS_FILE, INSTALLER_URL, ISO_NAME
 
     import argparse
 
@@ -260,11 +262,13 @@ def main():
     parser.add_argument(
         "--installer-url", default=INSTALLER_URL, help="Installer HTTP server URL"
     )
+    parser.add_argument("--iso", default=ISO_NAME, help="Install ISO name in boot dir")
     args = parser.parse_args()
 
     BOOT_DIR = args.boot_dir
     TARGETS_FILE = args.targets_file
     INSTALLER_URL = args.installer_url
+    ISO_NAME = args.iso
 
     # Validate boot directory
     if not os.path.isdir(BOOT_DIR):

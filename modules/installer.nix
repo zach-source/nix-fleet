@@ -58,6 +58,17 @@ in
       description = "Default target disk for ZFS partitioning";
     };
 
+    isoName = lib.mkOption {
+      type = lib.types.str;
+      default = "ubuntu-25.04.iso";
+      example = "ubuntu-26.04.1-live-server-amd64.iso";
+      description = ''
+        Install ISO under ''${artifactsPath}/boot, streamed to PXE installs.
+        installer-setup copies the ISO it downloads there under this name
+        pattern (ubuntu-<version>-live-server-amd64.iso).
+      '';
+    };
+
     luksPassphrase = lib.mkOption {
       type = lib.types.str;
       default = "";
@@ -476,7 +487,8 @@ in
           --port ${toString pxeApiPort} \
           --boot-dir ${cfg.artifactsPath}/boot \
           --targets-file ${cfg.artifactsPath}/pxe-targets.json \
-          --installer-url http://${config.nixfleet.host.addr}:${toString cfg.httpPort}
+          --installer-url http://${config.nixfleet.host.addr}:${toString cfg.httpPort} \
+          --iso ${cfg.isoName}
         Restart=on-failure
         RestartSec=5
 
