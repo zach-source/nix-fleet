@@ -23,12 +23,11 @@
       addr = "192.168.3.144";
     };
 
-    # k0s worker. system-reserved=16Gi: no host-side model services here, so
-    # the host only needs room for the OS, ZFS ARC and the DRBD/LINSTOR
-    # satellite; the rest is VM and pod memory.
+    # k0s worker. system-reserved=48Gi: 16Gi for the host (OS, DRBD/LINSTOR
+    # satellite) plus the 32Gi ZFS ARC cap. The rest is VM and pod memory.
     k0s.worker = {
       enable = true;
-      systemReservedMemory = "16Gi";
+      systemReservedMemory = "48Gi";
     };
 
     # iSCSI initiator + multipath blacklist so Synology CSI PVCs still attach,
@@ -48,12 +47,8 @@
       };
     };
 
-    # LINSTOR thin-LVM prerequisites. dataDisks stays empty until the disk
-    # layout is known: after first boot, fill it with the /dev/disk/by-id paths
-    # of the empty data disks (the VG service refuses disks that carry data).
-    modules.hyperscale = {
-      enable = true;
-      dataDisks = [ ];
-    };
+    # ZFS prerequisites. The disk lists (linstorMirrors, scratchMirror) get
+    # filled after the install, when the disk layout is known.
+    modules.hyperscale.enable = true;
   };
 }

@@ -1,8 +1,9 @@
 # HS-2 — HPE DL380 Gen9 (192.168.3.145)
 # Hyperscale k0s worker for KubeVirt + LINSTOR/DRBD (Piraeus) storage.
-# 2x Xeon E5-2650 v3 (20c/40t), 336 GB RAM, no GPU, no TPM
-# Boot NIC HP 533FLR-T 10G (MAC EC:B1:D7:AF:3B:40 port 1, :44 port 2),
-# HBAs P440ar + H240 in HBA mode
+# 2x Xeon E5-2650 v3 (20c/40t), 294 GiB RAM visible, no GPU, no TPM
+# NIC HP 533FLR-T / BCM57810 10G (eno49 = EC:B1:D7:AF:3B:40, port 2 :44)
+# HBA LSI SAS2308 (IT mode)
+# OS on LUKS+LVM RAID1 on sdc+sdd (2x 300G)
 { ... }:
 
 {
@@ -23,12 +24,11 @@
       addr = "192.168.3.145";
     };
 
-    # k0s worker. system-reserved=16Gi: no host-side model services here, so
-    # the host only needs room for the OS, ZFS ARC and the DRBD/LINSTOR
-    # satellite; the rest is VM and pod memory.
+    # k0s worker. system-reserved=48Gi: 16Gi for the host (OS, DRBD/LINSTOR
+    # satellite) plus the 32Gi ZFS ARC cap. The rest is VM and pod memory.
     k0s.worker = {
       enable = true;
-      systemReservedMemory = "16Gi";
+      systemReservedMemory = "48Gi";
     };
 
     # iSCSI initiator + multipath blacklist so Synology CSI PVCs still attach,
@@ -48,12 +48,41 @@
       };
     };
 
-    # LINSTOR thin-LVM prerequisites. dataDisks stays empty until the disk
-    # layout is known: after first boot, fill it with the /dev/disk/by-id paths
-    # of the empty data disks (the VG service refuses disks that carry data).
+    # ZFS pools for LINSTOR (ZFS_THIN pool on zpool linstor) and k0s scratch.
     modules.hyperscale = {
       enable = true;
-      dataDisks = [ ];
+      # 6 mirrors of 600G 10k SAS; each pair mixes an EG0600 with an ST600.
+      linstorMirrors = [
+        [
+          "/dev/disk/by-id/wwn-0x5000c50083a914d7"
+          "/dev/disk/by-id/wwn-0x5000c500769d39b7"
+        ]
+        [
+          "/dev/disk/by-id/wwn-0x5000c50083a94067"
+          "/dev/disk/by-id/wwn-0x5000c500769d68eb"
+        ]
+        [
+          "/dev/disk/by-id/wwn-0x5000c50083a91957"
+          "/dev/disk/by-id/wwn-0x5000c50076997e37"
+        ]
+        [
+          "/dev/disk/by-id/wwn-0x5000c50083a9362b"
+          "/dev/disk/by-id/wwn-0x5000c500769daf9b"
+        ]
+        [
+          "/dev/disk/by-id/wwn-0x5000c500769d61af"
+          "/dev/disk/by-id/wwn-0x5000c5007698f913"
+        ]
+        [
+          "/dev/disk/by-id/wwn-0x5000c5007698f69b"
+          "/dev/disk/by-id/wwn-0x5000c500769908df"
+        ]
+      ];
+      # 2x 1.2T 10k SAS (HUC101812).
+      scratchMirror = [
+        "/dev/disk/by-id/wwn-0x5000cca0b01c3020"
+        "/dev/disk/by-id/wwn-0x5000cca0b01c2540"
+      ];
     };
   };
 }
