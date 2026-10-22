@@ -184,7 +184,10 @@ in
           '') cfg.targets}
 
           cd "$SERVE_DIR"
-          exec python3 -m http.server "$PORT" --bind 0.0.0.0
+          # darkhttpd, not python's http.server: iLO/BMC virtual media
+          # reads the ISO with HTTP Range requests, and http.server
+          # ignores Range and streams the whole file every time.
+          exec ${pkgs.darkhttpd}/bin/darkhttpd "$SERVE_DIR" --port "$PORT" --addr 0.0.0.0
         '';
         restartUnits = [ "nixfleet-installer.service" ];
       };
