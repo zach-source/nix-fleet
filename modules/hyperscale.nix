@@ -10,7 +10,8 @@
 #   - installs the distro lvm2, thin-provisioning-tools and
 #     linux-headers-<running kernel> (apt) if missing
 #   - persists the dm_thin_pool and dm_snapshot modules (modules-load.d)
-#   - labels the k8s node piraeus.io/storage=true and
+#   - labels the k8s node piraeus.io/satellite=true (runs a LINSTOR
+#     satellite), piraeus.io/storage=true (gets a storage pool) and
 #     nixfleet.io/hyperscale=true (kubelet --node-labels, via k0s.nix
 #     extraKubeletArgs)
 #   - with dataDisks set, nixfleet-hyperscale-vg.service creates VG `linstor`
@@ -122,7 +123,7 @@ in
     };
 
     nixfleet.k0s.worker.extraKubeletArgs = [
-      "--node-labels=piraeus.io/storage=true,nixfleet.io/hyperscale=true"
+      "--node-labels=piraeus.io/satellite=true,piraeus.io/storage=true,nixfleet.io/hyperscale=true"
     ];
 
     nixfleet.hooks.postActivate = ''
