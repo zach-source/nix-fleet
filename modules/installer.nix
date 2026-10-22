@@ -23,6 +23,14 @@
 let
   cfg = config.nixfleet.modules.installer;
   pxeApiPort = cfg.pxeApiPort;
+
+  # UEFI iPXE for pixiecore. The bundled ipxe.efi does DHCP on net0, and net0
+  # can be a port that is not on the PXE network. snponly.efi uses only the
+  # NIC that the firmware booted from. It embeds the pixiecore boot script.
+  ipxeSnponly = pkgs.ipxe.override {
+    additionalTargets."bin-x86_64-efi/snponly.efi" = null;
+    embedScript = "${pkgs.pixiecore.src}/pixiecore/boot.ipxe";
+  };
 in
 {
   options.nixfleet.modules.installer = {
@@ -513,6 +521,7 @@ in
         Type=simple
         ExecStart=${pkgs.pixiecore}/bin/pixiecore api http://localhost:${toString pxeApiPort} \
           --dhcp-no-bind \
+          --ipxe-efi64 ${ipxeSnponly}/snponly.efi \
           --log-timestamps
         Restart=on-failure
         RestartSec=10
