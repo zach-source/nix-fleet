@@ -68,6 +68,13 @@ if [ -f /etc/profile.d/nix.sh ]; then
   . /etc/profile.d/nix.sh
 fi
 
+# nixfleet apply runs `nix copy` as the deploy user. The daemon rejects
+# unsigned paths from untrusted users, so trust the deploy user.
+if ! grep -q '^trusted-users' /etc/nix/nix.conf 2>/dev/null; then
+  echo "trusted-users = root $DEPLOY_USER" >> /etc/nix/nix.conf
+fi
+systemctl restart nix-daemon 2>/dev/null || true
+
 # ============================================================================
 # Step 2: Create deploy user
 # ============================================================================
