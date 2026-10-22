@@ -95,27 +95,12 @@ chown -R "$DEPLOY_USER:$DEPLOY_USER" "$SSH_DIR"
 # ============================================================================
 log "Configuring sudoers for $DEPLOY_USER"
 
+# Same rule as the fleet's existing /etc/sudoers.d/deploy. Ubuntu 26.04 ships
+# sudo-rs, which rejects wildcards in command arguments (/usr/bin/tee /etc/*),
+# and nixfleet activation runs commands outside any narrow list anyway.
 cat > "/etc/sudoers.d/nixfleet-$DEPLOY_USER" <<SUDOERS
-# NixFleet sudo rules for $DEPLOY_USER
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /nix/var/nix/profiles/nixfleet/*/bin/*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/nix*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /nix/var/nix/profiles/default/bin/nix*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/*
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/install -m * -o * -g * *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/useradd *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/usermod *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/sbin/groupadd *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/chown *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/chmod *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /usr/bin/mkdir *
-$DEPLOY_USER ALL=(ALL) NOPASSWD: /sbin/reboot
+# NixFleet sudo rule for $DEPLOY_USER
+$DEPLOY_USER ALL=(ALL) NOPASSWD: ALL
 SUDOERS
 
 chmod 440 "/etc/sudoers.d/nixfleet-$DEPLOY_USER"
