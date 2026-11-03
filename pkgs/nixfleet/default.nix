@@ -2,10 +2,14 @@
 {
   lib,
   buildGoModule,
+  go,
   installShellFiles,
   gitCommit ? "",
   gitTag ? "",
 }:
+
+assert lib.assertMsg (lib.versionAtLeast go.version "1.26.10")
+  "nixfleet needs Go >= 1.26.10 (GO-2026-6809), but nixpkgs provides ${go.version}. Update the nixpkgs pin.";
 
 buildGoModule rec {
   pname = "nixfleet";
