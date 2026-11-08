@@ -4,7 +4,7 @@
 # All inputs use git+https because `github:` fails on the AX VM.
 inputs:
   nixpkgs:
-    url: git+https://github.com/NixOS/nixpkgs?shallow=1&rev=0bb2eedc20e4739f29e8045034f2828ad7054f8f
+    url: git+https://github.com/NixOS/nixpkgs?shallow=1&rev=f9a75f41be3a74eab55d3a7679d34ad6cc0da977
   nixpkgs-golangci-lint:
     url: git+https://github.com/NixOS/nixpkgs?shallow=1&rev=a6c273d1d22a9fd964113f813666b9b8eb3ecf35
   devenv:
