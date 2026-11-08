@@ -5,6 +5,10 @@ result-*
 # Development
 .direnv/
 .envrc.local
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+devenv.local.yaml
 
 # IDE
 .idea/

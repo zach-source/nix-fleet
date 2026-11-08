@@ -1,0 +1,11 @@
+# The CI tools for factory workers: load them with `devenv print-dev-env`.
+# nixpkgs is the flake.lock rev. nixpkgs-golangci-lint is the last
+# nixos-unstable rev with golangci-lint 2.12.2 (the ci.yml version).
+# All inputs use git+https because `github:` fails on the AX VM.
+inputs:
+  nixpkgs:
+    url: git+https://github.com/NixOS/nixpkgs?shallow=1&rev=0bb2eedc20e4739f29e8045034f2828ad7054f8f
+  nixpkgs-golangci-lint:
+    url: git+https://github.com/NixOS/nixpkgs?shallow=1&rev=a6c273d1d22a9fd964113f813666b9b8eb3ecf35
+  devenv:
+    url: git+https://github.com/cachix/devenv?shallow=1&rev=b904dcb51fe48c30db250038241507f60752f222

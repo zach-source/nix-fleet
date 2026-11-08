@@ -71,6 +71,8 @@ nixfleet/
 ```bash
 # Enter dev shell
 nix develop
+# Or load the CI tools (no spire-agent) without a subshell:
+eval "$(devenv print-dev-env)"
 
 # Format Nix, from the repo root. The tree is nixfmt-formatted; nixpkgs-fmt
 # would churn every file.

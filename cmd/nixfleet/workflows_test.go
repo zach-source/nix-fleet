@@ -78,3 +78,40 @@ func goModVersion(t *testing.T) string {
 	t.Fatal("no `go` directive in go.mod")
 	return ""
 }
+
+var (
+	devenvGoRe      = regexp.MustCompile(`(?m)^\s*goVersion\s*=\s*"([0-9]+\.[0-9]+)";`)
+	devenvLintRe    = regexp.MustCompile(`(?m)^\s*golangciLintVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)";`)
+	ciLintVersionRe = regexp.MustCompile(`(?m)^\s*version:\s*v([0-9]+\.[0-9]+\.[0-9]+)\s*$`)
+)
+
+// TestDevenvPinsMatchCI makes sure the Go and golangci-lint pins in devenv.nix
+// equal go.mod and the golangci-lint version in ci.yml.
+func TestDevenvPinsMatchCI(t *testing.T) {
+	if _, err := os.Stat(filepath.Join(repoRoot, ".github/workflows")); os.IsNotExist(err) {
+		t.Skipf("workflows absent; running outside a full checkout")
+	}
+	read := func(rel string) string {
+		path := filepath.Join(repoRoot, rel)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return string(b)
+	}
+	one := func(re *regexp.Regexp, src, what string) string {
+		m := re.FindAllStringSubmatch(src, -1)
+		if len(m) != 1 {
+			t.Fatalf("%s: want exactly one match of %s, got %d", what, re, len(m))
+		}
+		return m[0][1]
+	}
+	devenv := read("devenv.nix")
+	if got, want := one(devenvGoRe, devenv, "devenv.nix goVersion"), goModVersion(t); got != want {
+		t.Errorf("devenv.nix goVersion = %s, go.mod = %s", got, want)
+	}
+	got := one(devenvLintRe, devenv, "devenv.nix golangciLintVersion")
+	if want := one(ciLintVersionRe, read(".github/workflows/ci.yml"), "ci.yml version"); got != want {
+		t.Errorf("devenv.nix golangciLintVersion = %s, ci.yml = %s", got, want)
+	}
+}
