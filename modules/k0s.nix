@@ -27,6 +27,8 @@ let
   );
 in
 {
+  imports = [ ./containerd-apparmor.nix ];
+
   options.nixfleet.k0s.worker = {
     enable = lib.mkEnableOption "k0s worker node (declaratively managed by nixfleet)";
 
@@ -64,6 +66,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Without it, containers that use gosu hang under AppArmor 5.
+    nixfleet.containerdAppArmor.enable = lib.mkDefault true;
+
     # Ensure the pinned k0s binary is present (idempotent: only downloads when
     # missing or the wrong version — a no-op on already-provisioned workers).
     nixfleet.hooks.preActivate = ''
