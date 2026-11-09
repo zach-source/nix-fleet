@@ -162,7 +162,12 @@ in
           + concatStringsSep "\n" (
             mapAttrsToList (path: dirCfg: ''
               ${optionalString cfg.safeActivationPaths "nixfleet_check_path ${escapeShellArg path} || exit 1"}
-              mkdir -p ${escapeShellArg path}
+              ${
+                if cfg.safeActivationPaths then
+                  "(umask 077; mkdir -p ${escapeShellArg path})"
+                else
+                  "mkdir -p ${escapeShellArg path}"
+              }
               chmod ${escapeShellArg dirCfg.mode} ${escapeShellArg path}
               chown ${escapeShellArg "${dirCfg.owner}:${dirCfg.group}"} ${escapeShellArg path}
             '') cfg.directories

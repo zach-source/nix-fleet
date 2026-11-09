@@ -22,6 +22,8 @@ let
 in
 assert lib.hasInfix "nixfleet_check_path /fixture/file" strict;
 assert lib.hasInfix "nixfleet_check_path /fixture/directory" strict;
+assert lib.hasInfix "(umask 077; mkdir -p /fixture/directory)" strict;
+assert lib.hasInfix "(umask 077; mkdir -p /fixture)" strict;
 assert !(lib.hasInfix "nixfleet_check_path" legacy);
 assert hashLine legacy != hashLine strictEmpty;
 pkgs.runCommand "check-safe-activation-paths" { } ''

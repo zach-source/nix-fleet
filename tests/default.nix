@@ -132,6 +132,7 @@ let
   # restarted. Each apply between restarts left /srv/dolt root-owned, so
   # `mkdir` for a new dolt database failed with "permission denied".
   doltHost = mkNixFleetConfiguration {
+    system = pkgs.stdenv.hostPlatform.system;
     modules = [
       {
         nixfleet.host = {
@@ -547,19 +548,18 @@ in
     # root:root. This is Step 4; it runs on every apply, not just when
     # dolt-server restarts.
     "the directories step chowns dataDir to dolt:dolt" =
-      hasSubstring doltActivation ''chown dolt:dolt "/srv/dolt"'';
+      hasSubstring doltActivation "chown dolt:dolt /srv/dolt";
 
-    "the directories step chmods dataDir to 0750" =
-      hasSubstring doltActivation ''chmod 0750 "/srv/dolt"'';
+    "the directories step chmods dataDir to 0750" = hasSubstring doltActivation "chmod 0750 /srv/dolt";
 
     "the directories step never leaves dataDir root:root" =
-      !(hasSubstring doltActivation ''chown root:root "/srv/dolt"'');
+      !(hasSubstring doltActivation "chown root:root /srv/dolt");
 
     # useradd for "dolt" must run before Step 4 chowns to it, or the chown
     # targets a user that does not exist yet.
     "the dolt user is created before dataDir is chowned to it" =
       occursBefore doltActivation "Creating user: dolt"
-        ''chown dolt:dolt "/srv/dolt"'';
+        "chown dolt:dolt /srv/dolt";
 
     # The service-start repair stays: it fixes ownership of subdirectories
     # dolt itself creates under dataDir (each dolt database), which Step 4's

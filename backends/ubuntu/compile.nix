@@ -691,7 +691,12 @@ let
     ${concatStringsSep "\n" (
       mapAttrsToList (path: dirCfg: ''
         ${optionalString cfg.safeActivationPaths "nixfleet_check_path ${escapeShellArg path}"}
-        mkdir -p ${escapeShellArg path}
+        ${
+          if cfg.safeActivationPaths then
+            "(umask 077; mkdir -p ${escapeShellArg path})"
+          else
+            "mkdir -p ${escapeShellArg path}"
+        }
         chmod ${escapeShellArg dirCfg.mode} ${escapeShellArg path}
         chown ${escapeShellArg "${dirCfg.owner}:${dirCfg.group}"} ${escapeShellArg path}
       '') cfg.directories
@@ -815,7 +820,12 @@ let
             # Check if file changed
             if ! cmp -s "${stagedPath}" ${escapeShellArg path} 2>/dev/null; then
               log ${escapeShellArg "  Updating: ${path}"}
-              mkdir -p ${escapeShellArg (dirOf path)}
+              ${
+                if cfg.safeActivationPaths then
+                  "(umask 077; mkdir -p ${escapeShellArg (dirOf path)})"
+                else
+                  "mkdir -p ${escapeShellArg (dirOf path)}"
+              }
               cp "${stagedPath}" ${escapeShellArg path}
               CHANGED_FILES+=" "${escapeShellArg path}
             fi
