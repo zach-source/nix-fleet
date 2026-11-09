@@ -27,6 +27,7 @@ type Client struct {
 	conn       *ssh.Client
 	mu         sync.Mutex
 	lastUsed   time.Time
+	active     int
 	config     *ssh.ClientConfig
 	knownHosts ssh.HostKeyCallback
 }
@@ -229,6 +230,15 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.conn = ssh.NewClient(sshConn, chans, reqs)
+	conn := c.conn
+	go func() {
+		_ = conn.Wait()
+		c.mu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.mu.Unlock()
+	}()
 	c.lastUsed = time.Now()
 
 	return nil
@@ -238,7 +248,10 @@ func (c *Client) Connect(ctx context.Context) error {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.closeLocked()
+}
 
+func (c *Client) closeLocked() error {
 	if c.conn == nil {
 		return nil
 	}
@@ -286,7 +299,14 @@ func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (result *Ex
 		return nil, fmt.Errorf("not connected")
 	}
 	conn := c.conn
+	c.active++
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		c.lastUsed = time.Now()
+		c.mu.Unlock()
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -352,10 +372,6 @@ func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (result *Ex
 			return nil, err
 		}
 	}
-
-	c.mu.Lock()
-	c.lastUsed = time.Now()
-	c.mu.Unlock()
 
 	return &ExecResult{
 		Stdout:   string(out.stdout),

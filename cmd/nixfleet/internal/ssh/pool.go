@@ -14,6 +14,7 @@ type Pool struct {
 	config      *ClientConfig
 	maxIdle     time.Duration
 	cleanupStop chan struct{}
+	closed      bool
 
 	// dial is the connection constructor, swapped out in tests.
 	dial func(ctx context.Context, host string, port int, user string) (*Client, error)
@@ -78,6 +79,10 @@ func (p *Pool) GetWithUser(ctx context.Context, host string, port int, user stri
 
 	for {
 		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("SSH pool is closed")
+		}
 		entry, found := p.entries[key]
 		if !found {
 			entry = &poolEntry{ready: make(chan struct{})}
@@ -87,8 +92,17 @@ func (p *Pool) GetWithUser(ctx context.Context, host string, port int, user stri
 
 		if !found {
 			// We own this slot: dial unlocked, then publish the outcome.
-			entry.client, entry.err = p.dial(ctx, host, port, user)
+			client, err := p.dial(ctx, host, port, user)
+			p.mu.Lock()
+			if p.closed || p.entries[key] != entry {
+				if client != nil {
+					_ = client.Close()
+				}
+				client, err = nil, fmt.Errorf("SSH pool connection was discarded")
+			}
+			entry.client, entry.err = client, err
 			close(entry.ready)
+			p.mu.Unlock()
 			if entry.err != nil {
 				p.discard(key, entry)
 				return nil, entry.err
@@ -150,10 +164,13 @@ func (p *Pool) discard(key string, entry *poolEntry) {
 
 // Close closes all connections in the pool
 func (p *Pool) Close() error {
-	close(p.cleanupStop)
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	close(p.cleanupStop)
 
 	var firstErr error
 	for key, entry := range p.entries {
@@ -206,13 +223,11 @@ func (p *Pool) cleanupIdle() {
 		}
 
 		client.mu.Lock()
-		idle := now.Sub(client.lastUsed) > p.maxIdle
-		client.mu.Unlock()
-
-		if idle {
-			client.Close()
+		if client.active == 0 && now.Sub(client.lastUsed) > p.maxIdle {
+			_ = client.closeLocked()
 			delete(p.entries, key)
 		}
+		client.mu.Unlock()
 	}
 }
 
