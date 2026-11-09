@@ -19,20 +19,21 @@ import (
 
 // Config holds the server configuration
 type Config struct {
-	APITokenFile    string
-	TLSCertFile     string
-	TLSKeyFile      string
-	Port            int
-	BindAddress     string
-	StateDir        string
-	LogFile         string
-	HostName        string
-	ManifestHash    string
-	Version         string
-	GitCommit       string
-	GitTag          string
-	HostRepoPath    string
-	HomeManagerPath string
+	ReportUncheckedHealth bool
+	APITokenFile          string
+	TLSCertFile           string
+	TLSKeyFile            string
+	Port                  int
+	BindAddress           string
+	StateDir              string
+	LogFile               string
+	HostName              string
+	ManifestHash          string
+	Version               string
+	GitCommit             string
+	GitTag                string
+	HostRepoPath          string
+	HomeManagerPath       string
 }
 
 // DefaultConfig returns a Config with sensible defaults
@@ -480,8 +481,11 @@ func (s *Server) gatherHealthInfo() *HealthInfo {
 		Summary: "all_passing",
 	}
 
-	// We just report what health checks are defined, not their status
-	// (actual health check execution is done by the activate script)
+	if s.config.ReportUncheckedHealth {
+		info.Summary = "unknown"
+	}
+
+	// Definitions are not evidence of a completed health check.
 	for name := range checks {
 		info.Checks[name] = "defined"
 	}

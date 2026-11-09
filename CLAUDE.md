@@ -384,3 +384,16 @@ The dormant internal/apply Pipeline is not used by production commands. PKI
 remains an explicit CLI --with-pki operation; k0s reconciliation is separate.
 Pull verification is configured separately; node status health declarations
 alone are not evidence that checks executed.
+
+For pull mode, enable `nixfleet.pullMode.verifyDeployment = true;`, or use
+`--verify-deploy` when installing pull mode with the CLI. Both generated scripts
+check local root access, disk space, and the Nix daemon before activation, then
+run the same closure health checker after activation/profile selection. Health
+failure leaves the actual deployed state in place but does not mark the revision
+successful. Enable retryFailedApply as well to retry the same failed revision.
+
+Verified Nix-generated pull status services pass `--report-unchecked-health`,
+which reports declared-only checks as unknown. The standalone node-status flag
+is also available. Its default retains the legacy summary for compatibility;
+that legacy summary is not proof of successful checks. Update the node-status
+binary before enabling the new generated service option.
