@@ -153,7 +153,28 @@ in
     https = mkOption {
       type = types.bool;
       default = true;
-      description = "Use HTTPS (DSM self-signed cert is accepted).";
+      description = "Use HTTPS. Certificates are verified when verifyTLS or caFile is set.";
+    };
+    verifyTLS = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Verify the DSM certificate chain and host identity using system trust
+        (or caFile). Requires https = true. Opt in after installing a trusted
+        certificate matching host; the compatibility default accepts arbitrary
+        certificates and does not protect against NAS impersonation.
+      '';
+    };
+    caFile = mkOption {
+      type = types.str;
+      default = "";
+      example = "/etc/nixfleet/dsm-ca.pem";
+      description = ''
+        PEM CA bundle on the machine running the CLI, obtained through a trusted
+        channel. Replaces system trust roots and enables certificate and host
+        verification even if verifyTLS is false. Requires https = true.
+        Empty uses system roots when verifyTLS is true.
+      '';
     };
     user = mkOption {
       type = types.str;

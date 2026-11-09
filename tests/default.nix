@@ -226,6 +226,30 @@ in
       touch $out
     '';
 
+  synology-tls-options = mkCheck "synology-tls-options" (
+    let
+      dsmConfig =
+        settings:
+        (lib.evalModules {
+          modules = [
+            ../modules/nixfleet/synology.nix
+            { nixfleet.synology = settings; }
+          ];
+        }).config.nixfleet.synology;
+      defaults = dsmConfig { };
+      verified = dsmConfig {
+        verifyTLS = true;
+        caFile = "/etc/nixfleet/dsm-ca.pem";
+      };
+    in
+    {
+      "self-signed compatibility defaults remain" =
+        defaults.https && !defaults.verifyTLS && defaults.caFile == "";
+      "verified TLS and CLI-local CA are exported" =
+        verified.https && verified.verifyTLS && verified.caFile == "/etc/nixfleet/dsm-ca.pem";
+    }
+  );
+
   # Portable: needs no nix-darwin, so it runs in CI (linux) too.
   darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {
     # `darwin` was missing from the enum, so hosts/mac-1.nix could not be

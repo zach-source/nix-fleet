@@ -26,6 +26,12 @@ password is sourced out-of-band (never from Nix):
   --password-command "op read 'op://Personal Agents/nas botuser/confirmpassword'"
   or  $SYNOLOGY_PASSWORD
 
+TLS verification is opt-in for existing self-signed installations. Set
+nixfleet.synology.verifyTLS = true to use system trust, or set caFile to a
+trusted PEM CA bundle on the CLI machine (also enables verification).
+Both modes require https = true and a host matching the certificate.
+Without either option, HTTPS does not authenticate the NAS.
+
 Examples:
   nixfleet synology status znas
   nixfleet synology reconcile znas               # dry-run (default)
@@ -160,7 +166,10 @@ func synologyConnect(ctx context.Context, cmd *cobra.Command, host string) (*syn
 	if err != nil {
 		return nil, nil, err
 	}
-	cl := synology.NewClient(cfg.Host, cfg.Port, cfg.HTTPS, cfg.User, pw)
+	cl, err := synology.NewClient(*cfg, pw)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := cl.Login(ctx); err != nil {
 		return nil, nil, err
 	}
