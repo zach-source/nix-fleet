@@ -221,8 +221,8 @@ Compares desired configuration against current deployed state to show:
 
 				// Compare with current state
 				hasChanges := true
-				if hostState != nil && hostState.ManifestHash != "" {
-					if hostState.ManifestHash == closure.ManifestHash {
+				if hostState != nil && (hostState.DeploymentID != "" || hostState.ManifestHash != "") {
+					if hostState.MatchesDeployment(closure.StorePath, closure.ManifestHash) {
 						hasChanges = false
 						upToDateCount++
 						fmt.Printf("  Status: UP TO DATE\n")

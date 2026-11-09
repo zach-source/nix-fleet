@@ -43,11 +43,14 @@ type HostState struct {
 	OSInfo *OSInfo `json:"os_info,omitempty"`
 
 	// Current deployment
-	CurrentGeneration int       `json:"current_generation"`
-	ManifestHash      string    `json:"manifest_hash"`
-	StorePath         string    `json:"store_path"`
-	LastApply         time.Time `json:"last_apply"`
-	ApplyDuration     string    `json:"apply_duration"`
+	CurrentGeneration      int       `json:"current_generation"`
+	ManifestHash           string    `json:"manifest_hash"`
+	StorePath              string    `json:"store_path"`
+	DeploymentID           string    `json:"deployment_id,omitempty"`
+	DeploymentGeneration   int       `json:"deployment_generation,omitempty"`
+	DeploymentManifestHash string    `json:"deployment_manifest_hash,omitempty"`
+	LastApply              time.Time `json:"last_apply"`
+	ApplyDuration          string    `json:"apply_duration"`
 
 	// OS Updates
 	LastOSUpdate      time.Time     `json:"last_os_update,omitempty"`
@@ -256,6 +259,9 @@ func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath
 	}
 
 	state.StorePath = storePath
+	state.DeploymentID = storePath
+	state.DeploymentGeneration = generation
+	state.DeploymentManifestHash = manifestHash
 	state.ManifestHash = manifestHash
 	state.CurrentGeneration = generation
 	state.LastApply = time.Now()
@@ -599,4 +605,12 @@ func (p *PlanDiff) Summary() string {
 	}
 
 	return sb.String()
+}
+
+// MatchesDeployment compares the deployment identity, falling back for legacy state.
+func (s *HostState) MatchesDeployment(storePath, manifestHash string) bool {
+	if s.DeploymentID != "" && s.DeploymentGeneration == s.CurrentGeneration && s.DeploymentManifestHash == s.ManifestHash {
+		return s.DeploymentID == storePath
+	}
+	return s.ManifestHash != "" && s.ManifestHash == manifestHash
 }

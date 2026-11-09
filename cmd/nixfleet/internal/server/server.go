@@ -719,8 +719,8 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 			result["connection_error"] = err.Error()
 		} else {
 			hostState, _ := s.stateMgr.ReadState(ctx, client)
-			if hostState != nil && hostState.ManifestHash != "" {
-				if hostState.ManifestHash == closure.ManifestHash {
+			if hostState != nil && (hostState.DeploymentID != "" || hostState.ManifestHash != "") {
+				if hostState.MatchesDeployment(closure.StorePath, closure.ManifestHash) {
 					result["status"] = "up_to_date"
 				} else {
 					result["status"] = "changes_pending"
@@ -767,8 +767,8 @@ func (s *Server) handlePlanHost(w http.ResponseWriter, r *http.Request) {
 		result["status"] = "unreachable"
 	} else {
 		hostState, _ := s.stateMgr.ReadState(ctx, client)
-		if hostState != nil && hostState.ManifestHash != "" {
-			if hostState.ManifestHash == closure.ManifestHash {
+		if hostState != nil && (hostState.DeploymentID != "" || hostState.ManifestHash != "") {
+			if hostState.MatchesDeployment(closure.StorePath, closure.ManifestHash) {
 				result["status"] = "up_to_date"
 			} else {
 				result["status"] = "changes_pending"
