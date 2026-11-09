@@ -125,7 +125,42 @@ nixfleet apply -H myhost
 |---------|-------------|
 | `nixfleet host onboard` | Onboard a new host (get age key, setup secrets, install pull mode) |
 
-### Secrets Management
+#### API and node-status transport security
+
+Both servers accept `--tls-cert /run/credentials/server.crt --tls-key /run/credentials/server.key`
+for HTTPS. Supply both files; incomplete or unreadable TLS configuration fails startup.
+The API still requires `--api-token` on non-loopback listeners.
+
+Node-status also accepts `--api-token-file /run/credentials/status-token`. This
+protects `/`, `/status`, `/pull`, and `/state` with `Authorization: Bearer <token>`.
+`/health` remains public and excludes logs and state. A configured token file must
+be readable and nonempty. Provision token and private-key files outside the Nix
+store, restrict their permissions, and restart the service after changing them.
+
+For generated Ubuntu pull-mode services:
+
+```nix
+nixfleet.pullMode.statusServer = {
+  enable = true;
+  apiTokenFile = "/run/credentials/status-token";
+  tlsCertFile = "/run/credentials/server.crt";
+  tlsKeyFile = "/run/credentials/server.key";
+};
+```
+
+Migration is opt-in: provision files first, configure clients to trust the
+certificate and send the token, then enable these options and switch clients to
+`https://`. Existing HTTP clients must migrate together with the listener. The
+built-in SSH-based status collection is unchanged. Test with a client that checks
+the certificate; do not disable verification.
+
+Defaults remain unchanged for compatibility: the API binds `127.0.0.1:8080`, and
+node-status binds `0.0.0.0:9100` with no authentication or TLS. Remote plaintext
+bearer authentication can expose tokens, and unauthenticated node-status exposes
+logs/state to reachable peers. Use the new options, a trusted TLS/authenticating
+proxy, or a secure tunnel before exposing either service to untrusted networks.
+
+## Secrets Management
 
 | Command | Description |
 |---------|-------------|

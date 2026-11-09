@@ -5,6 +5,8 @@ package nodestatus
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +19,9 @@ import (
 
 // Config holds the server configuration
 type Config struct {
+	APITokenFile    string
+	TLSCertFile     string
+	TLSKeyFile      string
 	Port            int
 	BindAddress     string
 	StateDir        string
@@ -96,8 +101,9 @@ type HealthInfo struct {
 
 // Server is the node status HTTP server
 type Server struct {
-	config Config
-	server *http.Server
+	config   Config
+	server   *http.Server
+	apiToken string
 }
 
 // NewServer creates a new node status server
@@ -107,14 +113,32 @@ func NewServer(cfg Config) *Server {
 
 // Start starts the HTTP server
 func (s *Server) Start(ctx context.Context) error {
+	if (s.config.TLSCertFile == "") != (s.config.TLSKeyFile == "") {
+		return fmt.Errorf("TLS requires both --tls-cert and --tls-key")
+	}
+	if s.config.TLSCertFile != "" {
+		if _, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile); err != nil {
+			return fmt.Errorf("loading TLS certificate: %w", err)
+		}
+	}
+	if s.config.APITokenFile != "" {
+		token, err := os.ReadFile(s.config.APITokenFile)
+		if err != nil {
+			return fmt.Errorf("reading API token file: %w", err)
+		}
+		s.apiToken = strings.TrimSpace(string(token))
+		if s.apiToken == "" {
+			return fmt.Errorf("API token file must not be empty")
+		}
+	}
 	mux := http.NewServeMux()
 
 	// Status endpoints
-	mux.HandleFunc("/", s.handleRoot)
-	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/", s.authMiddleware(s.handleRoot))
+	mux.HandleFunc("/status", s.authMiddleware(s.handleStatus))
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/pull", s.handlePullStatus)
-	mux.HandleFunc("/state", s.handleState)
+	mux.HandleFunc("/pull", s.authMiddleware(s.handlePullStatus))
+	mux.HandleFunc("/state", s.authMiddleware(s.handleState))
 
 	addr := fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port)
 	s.server = &http.Server{
@@ -128,8 +152,10 @@ func (s *Server) Start(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		fmt.Printf("Node status server listening on %s\n", addr)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
+		if s.config.TLSCertFile != "" {
+			errCh <- s.server.ListenAndServeTLS(s.config.TLSCertFile, s.config.TLSKeyFile)
+		} else {
+			errCh <- s.server.ListenAndServe()
 		}
 	}()
 
@@ -141,6 +167,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return s.server.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.apiToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.apiToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
