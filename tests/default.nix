@@ -132,6 +132,7 @@ let
   # restarted. Each apply between restarts left /srv/dolt root-owned, so
   # `mkdir` for a new dolt database failed with "permission denied".
   doltHost = mkNixFleetConfiguration {
+    system = pkgs.stdenv.hostPlatform.system;
     modules = [
       {
         nixfleet.host = {
@@ -249,6 +250,9 @@ in
         verified.https && verified.verifyTLS && verified.caFile == "/etc/nixfleet/dsm-ca.pem";
     }
   );
+
+  dolt-remote-auth = import ./dolt-grants.nix { inherit pkgs lib mkNixFleetConfiguration; };
+  runtime-secrets = import ./runtime-secrets.nix { inherit pkgs lib mkNixFleetConfiguration; };
 
   # Portable: needs no nix-darwin, so it runs in CI (linux) too.
   darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {

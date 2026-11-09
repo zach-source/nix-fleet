@@ -266,14 +266,24 @@ let
         local message="$2"
         ${optionalString (pullCfg.webhook.url != null) ''
           local payload="{\"host\":\"$HOST_NAME\",\"status\":\"$status\",\"message\":\"$message\",\"timestamp\":\"$(date -Iseconds)\"}"
-          ${optionalString (pullCfg.webhook.secret != null) ''
-            local signature=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+          ${optionalString (pullCfg.webhook.secret != null || pullCfg.webhook.secretFile != null) ''
+            ${
+              if pullCfg.webhook.secretFile != null then
+                ''
+                  local signature
+                  signature=$(printf '%s' "$payload" | nixfleet pull-mode webhook-signature --secret-file ${escapeShellArg pullCfg.webhook.secretFile}) || return 1
+                ''
+              else
+                ''
+                  local signature=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+                ''
+            }
             curl -s -X POST "$WEBHOOK_URL" \
                 -H "Content-Type: application/json" \
                 -H "X-NixFleet-Signature: sha256=$signature" \
                 -d "$payload" || true
           ''}
-          ${optionalString (pullCfg.webhook.secret == null) ''
+          ${optionalString (pullCfg.webhook.secret == null && pullCfg.webhook.secretFile == null) ''
             curl -s -X POST "$WEBHOOK_URL" \
                 -H "Content-Type: application/json" \
                 -d "$payload" || true

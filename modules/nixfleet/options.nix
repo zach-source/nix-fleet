@@ -535,7 +535,22 @@ in
         secret = mkOption {
           type = types.nullOr types.str;
           default = null;
-          description = "Webhook secret for signing (set via secrets, not here)";
+          description = "Legacy inline webhook secret (public in Nix store); migrate to secretFile.";
+        };
+        secretFile = mkOption {
+          type = types.nullOr (
+            types.addCheck types.str (
+              path: hasPrefix "/" path && !(hasPrefix "/nix/store/" path) && !(builtins.hasContext path)
+            )
+          );
+          default = null;
+          apply =
+            path:
+            assert lib.assertMsg (
+              path == null || config.nixfleet.pullMode.webhook.secret == null
+            ) "pullMode.webhook.secret and secretFile are mutually exclusive";
+            path;
+          description = "Absolute runtime path to a root-only webhook key; bytes are used verbatim. Requires a nixfleet binary with pull-mode webhook-signature support. Mutually exclusive with secret.";
         };
       };
 
