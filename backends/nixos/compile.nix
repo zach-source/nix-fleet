@@ -18,7 +18,20 @@ let
 
 in
 {
+  options.nixfleet.nixos.strictTranslation = mkOption {
+    type = types.bool;
+    default = false;
+    description = "Translate raw systemd units and reject unsupported file paths. Opt in to change legacy service activation behavior.";
+  };
+
   config = mkIf isNixOS {
+    assertions = optionals cfg.nixos.strictTranslation (
+      mapAttrsToList (path: _: {
+        assertion = hasPrefix "/etc/" path;
+        message = "NixOS backend: file path must start with /etc/, got: ${path}";
+      }) cfg.files
+    );
+
     # Translate nixfleet.packages to environment.systemPackages
     environment.systemPackages = cfg.packages;
 
@@ -33,39 +46,59 @@ in
           else
             throw "NixOS backend: file path must start with /etc/, got: ${path}";
       in
-      nameValuePair etcPath {
-        text = fileCfg.text;
-        source = fileCfg.source;
-        mode = fileCfg.mode;
-        user = fileCfg.owner;
-        group = fileCfg.group;
-      }
+      nameValuePair etcPath (
+        {
+          mode = fileCfg.mode;
+          user = fileCfg.owner;
+          group = fileCfg.group;
+        }
+        // (if fileCfg.text != null then { text = fileCfg.text; } else { source = fileCfg.source; })
+      )
     ) (filterAttrs (path: _: hasPrefix "/etc/" path) cfg.files);
 
     # Translate nixfleet.systemd.units to systemd.services/timers
-    systemd.services = mapAttrs' (
-      name: unitCfg:
-      let
-        # Only handle .service units here
-        isService = hasSuffix ".service" name;
-        serviceName = removeSuffix ".service" name;
-      in
-      if isService then
-        nameValuePair serviceName {
-          enable = unitCfg.enabled;
-          # Parse the unit file text - this is a simplified approach
-          # In practice, you might want to use native NixOS service options
-          serviceConfig = {
-            # Basic service config extracted from unit text
-            # For full control, use native NixOS options
-          };
-          # Use the raw unit text via script or ExecStart
-          description = "NixFleet managed service: ${serviceName}";
-          wantedBy = optional unitCfg.enabled "multi-user.target";
-        }
-      else
-        nameValuePair name { }
-    ) (filterAttrs (name: _: hasSuffix ".service" name) cfg.systemd.units);
+    systemd.services = mkIf (!cfg.nixos.strictTranslation) (
+      mapAttrs' (
+        name: unitCfg:
+        let
+          # Only handle .service units here
+          isService = hasSuffix ".service" name;
+          serviceName = removeSuffix ".service" name;
+        in
+        if isService then
+          nameValuePair serviceName {
+            enable = unitCfg.enabled;
+            # Parse the unit file text - this is a simplified approach
+            # In practice, you might want to use native NixOS service options
+            serviceConfig = {
+              # Basic service config extracted from unit text
+              # For full control, use native NixOS options
+            };
+            # Use the raw unit text via script or ExecStart
+            description = "NixFleet managed service: ${serviceName}";
+            wantedBy = optional unitCfg.enabled "multi-user.target";
+          }
+        else
+          nameValuePair name { }
+      ) (filterAttrs (name: _: hasSuffix ".service" name) cfg.systemd.units)
+    );
+
+    systemd.units = mkIf cfg.nixos.strictTranslation (
+      mapAttrs (name: unitCfg: {
+        inherit (unitCfg) text;
+        enable = unitCfg.enabled;
+        wantedBy = optional unitCfg.enabled (
+          if hasSuffix ".timer" name then
+            "timers.target"
+          else if hasSuffix ".socket" name then
+            "sockets.target"
+          else if hasSuffix ".path" name then
+            "paths.target"
+          else
+            "multi-user.target"
+        );
+      }) cfg.systemd.units
+    );
 
     # Translate nixfleet.users to users.users
     users.users = mapAttrs (name: userCfg: {
