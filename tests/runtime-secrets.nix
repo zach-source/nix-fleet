@@ -39,6 +39,13 @@ let
         };
       };
     }).config.nixfleet;
+  specialPathUnit =
+    (mkHost {
+      nixfleet.modules.dolt = {
+        provisionRemoteRoot = false;
+        serverConfigFile = "/run/private dir/$KEY%name.yaml";
+      };
+    }).config.nixfleet.systemd.units."dolt-server.service".text;
   pullScript = builtins.readFile (
     lib.head (
       lib.splitString " " (lib.last (lib.splitString "cp " secure.ubuntu.system.pullMode.buildCommand))
@@ -53,6 +60,9 @@ let
         true
     )).success;
   checks = {
+    "runtime Dolt path is one literal systemd argument" =
+      lib.hasInfix ''--config "/run/private dir/$$KEY%%name.yaml"'' specialPathUnit;
+
     "webhook rejects conflicting inline key" =
       !(acceptsWebhook {
         secret = "fixture";
@@ -79,7 +89,7 @@ let
 
     "runtime Dolt config is not a managed store file" = !(secure.files ? "/etc/dolt/server.yaml");
     "runtime Dolt config is used" =
-      lib.hasInfix "--config /run/private/dolt.yaml"
+      lib.hasInfix ''--config "/run/private/dolt.yaml"''
         secure.systemd.units."dolt-server.service".text;
     "disabled provisioning has no grant script" =
       !(lib.hasInfix "dolt-ensure-remote-grants" secure.systemd.units."dolt-server.service".text);

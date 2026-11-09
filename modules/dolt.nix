@@ -74,8 +74,13 @@ let
     ${cfg.package}/bin/dolt --data-dir ${lib.escapeShellArg cfg.dataDir} sql < ${remoteGrants} \
       >/dev/null 2>&1 || echo "dolt: remotesapi grant provisioning failed (non-fatal)" >&2
   '';
+  systemdExecArg =
+    (import "${pkgs.path}/nixos/lib/utils.nix" { inherit lib config pkgs; }).escapeSystemdExecArg;
   serverConfig =
-    if cfg.serverConfigFile != null then cfg.serverConfigFile else "/etc/dolt/server.yaml";
+    if cfg.serverConfigFile != null then
+      systemdExecArg cfg.serverConfigFile
+    else
+      "/etc/dolt/server.yaml";
 
 in
 {
