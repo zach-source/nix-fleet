@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPullRetryAndLockLifetime(t *testing.T) {
@@ -13,7 +14,7 @@ func TestPullRetryAndLockLifetime(t *testing.T) {
 		if retry {
 			mode = "retry"
 		}
-		script, err := renderPullScript(Config{RepoPath: "/unused", HostName: "fixture", Branch: "main", RetryFailedApply: retry})
+		script, err := renderPullScript(Config{RepoPath: "/unused", HostName: "fixture", Branch: "main", RetryFailedApply: retry, MutationLockTimeout: time.Second})
 		if err != nil {
 			t.Fatal(err)
 		}

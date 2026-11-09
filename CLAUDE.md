@@ -343,3 +343,15 @@ onepassword-connect (onepassword/onepassword-connect:8080)
 |--------|---------|
 | `GITHUB_TOKEN` | Auto-provided, for releases |
 | `PACKAGES_TOKEN` | PAT for dispatching to `homebrew-tap` and `nix-packages` |
+
+### Coordinating concurrent deployments
+
+Opt in on controllers with `--mutation-lock-timeout 2m` (apply, rollback,
+server, and pull-mode install). For generated Ubuntu/DGX activation and pull
+scripts, set `nixfleet.mutationLockTimeout = 120;` (seconds). Zero preserves
+legacy behavior. Every writer must opt in before relying on exclusion.
+The lock covers activation and profile changes; state observations use their
+own state-write protocol. It is a portable directory lock at
+`/var/lib/nixfleet/mutation.lock`. A killed process can leave it behind: verify
+that no writer is running before manually removing a stale lock. Contenders
+time out without stealing it. Nested activation inherits the outer lock.

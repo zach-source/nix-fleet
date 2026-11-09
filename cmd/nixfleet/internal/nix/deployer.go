@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/nixfleet/nixfleet/internal/hostlock"
 	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 	"github.com/nixfleet/nixfleet/internal/state"
@@ -58,9 +60,10 @@ func sshOpts(host *inventory.Host) string {
 // Deployer handles copying closures and activating on hosts
 type Deployer struct {
 	// ManageNixOSProfile opts into persistent native NixOS generation selection.
-	ManageNixOSProfile bool
-	evaluator          *Evaluator
-	nixBin             string
+	ManageNixOSProfile  bool
+	MutationLockTimeout time.Duration
+	evaluator           *Evaluator
+	nixBin              string
 }
 
 // NewDeployer creates a new deployer
@@ -99,7 +102,7 @@ func (d *Deployer) ActivateUbuntu(ctx context.Context, client *ssh.Client, closu
 	activateScript := fmt.Sprintf("%s/activate", closure.StorePath)
 
 	// Run the activation script with sudo
-	result, err := client.ExecSudo(ctx, activateScript)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(activateScript, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return fmt.Errorf("activation failed: %w", err)
 	}
@@ -127,7 +130,7 @@ func (d *Deployer) activateNixOS(ctx context.Context, client state.Execer, closu
 		switchCmd = fmt.Sprintf("nix-env --profile /nix/var/nix/profiles/system --set %s && %s", closure.StorePath, switchCmd)
 	}
 
-	result, err := client.ExecSudo(ctx, switchCmd)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(switchCmd, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return fmt.Errorf("switch-to-configuration failed: %w", err)
 	}
@@ -159,7 +162,7 @@ func (d *Deployer) ActivateDarwin(ctx context.Context, client *ssh.Client, closu
 		activateCmd = fmt.Sprintf("%s/activate", closure.StorePath)
 	}
 
-	result, err := client.ExecSudo(ctx, activateCmd)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(activateCmd, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return fmt.Errorf("darwin activation failed: %w", err)
 	}
@@ -299,7 +302,7 @@ func (d *Deployer) rollbackNixOS(ctx context.Context, client state.Execer, gener
 		cmd = "nix-env --profile /nix/var/nix/profiles/system " + selection + " && /nix/var/nix/profiles/system/bin/switch-to-configuration switch"
 	}
 
-	result, err := client.ExecSudo(ctx, cmd)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(cmd, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return err
 	}
@@ -322,7 +325,7 @@ func (d *Deployer) rollbackUbuntu(ctx context.Context, client *ssh.Client, gener
 		cmd = fmt.Sprintf("/nix/var/nix/profiles/nixfleet/system-%d-link/activate", generation)
 	}
 
-	result, err := client.ExecSudo(ctx, cmd)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(cmd, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return err
 	}
@@ -346,7 +349,7 @@ func (d *Deployer) rollbackDarwin(ctx context.Context, client *ssh.Client, gener
 		cmd = fmt.Sprintf("/nix/var/nix/profiles/system-%d-link/activate", generation)
 	}
 
-	result, err := client.ExecSudo(ctx, cmd)
+	result, err := client.ExecSudo(ctx, hostlock.Wrap(cmd, hostlock.MutationPath, d.MutationLockTimeout))
 	if err != nil {
 		return err
 	}

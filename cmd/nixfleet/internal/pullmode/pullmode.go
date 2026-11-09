@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
+	"github.com/nixfleet/nixfleet/internal/hostlock"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 )
 
@@ -38,7 +40,8 @@ type Config struct {
 	ApplyOnBoot bool
 
 	// RetryFailedApply tracks successful activation separately from the checkout.
-	RetryFailedApply bool
+	RetryFailedApply    bool
+	MutationLockTimeout time.Duration
 
 	// Local path to clone repo to
 	RepoPath string
@@ -509,6 +512,8 @@ if [ "$NIXFLEET_CHANGED" = "true" ]; then
     SYSTEM_PATH=$(NIXPKGS_ALLOW_UNFREE=1 nix path-info ".#nixfleetConfigurations.$HOST_NAME.system" --impure)
     log "System path: $SYSTEM_PATH"
 
+    (
+    {{if gt .MutationLockTimeout 0}}{{mutationLock .MutationLockTimeout}}{{end}}
     # Activate the configuration
     log "Activating configuration..."
     if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
@@ -520,6 +525,7 @@ if [ "$NIXFLEET_CHANGED" = "true" ]; then
     # Update profile
     nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
 
+    )
     {{if .RetryFailedApply}}
     printf '%s\n' "$NEW_COMMIT" > "$APPLIED_FILE.tmp"
     mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
@@ -627,7 +633,9 @@ func renderPullScript(config Config) (string, error) {
 	if err := validateWebhookConfig(config); err != nil {
 		return "", err
 	}
-	tmpl, err := template.New("pullscript").Funcs(template.FuncMap{"shellQuote": ssh.ShellQuote}).Parse(pullScriptTemplate)
+	tmpl, err := template.New("pullscript").Funcs(template.FuncMap{"shellQuote": ssh.ShellQuote, "mutationLock": func(timeout time.Duration) string {
+		return hostlock.Script + fmt.Sprintf("\nnixfleet_lock_enter %s %d\n", hostlock.MutationPath, int64((timeout+time.Second-1)/time.Second))
+	}}).Parse(pullScriptTemplate)
 	if err != nil {
 		return "", err
 	}
