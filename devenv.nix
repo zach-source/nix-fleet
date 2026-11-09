@@ -22,6 +22,7 @@ in
       "devenv golangci-lint is ${lintPkgs.golangci-lint.version}, ci.yml pins v${golangciLintVersion}. Update devenv.yaml.";
     [
       pkgs.go
+      pkgs.nodejs
       pkgs.gopls
       lintPkgs.golangci-lint
       pkgs.delve
