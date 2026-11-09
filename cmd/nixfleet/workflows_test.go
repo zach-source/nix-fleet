@@ -7,10 +7,82 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // repoRoot is this module's parent-parent: the Go module lives at cmd/nixfleet.
 const repoRoot = "../.."
+
+func TestWorkflowActionPinsAndPermissions(t *testing.T) {
+	dir := filepath.Join(repoRoot, ".github/workflows")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Skipf("%s absent; running outside a full checkout", dir)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.yml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("find workflows: %v (%d files)", err, len(files))
+	}
+	pinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
+	for _, file := range files {
+		t.Run(filepath.Base(file), func(t *testing.T) {
+			body, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var workflow struct {
+				Permissions map[string]string `yaml:"permissions"`
+				Jobs        map[string]struct {
+					Permissions map[string]string `yaml:"permissions"`
+					Steps       []struct {
+						Uses string            `yaml:"uses"`
+						With map[string]string `yaml:"with"`
+					} `yaml:"steps"`
+				} `yaml:"jobs"`
+			}
+			if err := yaml.Unmarshal(body, &workflow); err != nil {
+				t.Fatal(err)
+			}
+			if len(workflow.Permissions) != 1 || workflow.Permissions["contents"] != "read" {
+				t.Error("workflow must default to contents: read only")
+			}
+			for name, job := range workflow.Jobs {
+				if filepath.Base(file) == "release.yml" && name == "release" {
+					if len(job.Permissions) != 1 || job.Permissions["contents"] != "write" {
+						t.Error("release job requires contents: write only")
+					}
+				} else {
+					for scope, level := range job.Permissions {
+						if scope != "contents" || level != "read" {
+							t.Errorf("%s has unnecessary %s: %s", name, scope, level)
+						}
+					}
+				}
+				if name == "update-packages" && (job.Permissions == nil || len(job.Permissions) != 0) {
+					t.Error("package dispatch must disable the repository GITHUB_TOKEN permissions")
+				}
+				dispatches := map[string]bool{}
+				for _, step := range job.Steps {
+					if step.Uses != "" && !pinned.MatchString(step.Uses) {
+						t.Errorf("%s uses mutable action %q", name, step.Uses)
+					}
+					if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["persist-credentials"] != "false" {
+						t.Errorf("%s persists checkout credentials", name)
+					}
+					if strings.HasPrefix(step.Uses, "peter-evans/repository-dispatch@") {
+						if name != "update-packages" || step.With["token"] != "${{ secrets.PACKAGES_TOKEN }}" || step.With["event-type"] != "nixfleet-release" {
+							t.Errorf("unexpected dispatch scope/config in %s", name)
+						}
+						dispatches[step.With["repository"]] = true
+					}
+				}
+				if name == "update-packages" && (len(dispatches) != 2 || !dispatches["zach-source/homebrew-tap"] || !dispatches["zach-source/nix-packages"]) {
+					t.Error("both package repositories must still receive release dispatches")
+				}
+			}
+		})
+	}
+}
 
 // goVersionRe matches the setup-go pin, e.g. `go-version: '1.25'`.
 var goVersionRe = regexp.MustCompile(`go-version:\s*'?"?([0-9]+\.[0-9]+)`)

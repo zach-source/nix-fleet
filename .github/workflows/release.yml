@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -30,16 +30,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26'
 
       - name: Get version
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         env:
@@ -52,7 +54,7 @@ jobs:
             -o ../../nixfleet-${{ matrix.suffix }} .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nixfleet-${{ matrix.suffix }}
           path: nixfleet-${{ matrix.suffix }}
@@ -60,13 +62,12 @@ jobs:
   release:
     name: Release
     needs: build
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -78,7 +79,7 @@ jobs:
           done
           cd release
           # Create checksums
-          sha256sum * > checksums.txt
+          sha256sum -- * > checksums.txt
           # Create tarballs
           for f in nixfleet-*; do
             if [[ "$f" != *.txt ]]; then
@@ -88,14 +89,14 @@ jobs:
             fi
           done
           # Update checksums for tarballs
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum -- *.tar.gz > checksums.txt
 
       - name: Get version
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           name: NixFleet ${{ steps.version.outputs.VERSION }}
           body: |
@@ -132,14 +133,12 @@ jobs:
   update-packages:
     name: Update Package Repositories
     needs: release
+    permissions: {}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Get version
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Download checksums
         run: |
@@ -149,13 +148,15 @@ jobs:
       - name: Extract SHA256 hashes
         id: hashes
         run: |
-          echo "DARWIN_ARM64=$(grep 'darwin-arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "DARWIN_AMD64=$(grep 'darwin-amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "LINUX_ARM64=$(grep 'linux-arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "LINUX_AMD64=$(grep 'linux-amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          {
+            echo "DARWIN_ARM64=$(grep 'darwin-arm64.tar.gz' checksums.txt | cut -d' ' -f1)"
+            echo "DARWIN_AMD64=$(grep 'darwin-amd64.tar.gz' checksums.txt | cut -d' ' -f1)"
+            echo "LINUX_ARM64=$(grep 'linux-arm64.tar.gz' checksums.txt | cut -d' ' -f1)"
+            echo "LINUX_AMD64=$(grep 'linux-amd64.tar.gz' checksums.txt | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Trigger Homebrew tap update
-        uses: peter-evans/repository-dispatch@v2
+        uses: peter-evans/repository-dispatch@bf47d102fdb849e755b0b0023ea3e81a44b6f570 # v2
         with:
           token: ${{ secrets.PACKAGES_TOKEN }}
           repository: zach-source/homebrew-tap
@@ -170,7 +171,7 @@ jobs:
             }
 
       - name: Trigger nix-packages update
-        uses: peter-evans/repository-dispatch@v2
+        uses: peter-evans/repository-dispatch@bf47d102fdb849e755b0b0023ea3e81a44b6f570 # v2
         with:
           token: ${{ secrets.PACKAGES_TOKEN }}
           repository: zach-source/nix-packages
