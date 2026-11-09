@@ -117,16 +117,43 @@ func (m *Manager) parseUpgradablePackages(output string) []Package {
 	return packages
 }
 
+// Execer is the command boundary used by upgrades and their offline tests.
+type Execer interface {
+	ExecSudo(context.Context, string) (*ssh.ExecResult, error)
+}
+
 // Upgrade performs a system upgrade
-func (m *Manager) Upgrade(ctx context.Context, client *ssh.Client, securityOnly bool) (*UpgradeResult, error) {
+func (m *Manager) Upgrade(ctx context.Context, client Execer, securityOnly bool) (*UpgradeResult, error) {
 	result := &UpgradeResult{
 		StartTime: time.Now(),
 	}
 
 	var cmd string
 	if securityOnly {
-		// Only install security updates using unattended-upgrades
-		cmd = "unattended-upgrade --dry-run -d 2>&1 | grep 'Packages that will be upgraded' || apt-get upgrade -y -o Dir::Etc::SourceList=/etc/apt/sources.list.d/ubuntu-security.list"
+		// Snapshot host settings, then replace both origin lists for this run only.
+		// The release pocket permits dependencies of Ubuntu security fixes.
+		cmd = `set -eu
+umask 077
+config=$(mktemp)
+trap 'rm -f "$config"' EXIT
+apt-config dump > "$config"
+cat >> "$config" <<'EOF'
+Dir::Etc::parts "-";
+Dir::Etc::main "/dev/null";
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Allowed-Origins {
+    "Ubuntu:${distro_codename}";
+    "Ubuntu:${distro_codename}-security";
+    "UbuntuESMApps:${distro_codename}-apps-security";
+    "UbuntuESMApps:${distro_codename}-apps-legacy-security";
+    "UbuntuESM:${distro_codename}-infra-security";
+    "UbuntuESM:${distro_codename}-infra-legacy-security";
+};
+Unattended-Upgrade::InstallOnShutdown "false";
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+APT_CONFIG="$config" unattended-upgrade --verbose`
 	} else {
 		cmd = "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y"
 	}
