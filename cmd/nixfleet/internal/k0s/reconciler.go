@@ -392,7 +392,7 @@ func (r *Reconciler) BuildNewState(ctx context.Context, client state.Execer) (*s
 func (r *Reconciler) UpdateState(ctx context.Context, client state.Execer) error {
 	hostState, err := r.stateMgr.ReadState(ctx, client)
 	if err != nil {
-		hostState = state.NewHostState("", "")
+		return fmt.Errorf("reading state before k0s update: %w", err)
 	}
 
 	k0sState, err := r.BuildNewState(ctx, client)

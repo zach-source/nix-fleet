@@ -192,32 +192,29 @@ func NewManager() *Manager {
 
 // ReadState reads the current state from a host
 func (m *Manager) ReadState(ctx context.Context, client Execer) (*HostState, error) {
-	// Read with sudo, mirroring WriteState's `sudo tee`. The state dir is
-	// root-owned and bootstrap-ubuntu.sh creates it 0750, so an unprivileged
-	// cat fails — and it fails *silently*, because the `|| echo '{}'` fallback
-	// turns permission denied into an empty state. Every caller then sees a
-	// blank ManifestHash and concludes the host has never been deployed, so
-	// `plan` reports NEW DEPLOYMENT forever and drift detection never fires.
-	//
-	// This hid on gtr-150, whose /var/lib/nixfleet predates the chmod and is
-	// 0755. It appeared on the DGX Sparks, the first hosts bootstrapped with
-	// the current script.
-	result, err := client.ExecSudo(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo '{}'", StatePath))
+	// Only a missing file bootstraps a new state; unreadable data is not empty.
+	result, err := client.ExecSudo(ctx, fmt.Sprintf("if [ -e %s ]; then cat %s; else printf '{}'; fi", StatePath, StatePath))
 	if err != nil {
 		return nil, fmt.Errorf("reading state: %w", err)
 	}
-
-	var state HostState
+	if result == nil || result.ExitCode != 0 {
+		return nil, fmt.Errorf("reading state failed")
+	}
+	var state *HostState
 	if err := json.Unmarshal([]byte(result.Stdout), &state); err != nil {
-		// Return empty state if parsing fails
-		return &HostState{
-			ServiceHealth: make(map[string]ServiceStatus),
-			ManagedFiles:  make(map[string]FileState),
-			StateVersion:  1,
-		}, nil
+		return nil, fmt.Errorf("parsing state: %w", err)
+	}
+	if state == nil {
+		return nil, fmt.Errorf("state must be a JSON object")
+	}
+	if state.StateVersion < 0 || state.StateVersion > 1 {
+		return nil, fmt.Errorf("unsupported state version %d", state.StateVersion)
+	}
+	if state.StateVersion == 0 {
+		state.StateVersion = 1
 	}
 
-	return &state, nil
+	return state, nil
 }
 
 // WriteState writes state to a host
@@ -229,16 +226,17 @@ func (m *Manager) WriteState(ctx context.Context, client Execer, state *HostStat
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	// Ensure directory exists
-	mkdirCmd := fmt.Sprintf("mkdir -p %s", StateDir)
-	if _, err := client.ExecSudo(ctx, mkdirCmd); err != nil {
-		return fmt.Errorf("creating state directory: %w", err)
-	}
+	// Same-directory rename keeps the previous document intact on write failure.
+	writeCmd := fmt.Sprintf(`set -eu
+mkdir -p %s
+tmp=$(mktemp %s/.state.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+if [ -f %s ]; then cp -p %s "$tmp"; else chmod 0644 "$tmp"; fi
+cat > "$tmp" << 'NIXFLEET_STATE'
+%s
+NIXFLEET_STATE
+mv -f "$tmp" %s`, StateDir, StateDir, StatePath, StatePath, data, StatePath)
 
-	// Write state file. Use `tee` rather than a `>` redirect: ExecSudo runs
-	// `sudo <cmd>`, so a redirect would be performed by the (non-root) login
-	// shell and fail on the root-owned state dir; `sudo tee` writes as root.
-	writeCmd := fmt.Sprintf("tee %s > /dev/null << 'EOF'\n%s\nEOF", StatePath, string(data))
 	result, err := client.ExecSudo(ctx, writeCmd)
 	if err != nil {
 		return fmt.Errorf("writing state: %w", err)
@@ -254,7 +252,7 @@ func (m *Manager) WriteState(ctx context.Context, client Execer, state *HostStat
 func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath, manifestHash string, generation int, duration time.Duration) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
-		state = NewHostState("", "")
+		return err
 	}
 
 	state.StorePath = storePath
@@ -270,7 +268,7 @@ func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath
 func (m *Manager) UpdateRebootStatus(ctx context.Context, client Execer, required bool, packages []string) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
-		state = NewHostState("", "")
+		return err
 	}
 
 	state.RebootRequired = required
@@ -283,7 +281,7 @@ func (m *Manager) UpdateRebootStatus(ctx context.Context, client Execer, require
 func (m *Manager) UpdateServiceHealth(ctx context.Context, client Execer, services map[string]ServiceStatus) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
-		state = NewHostState("", "")
+		return err
 	}
 
 	state.ServiceHealth = services
@@ -464,7 +462,7 @@ func (m *Manager) GatherOSInfo(ctx context.Context, client Execer) (*OSInfo, err
 func (m *Manager) UpdateOSInfo(ctx context.Context, client Execer) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
-		state = NewHostState("", "")
+		return err
 	}
 
 	osInfo, err := m.GatherOSInfo(ctx, client)
