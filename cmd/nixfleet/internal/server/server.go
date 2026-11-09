@@ -66,8 +66,13 @@ type Server struct {
 	scheduler *Scheduler
 
 	// Job tracking
-	jobs   map[string]*Job
-	jobsMu sync.RWMutex
+	jobs      map[string]*Job
+	jobsMu    sync.RWMutex
+	jobCtx    context.Context
+	jobCancel context.CancelFunc
+	jobsWG    sync.WaitGroup
+	closing   bool
+	closeOnce sync.Once
 
 	// applyLocks holds one mutex per host name, so two apply jobs can never
 	// build and activate on the same host at the same time.
@@ -221,7 +226,8 @@ func (s *Server) Start(ctx context.Context) error {
 			return fmt.Errorf("loading TLS certificate: %w", err)
 		}
 	}
-	// Start scheduler
+	// Shutdown owns scheduler and accepted work, including listen failures.
+	defer s.Close()
 	s.scheduler.Start(ctx)
 
 	server := &http.Server{
@@ -265,7 +271,21 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 
 // Close cleans up resources
 func (s *Server) Close() error {
-	s.pool.Close()
+	s.closeOnce.Do(func() {
+		s.jobsMu.Lock()
+		s.closing = true
+		if s.jobCancel != nil {
+			s.jobCancel()
+		}
+		s.jobsMu.Unlock()
+		if s.scheduler != nil {
+			s.scheduler.Stop()
+		}
+		s.jobsWG.Wait()
+		if s.pool != nil {
+			s.pool.Close()
+		}
+	})
 	return nil
 }
 
@@ -489,12 +509,11 @@ func (s *Server) handleApplyHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create async job
-	job := s.createJob("apply", name)
-
-	go func() {
-		ctx := context.Background()
-		s.runApplyJob(ctx, job, host)
-	}()
+	job, err := s.startJob("apply", name, func(ctx context.Context, job *Job) { s.runApplyJob(ctx, job, host) })
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
 	s.jsonResponse(w, job, http.StatusAccepted)
 }
@@ -598,12 +617,11 @@ func (s *Server) handleDriftCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create job
-	job := s.createJob("drift-check", "")
-
-	go func() {
-		ctx := context.Background()
-		s.runDriftCheckJob(ctx, job, hosts)
-	}()
+	job, err := s.startJob("drift-check", "", func(ctx context.Context, job *Job) { s.runDriftCheckJob(ctx, job, hosts) })
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
 	s.jsonResponse(w, job, http.StatusAccepted)
 }
@@ -677,6 +695,10 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 
 	s.jobsMu.RLock()
 	job, ok := s.jobs[id]
+	var snapshot Job
+	if ok {
+		snapshot = *job
+	}
 	s.jobsMu.RUnlock()
 
 	if !ok {
@@ -684,7 +706,7 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.jsonResponse(w, job, http.StatusOK)
+	s.jsonResponse(w, snapshot, http.StatusOK)
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -800,12 +822,11 @@ func (s *Server) handleApplyAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := s.createJob("apply-all", "")
-
-	go func() {
-		ctx := context.Background()
-		s.runApplyAllJob(ctx, job, hosts)
-	}()
+	job, err := s.startJob("apply-all", "", func(ctx context.Context, job *Job) { s.runApplyAllJob(ctx, job, hosts) })
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
 	s.jsonResponse(w, job, http.StatusAccepted)
 }
@@ -813,6 +834,12 @@ func (s *Server) handleApplyAll(w http.ResponseWriter, r *http.Request) {
 // Job management
 
 func (s *Server) createJob(jobType, host string) *Job {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	return s.createJobLocked(jobType, host)
+}
+
+func (s *Server) createJobLocked(jobType, host string) *Job {
 	id := fmt.Sprintf("%s-%d", jobType, time.Now().UnixNano())
 	job := &Job{
 		ID:        id,
@@ -822,11 +849,25 @@ func (s *Server) createJob(jobType, host string) *Job {
 		StartTime: time.Now(),
 	}
 
-	s.jobsMu.Lock()
 	s.jobs[id] = job
-	s.jobsMu.Unlock()
 
 	return job
+}
+
+func (s *Server) startJob(kind, host string, run func(context.Context, *Job)) (*Job, error) {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	if s.closing {
+		return nil, fmt.Errorf("server is shutting down")
+	}
+	if s.jobCtx == nil {
+		s.jobCtx, s.jobCancel = context.WithCancel(context.Background())
+	}
+	job := s.createJobLocked(kind, host)
+	snapshot := *job
+	s.jobsWG.Add(1)
+	go func() { defer s.jobsWG.Done(); run(s.jobCtx, job) }()
+	return &snapshot, nil
 }
 
 func (s *Server) updateJob(job *Job, status string, result any, errStr string) {
@@ -874,7 +915,21 @@ type applyOutcome struct {
 // err.Error() directly.
 func (s *Server) applyOne(ctx context.Context, host *inventory.Host) (*applyOutcome, error) {
 	lock := s.applyLock(host.Name)
-	lock.Lock()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if lock.TryLock() {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 	defer lock.Unlock()
 
 	deployed, err := s.hostDeploy().Run(ctx, host, apply.DeployOptions{})
