@@ -1248,6 +1248,12 @@ in
         }
         ''
           mkdir -p $out/bin
+          ln -s ${
+            import ../../lib/health-check.nix {
+              inherit lib pkgs;
+              checks = cfg.healthChecks;
+            }
+          } $out/bin/nixfleet-verify-health
 
           # Link the packages profile
           ln -s ${packagesProfile} $out/packages

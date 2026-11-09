@@ -18,11 +18,13 @@ import (
 type Phase string
 
 const (
-	PhaseBuild    Phase = "build"
-	PhaseCopy     Phase = "copy"
-	PhaseConnect  Phase = "connect"
-	PhaseActivate Phase = "activate"
-	PhaseState    Phase = "state"
+	PhaseBuild     Phase = "build"
+	PhasePreflight Phase = "preflight"
+	PhaseHealth    Phase = "health"
+	PhaseCopy      Phase = "copy"
+	PhaseConnect   Phase = "connect"
+	PhaseActivate  Phase = "activate"
+	PhaseState     Phase = "state"
 )
 
 // PhaseError reports which step of a deploy failed.
@@ -90,7 +92,13 @@ type ClientPool interface {
 // server's two apply jobs and this package's pipeline each carried their own
 // copy of it; they differ only in how they report progress and what they do
 // afterwards, which is what DeployOptions and the returned result cover.
+type DeploymentChecks interface {
+	Preflight(context.Context, *ssh.Client, *inventory.Host) error
+	Health(context.Context, *ssh.Client, string) error
+}
+
 type HostDeploy struct {
+	Checks   DeploymentChecks
 	Builder  Builder
 	Deployer HostDeployer
 	Pool     ClientPool
@@ -99,6 +107,9 @@ type HostDeploy struct {
 
 // DeployOptions tunes a single deploy.
 type DeployOptions struct {
+	Verify        bool
+	SkipPreflight bool
+	SkipHealth    bool
 	// Action is the NixOS/Darwin activation action (switch, boot, test).
 	// Defaults to "switch" and is ignored on Ubuntu.
 	Action string
@@ -151,6 +162,16 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 	}
 	result.Client = client
 
+	if opts.Verify && !opts.SkipPreflight {
+		h.progress(opts, PhasePreflight, result)
+		checks := h.Checks
+		if checks == nil {
+			checks = RemoteChecks{}
+		}
+		if err := checks.Preflight(ctx, client, host); err != nil {
+			return result, &PhaseError{Phase: PhasePreflight, Err: err}
+		}
+	}
 	h.progress(opts, PhaseActivate, result)
 	if err := h.activate(ctx, client, closure, host.Base, action); err != nil {
 		return result, &PhaseError{Phase: PhaseActivate, Err: err}
@@ -174,6 +195,19 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 		}
 	}
 
+	if opts.Verify && !opts.SkipHealth {
+		h.progress(opts, PhaseHealth, result)
+		checks := h.Checks
+		if checks == nil {
+			checks = RemoteChecks{}
+		}
+		if err := checks.Health(ctx, client, closure.StorePath); err != nil {
+			return result, &PhaseError{Phase: PhaseHealth, Err: err}
+		}
+	}
+	if opts.Verify && result.StateError != "" {
+		return result, &PhaseError{Phase: PhaseState, Err: fmt.Errorf("%s", result.StateError)}
+	}
 	return result, nil
 }
 

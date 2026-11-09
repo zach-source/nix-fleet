@@ -55,7 +55,7 @@ func (c *Checker) RunAll(ctx context.Context, client *ssh.Client, hostBase strin
 	case "ubuntu":
 		checks = append(checks, c.checkNixDaemon)
 	case "nixos":
-		checks = append(checks, c.checkNixStore)
+		checks = append(checks, func(ctx context.Context, client *ssh.Client) CheckResult { return c.checkNixStore(ctx, client) })
 	case "darwin":
 		checks = append(checks, c.checkNixDaemonLaunchd)
 	}
@@ -234,13 +234,16 @@ func (c *Checker) checkNixDaemon(ctx context.Context, client *ssh.Client) CheckR
 }
 
 // checkNixStore verifies the Nix store is healthy (NixOS)
-func (c *Checker) checkNixStore(ctx context.Context, client *ssh.Client) CheckResult {
+func (c *Checker) checkNixStore(ctx context.Context, client interface {
+	Exec(context.Context, string) (*ssh.ExecResult, error)
+	ExecSudo(context.Context, string) (*ssh.ExecResult, error)
+}) CheckResult {
 	result := CheckResult{
 		Name: "nix_store",
 	}
 
 	// Check nix store can be queried
-	output, err := client.ExecSudo(ctx, "nix-store --verify --check-contents 2>&1 | head -5")
+	output, err := client.ExecSudo(ctx, "nix-store --verify --check-contents 2>&1")
 	if err != nil {
 		result.Passed = false
 		result.Message = "Failed to verify Nix store"
@@ -249,10 +252,12 @@ func (c *Checker) checkNixStore(ctx context.Context, client *ssh.Client) CheckRe
 	}
 
 	// nix-store --verify returns 0 even with warnings, check output
-	if strings.Contains(output.Stdout, "error:") {
+	if output == nil || output.ExitCode != 0 || strings.Contains(output.Stdout, "error:") {
 		result.Passed = false
 		result.Message = "Nix store has errors"
-		result.Details = output.Stdout
+		if output != nil {
+			result.Details = output.Stdout
+		}
 		return result
 	}
 

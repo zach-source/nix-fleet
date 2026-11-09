@@ -72,6 +72,7 @@ func main() {
 
 var manageNixOSProfile bool
 var mutationLockTimeout time.Duration
+var verifyDeploy bool
 
 func rootCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -96,6 +97,7 @@ It provides Ansible-like UX for:
 	cmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 
+	cmd.PersistentFlags().BoolVar(&verifyDeploy, "verify-deploy", false, "Gate deployment on preflight and configured health checks")
 	cmd.PersistentFlags().DurationVar(&mutationLockTimeout, "mutation-lock-timeout", 0, "Opt into a shared host mutation lock with this bounded wait (for example 2m)")
 	cmd.PersistentFlags().BoolVar(&manageNixOSProfile, "manage-nixos-profile", false, "Create and select native NixOS generations during apply and rollback")
 
@@ -341,7 +343,7 @@ func applyCmd() *cobra.Command {
 			fmt.Printf("Applying to %d host(s)...\n\n", len(hosts))
 
 			// Preflight checks
-			if !skipPreflight {
+			if !skipPreflight && !verifyDeploy {
 				fmt.Println("Running preflight checks...")
 				results := executor.ExecOnHosts(ctx, hosts, "echo ok", false)
 				failed := ssh.FilterFailed(results)
@@ -371,7 +373,8 @@ func applyCmd() *cobra.Command {
 
 				deployed, err := hostDeploy.Run(ctx, host, apply.DeployOptions{
 					SkipState: skipState,
-					Progress:  applyProgress,
+					Verify:    verifyDeploy, SkipPreflight: skipPreflight, SkipHealth: skipHealth,
+					Progress: applyProgress,
 				})
 				if err != nil {
 					fmt.Printf("  %s\n", apply.FailureMessage(err))
@@ -409,7 +412,7 @@ func applyCmd() *cobra.Command {
 				}
 
 				// Health checks
-				if !skipHealth {
+				if !skipHealth && !verifyDeploy {
 					// Basic health check: ensure SSH still works
 					result, err := client.Exec(ctx, "systemctl is-system-running || true")
 					if err != nil {
@@ -424,7 +427,7 @@ func applyCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Summary: %d succeeded, %d failed\n", successCount, failedCount)
-			if failOnError && failedCount > 0 {
+			if (failOnError || verifyDeploy) && failedCount > 0 {
 				return fmt.Errorf("%d host(s) failed", failedCount)
 			}
 			return nil
@@ -1477,7 +1480,7 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 			for _, host := range hosts {
 				fmt.Printf("Deploying to %s...\n", host.Name)
 
-				deployed, err := hostDeploy.Run(ctx, host, apply.DeployOptions{SkipState: skipState})
+				deployed, err := hostDeploy.Run(ctx, host, apply.DeployOptions{SkipState: skipState, Verify: verifyDeploy})
 				if err != nil {
 					fmt.Printf("  %s\n", apply.FailureMessage(err))
 					failed++
@@ -2865,6 +2868,7 @@ API Endpoints:
 				TLSKeyFile:          tlsKey,
 				FailOnError:         failOnError,
 				MaxActiveJobs:       maxActiveJobs, MaxCompletedJobs: maxCompletedJobs, JobTimeout: jobTimeout,
+				VerifyDeploy:        verifyDeploy,
 				ManageNixOSProfile:  manageNixOSProfile,
 				MutationLockTimeout: mutationLockTimeout,
 			}

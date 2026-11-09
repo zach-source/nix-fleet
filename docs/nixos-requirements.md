@@ -195,7 +195,8 @@ hosts.db-1 = {
 
 ## Health Checks
 
-After deployment, NixFleet runs health checks:
+Opt in with `--verify-deploy` to run declared health checks after deployment.
+Default deployment behavior does not enforce these checks:
 
 ```nix
 nixfleet.healthChecks = {
@@ -214,7 +215,9 @@ nixfleet.healthChecks = {
 };
 ```
 
-If health checks fail, NixFleet can automatically rollback.
+With verification enabled, failed checks produce a failed deployment outcome.
+The activated generation remains recorded; rollback is an explicit operator
+action. There is no automatic rollback in the production deployment path.
 
 ## Troubleshooting
 

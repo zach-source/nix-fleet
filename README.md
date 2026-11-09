@@ -19,7 +19,7 @@ are not running NixOS (Ubuntu, DGX OS) as well as to NixOS hosts.
 - **Age-encrypted secrets**: SSH host key integration for zero-config decryption
 - **Declarative configuration**: Define packages, files, users, systemd units via Nix
 - **Health checks**: Monitor host health with configurable checks
-- **Resource reconciliation**: Automatic cleanup of orphaned k0s resources
+- **Resource reconciliation**: k0s reconciliation is separate from ordinary apply; automatic orphan cleanup is not enabled by CLI/API deployment
 - **Web UI**: Dashboard for fleet visibility and management
 
 ## Installation
