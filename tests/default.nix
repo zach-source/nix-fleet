@@ -258,6 +258,7 @@ in
     assert lib.hasInfix "nixfleet-managed-files.json" darwin.config.system.systemBuilderCommands;
     assert lib.hasInfix "nixfleet-managed-files.json" nixos.config.system.systemBuilderCommands;
     assert lib.hasInfix ".managed_files = $files[0]" ubuntu;
+    assert lib.hasInfix "\'.[0] + .[1]\'" ubuntu;
     pkgs.runCommand "check-managed-file-baseline" { nativeBuildInputs = [ pkgs.jq ]; } ''
       jq -e '.["/etc/text"].hash == "${builtins.hashString "sha256" "fixture"}" and .["/etc/text"].mode == "644" and .["/etc/source"].hash == "${builtins.hashString "sha256" "immutable"}"' ${baseline}
       jq -e '.["/etc/text"].mode == "444" and .["/etc/text"].follow_symlink == true' ${linkedBaseline}
