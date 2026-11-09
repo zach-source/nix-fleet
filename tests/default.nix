@@ -9,6 +9,7 @@
   pkgs,
   mkNixFleetConfiguration,
   mkDarwinFleetConfiguration,
+  mkNixOSFleetConfiguration,
   hostConfigs,
   hostConfigsDarwin,
 }:
@@ -195,6 +196,7 @@ let
 
 in
 {
+  nixos-translation = import ./nixos-translation.nix { inherit lib pkgs mkNixOSFleetConfiguration; };
   juicefs-private-headers = import ./juicefs-headers.nix {
     inherit pkgs lib mkNixFleetConfiguration;
   };

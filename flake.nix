@@ -263,7 +263,7 @@
         import ./tests {
           inherit (nixpkgs) lib;
           pkgs = nixpkgsFor.${system};
-          inherit mkNixFleetConfiguration mkDarwinFleetConfiguration;
+          inherit mkNixFleetConfiguration mkDarwinFleetConfiguration mkNixOSFleetConfiguration;
           hostConfigs = self.nixfleetConfigurations;
           hostConfigsDarwin = self.darwinConfigurations;
         }
