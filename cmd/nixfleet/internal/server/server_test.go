@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,6 +120,45 @@ type TestServer struct {
 	*Server
 }
 
+type offlinePool struct {
+	calls  int
+	closed bool
+}
+
+func (p *offlinePool) GetWithUser(context.Context, string, int, string) (*ssh.Client, error) {
+	p.calls++
+	return nil, errors.New("offline test pool")
+}
+
+func (p *offlinePool) Close() error { p.closed = true; return nil }
+
+func TestHandlerPoolIsOffline(t *testing.T) {
+	ts := newTestServer(t)
+	pool, ok := any(ts.pool).(*offlinePool)
+	if !ok {
+		t.Fatal("handler tests must use the offline pool; refusing to dial fixture hosts")
+	}
+	rec := httptest.NewRecorder()
+	ts.handleListHosts(rec, httptest.NewRequest("GET", "/api/hosts", nil))
+	if pool.calls != len(ts.inventory.Hosts) {
+		t.Fatalf("got %d lookups, want %d", pool.calls, len(ts.inventory.Hosts))
+	}
+	var response struct {
+		Hosts []struct {
+			Online bool
+			Error  string
+		}
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range response.Hosts {
+		if host.Online || host.Error != "offline test pool" {
+			t.Fatalf("unexpected offline host status: %+v", host)
+		}
+	}
+}
+
 func newTestServer(t *testing.T) *TestServer {
 	t.Helper()
 
@@ -148,9 +188,10 @@ func newTestServer(t *testing.T) *TestServer {
 		jobs:      make(map[string]*Job),
 		startTime: time.Now(),
 		mux:       http.NewServeMux(),
-		pool:      ssh.NewPool(nil),
+		pool:      &offlinePool{},
 	}
 	s.setupRoutes()
+	t.Cleanup(func() { _ = s.Close() })
 
 	return &TestServer{Server: s}
 }
@@ -724,9 +765,6 @@ func TestHandleDriftCheckWithHost(t *testing.T) {
 
 func TestServerClose(t *testing.T) {
 	ts := newTestServer(t)
-
-	// Initialize pool so Close() doesn't panic
-	ts.pool = ssh.NewPool(nil)
 
 	// Close should not panic
 	if err := ts.Close(); err != nil {

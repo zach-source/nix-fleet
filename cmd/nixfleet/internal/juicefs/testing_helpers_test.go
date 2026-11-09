@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -23,6 +24,7 @@ func (r recordedCall) Argv() string {
 // matching prefix wins, so put more-specific keys before less-specific ones
 // — or supply distinct prefixes.
 type fakeRunner struct {
+	mu        sync.Mutex
 	t         *testing.T
 	responses map[string]fakeResponse
 	calls     []recordedCall
@@ -40,7 +42,9 @@ func newFakeRunner(t *testing.T, responses map[string]fakeResponse) (*fakeRunner
 	fr := &fakeRunner{t: t, responses: responses}
 	fn := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		call := recordedCall{Name: name, Args: args}
+		fr.mu.Lock()
 		fr.calls = append(fr.calls, call)
+		fr.mu.Unlock()
 		argv := call.Argv()
 		for prefix, resp := range responses {
 			if strings.HasPrefix(argv, prefix) {
@@ -55,6 +59,8 @@ func newFakeRunner(t *testing.T, responses map[string]fakeResponse) (*fakeRunner
 
 // Matches returns calls whose argv starts with prefix.
 func (f *fakeRunner) Matches(prefix string) []recordedCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []recordedCall
 	for _, c := range f.calls {
 		if strings.HasPrefix(c.Argv(), prefix) {
@@ -80,4 +86,20 @@ func withRunners(t *testing.T, output, combined execFn) {
 		runOutput = origOutput
 		runCombined = origCombined
 	})
+}
+
+func TestFakeRunnerConcurrentCalls(t *testing.T) {
+	fake, run := newFakeRunner(t, map[string]fakeResponse{"tool": {}})
+	var wg sync.WaitGroup
+	const count = 100
+	for range count {
+		wg.Go(func() {
+			_, _ = run(context.Background(), "tool", "read")
+			_ = fake.Matches("tool")
+		})
+	}
+	wg.Wait()
+	if got := len(fake.Matches("tool")); got != count {
+		t.Fatalf("recorded %d calls, want %d", got, count)
+	}
 }

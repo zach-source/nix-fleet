@@ -48,9 +48,12 @@ type Server struct {
 	inventory *inventory.Inventory
 	evaluator *nix.Evaluator
 	deployer  *nix.Deployer
-	pool      *ssh.Pool
-	stateMgr  *state.Manager
-	aptMgr    *apt.Manager
+	pool      interface {
+		apply.ClientPool
+		Close() error
+	}
+	stateMgr *state.Manager
+	aptMgr   *apt.Manager
 
 	// Scheduler
 	scheduler *Scheduler
