@@ -27,6 +27,7 @@ type Client struct {
 	conn       *ssh.Client
 	mu         sync.Mutex
 	lastUsed   time.Time
+	active     int
 	config     *ssh.ClientConfig
 	knownHosts ssh.HostKeyCallback
 }
@@ -196,6 +197,11 @@ func keyFileSigner(keyFile string) (ssh.Signer, error) {
 
 // Connect establishes the SSH connection
 func (c *Client) Connect(ctx context.Context) error {
+	if c.config.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.Timeout)
+		defer cancel()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -211,13 +217,28 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 
+	stop := closeOnCancel(ctx, netConn)
 	sshConn, chans, reqs, err := ssh.NewClientConn(netConn, addr, c.config)
+	stop()
+	if ctx.Err() != nil {
+		netConn.Close()
+		return ctx.Err()
+	}
 	if err != nil {
 		netConn.Close()
 		return fmt.Errorf("ssh handshake: %w", err)
 	}
 
 	c.conn = ssh.NewClient(sshConn, chans, reqs)
+	conn := c.conn
+	go func() {
+		_ = conn.Wait()
+		c.mu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.mu.Unlock()
+	}()
 	c.lastUsed = time.Now()
 
 	return nil
@@ -227,7 +248,10 @@ func (c *Client) Connect(ctx context.Context) error {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.closeLocked()
+}
 
+func (c *Client) closeLocked() error {
 	if c.conn == nil {
 		return nil
 	}
@@ -268,14 +292,38 @@ func (c *Client) ExecSudoStdin(ctx context.Context, cmd string, stdin []byte) (*
 	return c.exec(ctx, sudoCommand(cmd), stdin)
 }
 
-func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (*ExecResult, error) {
+func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (result *ExecResult, err error) {
 	c.mu.Lock()
 	if c.conn == nil {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("not connected")
 	}
 	conn := c.conn
+	c.active++
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		c.lastUsed = time.Now()
+		c.mu.Unlock()
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// SSH channel setup and requests have no context API. Abort the transport
+	// to unblock every stage; callers sharing it must reconnect after cancellation.
+	stop := closeOnCancel(ctx, conn)
+	defer func() {
+		stop()
+		if ctx.Err() != nil {
+			c.mu.Lock()
+			if c.conn == conn {
+				c.conn = nil
+			}
+			c.mu.Unlock()
+			result, err = nil, ctx.Err()
+		}
+	}()
 
 	session, err := conn.NewSession()
 	if err != nil {
@@ -310,7 +358,7 @@ func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (*ExecResul
 	var out execOutput
 	select {
 	case <-ctx.Done():
-		session.Signal(ssh.SIGKILL)
+		<-outputs
 		return nil, ctx.Err()
 	case out = <-outputs:
 	}
@@ -325,15 +373,22 @@ func (c *Client) exec(ctx context.Context, cmd string, stdin []byte) (*ExecResul
 		}
 	}
 
-	c.mu.Lock()
-	c.lastUsed = time.Now()
-	c.mu.Unlock()
-
 	return &ExecResult{
 		Stdout:   string(out.stdout),
 		Stderr:   string(out.stderr),
 		ExitCode: exitCode,
 	}, nil
+}
+
+// closeOnCancel joins its callback before returning, including during setup.
+func closeOnCancel(ctx context.Context, conn io.Closer) func() {
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(done) })
+	return func() {
+		if !stop() {
+			<-done
+		}
+	}
 }
 
 type execOutput struct {
