@@ -355,3 +355,12 @@ own state-write protocol. It is a portable directory lock at
 `/var/lib/nixfleet/mutation.lock`. A killed process can leave it behind: verify
 that no writer is running before manually removing a stale lock. Contenders
 time out without stealing it. Nested activation inherits the outer lock.
+
+### API job bounds
+
+Server options `--max-active-jobs`, `--max-completed-jobs`, and `--job-timeout`
+opt into admission, retained terminal history, and execution-time bounds. All
+three default to zero (legacy unlimited behavior). Capacity rejects new jobs
+with HTTP 503 before creating a record; retained records older than the limit
+become unavailable to job polling clients. Timeout marks accepted work failed.
+These bounds apply to async API jobs, not synchronous routes or scheduler work.

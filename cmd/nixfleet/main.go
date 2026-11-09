@@ -2796,6 +2796,8 @@ func driftStatusCmd() *cobra.Command {
 }
 
 func serverCmd() *cobra.Command {
+	var maxActiveJobs, maxCompletedJobs int
+	var jobTimeout time.Duration
 	var tlsCert, tlsKey string
 	var failOnError bool
 	var listenAddr string
@@ -2862,6 +2864,7 @@ API Endpoints:
 				TLSCertFile:         tlsCert,
 				TLSKeyFile:          tlsKey,
 				FailOnError:         failOnError,
+				MaxActiveJobs:       maxActiveJobs, MaxCompletedJobs: maxCompletedJobs, JobTimeout: jobTimeout,
 				ManageNixOSProfile:  manageNixOSProfile,
 				MutationLockTimeout: mutationLockTimeout,
 			}
@@ -2889,6 +2892,9 @@ API Endpoints:
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS (requires --tls-key)")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS private key file for HTTPS (requires --tls-cert)")
 
+	cmd.Flags().IntVar(&maxActiveJobs, "max-active-jobs", 0, "Limit accepted async jobs (zero is unlimited)")
+	cmd.Flags().IntVar(&maxCompletedJobs, "max-completed-jobs", 0, "Retain only this many terminal jobs (zero retains all)")
+	cmd.Flags().DurationVar(&jobTimeout, "job-timeout", 0, "Cancel async jobs after this duration (zero disables)")
 	return cmd
 }
 
