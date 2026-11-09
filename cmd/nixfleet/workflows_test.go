@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,6 +85,8 @@ var (
 	devenvLintRe    = regexp.MustCompile(`(?m)^\s*golangciLintVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)";`)
 	goFloorRe       = regexp.MustCompile(`versionAtLeast\s+(?:pkgs\.)?go\.version\s+"([0-9.]+)"`)
 	ciLintVersionRe = regexp.MustCompile(`(?m)^\s*version:\s*v([0-9]+\.[0-9]+\.[0-9]+)\s*$`)
+
+	devenvNixpkgsRe = regexp.MustCompile(`(?m)^  nixpkgs:\n\s+url:\s*\S*[?&]rev=([0-9a-f]{40})\s*$`)
 )
 
 // TestDevenvPinsMatchCI makes sure the Go and golangci-lint pins in devenv.nix
@@ -118,5 +121,20 @@ func TestDevenvPinsMatchCI(t *testing.T) {
 	got := one(devenvLintRe, devenv, "devenv.nix golangciLintVersion")
 	if want := one(ciLintVersionRe, read(".github/workflows/ci.yml"), "ci.yml version"); got != want {
 		t.Errorf("devenv.nix golangciLintVersion = %s, ci.yml = %s", got, want)
+	}
+
+	var lock struct {
+		Nodes map[string]struct {
+			Locked struct {
+				Rev string `json:"rev"`
+			} `json:"locked"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(read("flake.lock")), &lock); err != nil {
+		t.Fatalf("parse flake.lock: %v", err)
+	}
+	gotRev := one(devenvNixpkgsRe, read("devenv.yaml"), "devenv.yaml nixpkgs rev")
+	if want := lock.Nodes["nixpkgs"].Locked.Rev; want == "" || gotRev != want {
+		t.Errorf("devenv.yaml nixpkgs rev = %s, flake.lock nixpkgs rev = %q", gotRev, want)
 	}
 }
