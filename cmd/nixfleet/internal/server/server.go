@@ -1264,20 +1264,26 @@ func (s *Server) handleAptUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.aptMgr.Upgrade(ctx, client, securityOnly)
+	result, err := s.upgradeApt(ctx, client, securityOnly)
 	if err != nil {
 		s.jsonError(w, "upgrade failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.jsonResponse(w, result, http.StatusOK)
+}
 
+func (s *Server) upgradeApt(ctx context.Context, client state.Execer, securityOnly bool) (*apt.UpgradeResult, error) {
+	result, err := s.aptMgr.Upgrade(ctx, client, securityOnly)
+	if err != nil || !result.Success {
+		return result, err
+	}
 	// Update state
 	hostState, _ := s.stateMgr.ReadState(ctx, client)
 	if hostState != nil {
 		hostState.LastOSUpdate = result.EndTime
 		s.stateMgr.WriteState(ctx, client, hostState)
 	}
-
-	s.jsonResponse(w, result, http.StatusOK)
+	return result, nil
 }
 
 func (s *Server) handleGetAptPackages(w http.ResponseWriter, r *http.Request) {
