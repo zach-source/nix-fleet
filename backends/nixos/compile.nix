@@ -25,6 +25,15 @@ in
   };
 
   config = mkIf isNixOS {
+    system.systemBuilderCommands = optionalString cfg.state.trackManagedFiles ''
+      cp ${
+        import ../../lib/managed-files.nix {
+          inherit lib pkgs;
+          files = filterAttrs (path: _: hasPrefix "/etc/" path) cfg.files;
+        }
+      } $out/nixfleet-managed-files.json
+    '';
+
     assertions = optionals cfg.nixos.strictTranslation (
       mapAttrsToList (path: _: {
         assertion = hasPrefix "/etc/" path;

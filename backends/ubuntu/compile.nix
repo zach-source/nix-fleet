@@ -95,6 +95,11 @@ let
     }) cfg.files
   );
 
+  managedFiles = import ../../lib/managed-files.nix {
+    inherit lib pkgs;
+    files = cfg.files;
+  };
+
   # Generate systemd units
   unitsDir = pkgs.runCommand "nixfleet-units" { } ''
     mkdir -p $out
@@ -1172,6 +1177,10 @@ let
       "updated_at": "$APPLY_TIME"
     }
     STATE_EOF
+    ${optionalString cfg.state.trackManagedFiles ''
+      "$JQ" --slurpfile files "${managedFiles}" '.managed_files = $files[0]' "$STATE_FILE.new" > "$STATE_FILE.baseline"
+      mv "$STATE_FILE.baseline" "$STATE_FILE.new"
+    ''}
     if [ -s "$STATE_FILE" ] && "$JQ" -e . "$STATE_FILE" > /dev/null 2>&1; then
       if "$JQ" -s '.[0] * .[1]' "$STATE_FILE" "$STATE_FILE.new" > "$STATE_FILE.merged"; then
         mv "$STATE_FILE.merged" "$STATE_FILE"
@@ -1247,6 +1256,10 @@ in
           # derivation so activation can root the profile at itself.
           substitute ${activateScript} $out/activate --subst-var-by systemPath "$out"
           chmod +x $out/activate
+
+          ${optionalString cfg.state.trackManagedFiles ''
+            cp ${managedFiles} $out/nixfleet-managed-files.json
+          ''}
 
           # Write metadata. These go through writeJSON, not an inline echo —
           # see its definition for why.

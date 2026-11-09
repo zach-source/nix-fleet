@@ -43,12 +43,30 @@ let
 in
 {
   config = mkIf isDarwin {
+    system.systemBuilderCommands = optionalString cfg.state.trackManagedFiles ''
+      cp ${
+        import ../../lib/managed-files.nix {
+          inherit lib pkgs;
+          modeFromSource = true;
+          files = mapAttrs (
+            _: file:
+            file
+            // {
+              owner = "root";
+              group = "wheel";
+            }
+          ) etcFiles;
+        }
+      } $out/nixfleet-managed-files.json
+    '';
+
     # What this backend will not pretend to do.
     #
     # Each of these used to be dropped or mistranslated silently, which on a
     # deployment tool is the worst available outcome: the apply succeeds and
     # the host is not what the config says. Failing at eval costs a message.
     assertions = [
+
       {
         # launchd has no equivalent of a systemd unit file. The translation
         # that used to live here read only `enabled` and threw the unit body

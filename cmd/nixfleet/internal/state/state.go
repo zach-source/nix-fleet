@@ -157,12 +157,13 @@ type ServiceStatus struct {
 
 // FileState represents the state of a managed file
 type FileState struct {
-	Path         string   `json:"path"`
-	Hash         string   `json:"hash"`
-	Mode         string   `json:"mode"`
-	Owner        string   `json:"owner"`
-	Group        string   `json:"group"`
-	RestartUnits []string `json:"restart_units,omitempty"`
+	Path          string   `json:"path"`
+	Hash          string   `json:"hash"`
+	Mode          string   `json:"mode"`
+	Owner         string   `json:"owner"`
+	Group         string   `json:"group"`
+	RestartUnits  []string `json:"restart_units,omitempty"`
+	FollowSymlink bool     `json:"follow_symlink,omitempty"`
 }
 
 // NewHostState creates a new empty host state
@@ -258,6 +259,22 @@ func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath
 		return err
 	}
 
+	baselinePath := ssh.ShellQuote(storePath + "/nixfleet-managed-files.json")
+	baseline, err := client.Exec(ctx, fmt.Sprintf("if [ -f %s ]; then cat %s; else printf null; fi", baselinePath, baselinePath))
+	if err != nil {
+		return fmt.Errorf("reading managed-file baseline: %w", err)
+	}
+	if baseline == nil || baseline.ExitCode != 0 {
+		return fmt.Errorf("reading managed-file baseline failed")
+	}
+	var files map[string]FileState
+	if err := json.Unmarshal([]byte(baseline.Stdout), &files); err != nil {
+		return fmt.Errorf("parsing managed-file baseline: %w", err)
+	}
+	if files != nil {
+		state.ManagedFiles = files
+	}
+
 	state.StorePath = storePath
 	state.DeploymentID = storePath
 	state.DeploymentGeneration = generation
@@ -310,6 +327,9 @@ func (m *Manager) CheckDrift(ctx context.Context, client Execer, expectedFiles m
 		// a missing file came back as a successful empty hash and was reported
 		// as content drift. No file could ever reach DriftStatusMissing.
 		hashCmd := fmt.Sprintf("sha256sum %s 2>/dev/null", path)
+		if expected.FollowSymlink {
+			hashCmd = fmt.Sprintf("if command -v sha256sum >/dev/null; then sha256sum %s; else shasum -a 256 %s; fi", ssh.ShellQuote(path), ssh.ShellQuote(path))
+		}
 		hashResult, err := client.Exec(ctx, hashCmd)
 		if err != nil || hashResult == nil || hashResult.ExitCode != 0 {
 			result.Status = DriftStatusMissing
@@ -331,6 +351,9 @@ func (m *Manager) CheckDrift(ctx context.Context, client Execer, expectedFiles m
 
 		// Get current permissions
 		statCmd := fmt.Sprintf("stat -c '%%a %%U %%G' %s 2>/dev/null", path)
+		if expected.FollowSymlink {
+			statCmd = fmt.Sprintf("stat -L -c '%%a %%U %%G' %s 2>/dev/null || stat -L -f '%%Lp %%Su %%Sg' %s 2>/dev/null", ssh.ShellQuote(path), ssh.ShellQuote(path))
+		}
 		statResult, err := client.Exec(ctx, statCmd)
 		if err == nil && statResult != nil && statResult.ExitCode == 0 {
 			parts := strings.Fields(statResult.Stdout)

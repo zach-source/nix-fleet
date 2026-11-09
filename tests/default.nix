@@ -206,6 +206,64 @@ in
     ) ''"store_path": "$SYSTEM_PATH"'';
   };
 
+  managed-file-baseline =
+    let
+      files = {
+        "/etc/text" = {
+          text = "fixture";
+          source = null;
+          mode = "0644";
+          owner = "root";
+          group = "root";
+          restartUnits = [ ];
+        };
+        "/etc/source" = {
+          text = null;
+          source = pkgs.writeText "source" "immutable";
+          mode = "0600";
+          owner = "root";
+          group = "root";
+          restartUnits = [ ];
+        };
+      };
+      baseline = import ../lib/managed-files.nix { inherit lib pkgs files; };
+      linkedBaseline = import ../lib/managed-files.nix {
+        inherit lib pkgs files;
+        modeFromSource = true;
+      };
+      modules = base: [
+        {
+          nixfleet.host = {
+            name = "baseline";
+            inherit base;
+            addr = "127.0.0.1";
+          };
+          nixfleet.state.trackManagedFiles = true;
+          nixfleet.files."/etc/text".text = "fixture";
+        }
+      ];
+      darwin = mkDarwinFleetConfiguration {
+        modules = modules "darwin" ++ [ { system.stateVersion = 4; } ];
+      };
+      nixos = mkNixOSFleetConfiguration {
+        modules = modules "nixos" ++ [ { system.stateVersion = "24.11"; } ];
+      };
+      ubuntu = ubuntuActivation [
+        {
+          nixfleet.state.trackManagedFiles = true;
+          nixfleet.files."/etc/text".text = "fixture";
+        }
+      ];
+    in
+    assert lib.hasInfix "nixfleet-managed-files.json" darwin.config.system.systemBuilderCommands;
+    assert lib.hasInfix "nixfleet-managed-files.json" nixos.config.system.systemBuilderCommands;
+    assert lib.hasInfix ".managed_files = $files[0]" ubuntu;
+    pkgs.runCommand "check-managed-file-baseline" { nativeBuildInputs = [ pkgs.jq ]; } ''
+      jq -e '.["/etc/text"].hash == "${builtins.hashString "sha256" "fixture"}" and .["/etc/text"].mode == "644" and .["/etc/source"].hash == "${builtins.hashString "sha256" "immutable"}"' ${baseline}
+      jq -e '.["/etc/text"].mode == "444" and .["/etc/text"].follow_symlink == true' ${linkedBaseline}
+      touch $out
+    '';
+
   nixos-translation = import ./nixos-translation.nix { inherit lib pkgs mkNixOSFleetConfiguration; };
   node-status-security = import ./node-status-security.nix {
     inherit pkgs mkNixFleetConfiguration;
