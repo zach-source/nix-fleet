@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/nixfleet/nixfleet/internal/inventory"
@@ -13,6 +14,10 @@ import (
 type Scheduler struct {
 	server *Server
 	stop   chan struct{}
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+	closed bool
 }
 
 // NewScheduler creates a new scheduler
@@ -25,29 +30,48 @@ func NewScheduler(server *Server) *Scheduler {
 
 // Start begins the scheduler goroutines
 func (s *Scheduler) Start(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.cancel != nil {
+		return
+	}
+	ctx, s.cancel = context.WithCancel(ctx)
 	// Drift check scheduler
 	if s.server.config.DriftCheckInterval > 0 {
+		s.wg.Add(1)
 		go s.runPeriodic(ctx, "drift-check", s.server.config.DriftCheckInterval, s.runDriftCheck)
 	}
 
 	// Update check scheduler
 	if s.server.config.UpdateCheckInterval > 0 {
+		s.wg.Add(1)
 		go s.runPeriodic(ctx, "update-check", s.server.config.UpdateCheckInterval, s.runUpdateCheck)
 	}
 
 	// Health check scheduler
 	if s.server.config.HealthCheckInterval > 0 {
+		s.wg.Add(1)
 		go s.runPeriodic(ctx, "health-check", s.server.config.HealthCheckInterval, s.runHealthCheck)
 	}
 }
 
 // Stop halts the scheduler
 func (s *Scheduler) Stop() {
-	close(s.stop)
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		close(s.stop)
+		if s.cancel != nil {
+			s.cancel()
+		}
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
 }
 
 // runPeriodic runs a task at regular intervals
 func (s *Scheduler) runPeriodic(ctx context.Context, name string, interval time.Duration, task func(context.Context)) {
+	defer s.wg.Done()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
