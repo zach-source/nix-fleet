@@ -503,6 +503,18 @@ let
 
   # Generate status server systemd service
   homeManagerFlag = lib.optionalString pullCfg.homeManager.enable " --home-manager-path ${pullCfg.homeManager.dotfilesPath}";
+  statusExecArg =
+    (import "${pkgs.path}/nixos/lib/utils.nix" { inherit lib config pkgs; }).escapeSystemdExecArg;
+  statusSecurityFlags =
+    optionalString (
+      pullCfg.statusServer.apiTokenFile != null
+    ) " --api-token-file ${statusExecArg pullCfg.statusServer.apiTokenFile}"
+    + optionalString (
+      pullCfg.statusServer.tlsCertFile != null
+    ) " --tls-cert ${statusExecArg pullCfg.statusServer.tlsCertFile}"
+    + optionalString (
+      pullCfg.statusServer.tlsKeyFile != null
+    ) " --tls-key ${statusExecArg pullCfg.statusServer.tlsKeyFile}";
   statusServerService = ''
     [Unit]
     Description=NixFleet Node Status Server
@@ -513,7 +525,7 @@ let
     [Service]
     Type=simple
     Environment=PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin
-    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}${homeManagerFlag}
+    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}${homeManagerFlag}${statusSecurityFlags}
     Restart=always
     RestartSec=10
     StandardOutput=journal

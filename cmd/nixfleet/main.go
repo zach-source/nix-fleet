@@ -2790,6 +2790,7 @@ func driftStatusCmd() *cobra.Command {
 }
 
 func serverCmd() *cobra.Command {
+	var tlsCert, tlsKey string
 	var failOnError bool
 	var listenAddr string
 	var apiToken string
@@ -2852,6 +2853,8 @@ API Endpoints:
 				WebhookSecret:       webhookSecret,
 				WebhookEvents:       webhookEvents,
 				APIToken:            apiToken,
+				TLSCertFile:         tlsCert,
+				TLSKeyFile:          tlsKey,
 				FailOnError:         failOnError,
 				ManageNixOSProfile:  manageNixOSProfile,
 			}
@@ -2875,6 +2878,9 @@ API Endpoints:
 	cmd.Flags().DurationVar(&driftInterval, "drift-interval", 0, "Interval for drift checks (e.g., 1h)")
 	cmd.Flags().DurationVar(&updateInterval, "update-interval", 0, "Interval for update checks (e.g., 6h)")
 	cmd.Flags().DurationVar(&healthInterval, "health-interval", 0, "Interval for health checks (e.g., 5m)")
+
+	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS (requires --tls-key)")
+	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS private key file for HTTPS (requires --tls-cert)")
 
 	return cmd
 }
@@ -6214,6 +6220,7 @@ func formatNixList(items []string, indent int) string {
 // nodeStatusCmd returns the node-status command for running a status server on nodes
 func nodeStatusCmd() *cobra.Command {
 	var port int
+	var tlsCert, tlsKey, apiTokenFile string
 	var bindAddress string
 	var stateDir string
 	var logFile string
@@ -6251,6 +6258,9 @@ Example:
 
 			cfg := nodestatus.DefaultConfig()
 			cfg.Port = port
+			cfg.TLSCertFile = tlsCert
+			cfg.TLSKeyFile = tlsKey
+			cfg.APITokenFile = apiTokenFile
 			cfg.BindAddress = bindAddress
 			cfg.Version = version
 			cfg.GitCommit = gitCommit
@@ -6273,12 +6283,16 @@ Example:
 		},
 	}
 
+	cmd.Flags().StringVar(&apiTokenFile, "api-token-file", "", "Runtime bearer token file protecting status/logs/state (health stays public; use HTTPS for remote clients)")
 	cmd.Flags().IntVar(&port, "port", 9100, "Port to listen on")
 	cmd.Flags().StringVar(&bindAddress, "bind", "0.0.0.0", "Address to bind to")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "State directory (default: /var/lib/nixfleet)")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "Pull log file (default: /var/log/nixfleet/pull.log)")
 	cmd.Flags().StringVar(&hostRepoPath, "host-repo", "", "Host config repository path (default: /var/lib/nixfleet/repo)")
 	cmd.Flags().StringVar(&homeManagerPath, "home-manager-path", "", "Home-manager dotfiles path")
+
+	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS (requires --tls-key)")
+	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS private key file for HTTPS (requires --tls-cert)")
 
 	return cmd
 }

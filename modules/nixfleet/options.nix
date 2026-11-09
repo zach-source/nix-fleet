@@ -603,6 +603,24 @@ in
       statusServer = {
         enable = mkEnableOption "HTTP status server for node monitoring";
 
+        apiTokenFile = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Runtime bearer token file for status, logs and state; health stays public. Provision outside the Nix store and use TLS for remote clients. Null preserves unauthenticated access.";
+        };
+
+        tlsCertFile = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Runtime TLS certificate file (requires tlsKeyFile). Null preserves HTTP.";
+        };
+
+        tlsKeyFile = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Runtime TLS private key file (requires tlsCertFile). Provision outside the Nix store.";
+        };
+
         port = mkOption {
           type = types.port;
           default = 9100;

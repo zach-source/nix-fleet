@@ -198,6 +198,10 @@ let
 in
 {
   nixos-translation = import ./nixos-translation.nix { inherit lib pkgs mkNixOSFleetConfiguration; };
+  node-status-security = import ./node-status-security.nix {
+    inherit pkgs mkNixFleetConfiguration;
+  };
+
   juicefs-private-headers = import ./juicefs-headers.nix {
     inherit pkgs lib mkNixFleetConfiguration;
   };

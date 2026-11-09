@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,9 +25,11 @@ import (
 
 // Config holds server configuration
 type Config struct {
-	ListenAddr string
-	FlakePath  string
-	Inventory  *inventory.Inventory
+	TLSCertFile string
+	TLSKeyFile  string
+	ListenAddr  string
+	FlakePath   string
+	Inventory   *inventory.Inventory
 
 	// Scheduler settings
 	DriftCheckInterval  time.Duration
@@ -208,6 +211,14 @@ func isLoopbackAddr(addr string) bool {
 
 // Start starts the HTTP server
 func (s *Server) Start(ctx context.Context) error {
+	if (s.config.TLSCertFile == "") != (s.config.TLSKeyFile == "") {
+		return fmt.Errorf("TLS requires both --tls-cert and --tls-key")
+	}
+	if s.config.TLSCertFile != "" {
+		if _, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile); err != nil {
+			return fmt.Errorf("loading TLS certificate: %w", err)
+		}
+	}
 	// Start scheduler
 	s.scheduler.Start(ctx)
 
@@ -223,7 +234,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServe()
+		if s.config.TLSCertFile != "" {
+			errCh <- server.ListenAndServeTLS(s.config.TLSCertFile, s.config.TLSKeyFile)
+		} else {
+			errCh <- server.ListenAndServe()
+		}
 	}()
 
 	select {
