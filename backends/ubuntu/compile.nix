@@ -1182,9 +1182,7 @@ let
       mv "$STATE_FILE.baseline" "$STATE_FILE.new"
     ''}
     if [ -s "$STATE_FILE" ] && "$JQ" -e . "$STATE_FILE" > /dev/null 2>&1; then
-      if "$JQ" -s '.[0] ${
-        if cfg.state.trackManagedFiles then "+" else "*"
-      } .[1]' "$STATE_FILE" "$STATE_FILE.new" > "$STATE_FILE.merged"; then
+      if "$JQ" -s '.[0] + .[1]' "$STATE_FILE" "$STATE_FILE.new" > "$STATE_FILE.merged"; then
         mv "$STATE_FILE.merged" "$STATE_FILE"
       else
         log "  WARNING: could not merge state, keeping previous state.json"
