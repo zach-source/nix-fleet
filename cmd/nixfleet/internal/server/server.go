@@ -41,7 +41,8 @@ type Config struct {
 	// Auth settings
 	APIToken string
 	// FailOnError reports partial fleet applies as failed; false preserves legacy status.
-	FailOnError bool
+	FailOnError        bool
+	ManageNixOSProfile bool
 }
 
 // Server is the NixFleet HTTP API server
@@ -114,6 +115,7 @@ func New(config Config) (*Server, error) {
 		mux:       http.NewServeMux(),
 	}
 
+	s.deployer.ManageNixOSProfile = config.ManageNixOSProfile
 	s.setupRoutes()
 	s.scheduler = NewScheduler(s)
 
