@@ -298,6 +298,12 @@ func applyCmd() *cobra.Command {
 				return err
 			}
 
+			for _, host := range hosts {
+				if host.Base == inventory.BaseSynology {
+					return fmt.Errorf("host %q uses the DSM backend; use nixfleet synology apply", host.Name)
+				}
+			}
+
 			if dryRun {
 				fmt.Printf("Would apply to %d host(s):\n", len(hosts))
 				for _, h := range hosts {

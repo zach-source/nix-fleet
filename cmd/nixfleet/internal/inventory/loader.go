@@ -241,8 +241,10 @@ func (inv *Inventory) Validate() error {
 		if host.Addr == "" {
 			return fmt.Errorf("host %q has no address", name)
 		}
-		if host.Base != BaseUbuntu && host.Base != BaseNixOS && host.Base != BaseDGX {
-			return fmt.Errorf("host %q has invalid base %q (must be 'ubuntu', 'nixos' or 'dgx')", name, host.Base)
+		switch host.Base {
+		case BaseUbuntu, BaseNixOS, BaseDGX, BaseDarwin, BaseSynology:
+		default:
+			return fmt.Errorf("host %q has invalid base %q (must be 'ubuntu', 'nixos', 'dgx', 'darwin' or 'synology')", name, host.Base)
 		}
 	}
 
