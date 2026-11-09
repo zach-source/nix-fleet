@@ -25,11 +25,14 @@ import (
 
 // Config holds server configuration
 type Config struct {
-	TLSCertFile string
-	TLSKeyFile  string
-	ListenAddr  string
-	FlakePath   string
-	Inventory   *inventory.Inventory
+	MaxActiveJobs    int
+	MaxCompletedJobs int
+	JobTimeout       time.Duration
+	TLSCertFile      string
+	TLSKeyFile       string
+	ListenAddr       string
+	FlakePath        string
+	Inventory        *inventory.Inventory
 
 	// Scheduler settings
 	DriftCheckInterval  time.Duration
@@ -74,6 +77,8 @@ type Server struct {
 	closing   bool
 	closeOnce sync.Once
 
+	activeJobs int
+
 	// applyLocks holds one mutex per host name, so two apply jobs can never
 	// build and activate on the same host at the same time.
 	applyLocks sync.Map
@@ -97,6 +102,9 @@ type Job struct {
 
 // New creates a new server instance
 func New(config Config) (*Server, error) {
+	if config.MaxActiveJobs < 0 || config.MaxCompletedJobs < 0 || config.JobTimeout < 0 {
+		return nil, fmt.Errorf("job limits must be nonnegative")
+	}
 	if config.APIToken == "" && !isLoopbackAddr(config.ListenAddr) {
 		return nil, fmt.Errorf("refusing to listen on %s without an API token: set --api-token or bind to 127.0.0.1", config.ListenAddr)
 	}
@@ -860,14 +868,58 @@ func (s *Server) startJob(kind, host string, run func(context.Context, *Job)) (*
 	if s.closing {
 		return nil, fmt.Errorf("server is shutting down")
 	}
+	if s.config.MaxActiveJobs > 0 && s.activeJobs >= s.config.MaxActiveJobs {
+		return nil, fmt.Errorf("job capacity reached")
+	}
 	if s.jobCtx == nil {
 		s.jobCtx, s.jobCancel = context.WithCancel(context.Background())
 	}
 	job := s.createJobLocked(kind, host)
 	snapshot := *job
+	s.activeJobs++
 	s.jobsWG.Add(1)
-	go func() { defer s.jobsWG.Done(); run(s.jobCtx, job) }()
+	go func() {
+		defer s.jobsWG.Done()
+		ctx := s.jobCtx
+		if s.config.JobTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, s.config.JobTimeout)
+			defer cancel()
+		}
+		run(ctx, job)
+		if err := ctx.Err(); err != nil {
+			s.updateJob(job, "failed", nil, err.Error())
+		}
+		s.jobsMu.Lock()
+		s.activeJobs--
+		s.pruneJobsLocked()
+		s.jobsMu.Unlock()
+	}()
 	return &snapshot, nil
+}
+
+// Keep active jobs and the newest configured number of terminal records.
+func (s *Server) pruneJobsLocked() {
+	if s.config.MaxCompletedJobs <= 0 {
+		return
+	}
+	for {
+		count := 0
+		var oldest *Job
+		for _, job := range s.jobs {
+			if job.EndTime.IsZero() {
+				continue
+			}
+			count++
+			if oldest == nil || job.EndTime.Before(oldest.EndTime) {
+				oldest = job
+			}
+		}
+		if count <= s.config.MaxCompletedJobs {
+			return
+		}
+		delete(s.jobs, oldest.ID)
+	}
 }
 
 func (s *Server) updateJob(job *Job, status string, result any, errStr string) {
