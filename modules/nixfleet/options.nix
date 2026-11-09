@@ -367,6 +367,18 @@ in
       };
     };
 
+    safeActivationPaths = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Reject symlinks and non-root-owned or group/world-writable ancestors
+        for Ubuntu managed files/directories and Darwin managed directories.
+        Enable after migrating paths that intentionally traverse symlinks or
+        user-owned trees. False preserves legacy behavior, including its risk
+        of privileged writes through user-controlled paths.
+      '';
+    };
+
     # Managed files
     files = mkOption {
       type = types.attrsOf fileType;

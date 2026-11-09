@@ -536,6 +536,7 @@ let
 
   # Calculate manifest hash for change detection
   manifestInputs = builtins.toJSON {
+    safeActivationPaths = cfg.safeActivationPaths;
     packages = map (p: p.outPath) cfg.packages;
     files = mapAttrs (path: fileCfg: {
       text = fileCfg.text;
@@ -679,13 +680,20 @@ let
       ) cfg.users
     )}
 
+    ${optionalString cfg.safeActivationPaths (
+      builtins.replaceStrings [ "@stat@" ] [ "${pkgs.coreutils}/bin/stat" ] (
+        builtins.readFile ../../lib/activation-paths.sh
+      )
+    )}
+
     # Step 4: Create directories
     log "Creating directories..."
     ${concatStringsSep "\n" (
       mapAttrsToList (path: dirCfg: ''
-        mkdir -p "${path}"
-        chmod ${dirCfg.mode} "${path}"
-        chown ${dirCfg.owner}:${dirCfg.group} "${path}"
+        ${optionalString cfg.safeActivationPaths "nixfleet_check_path ${escapeShellArg path}"}
+        mkdir -p ${escapeShellArg path}
+        chmod ${escapeShellArg dirCfg.mode} ${escapeShellArg path}
+        chown ${escapeShellArg "${dirCfg.owner}:${dirCfg.group}"} ${escapeShellArg path}
       '') cfg.directories
     )}
 
@@ -803,15 +811,17 @@ let
         in
         ''
           if [ -f "${stagedPath}" ]; then
+            ${optionalString cfg.safeActivationPaths "nixfleet_check_path ${escapeShellArg path}"}
             # Check if file changed
-            if ! cmp -s "${stagedPath}" "${path}" 2>/dev/null; then
-              log "  Updating: ${path}"
-              mkdir -p "$(dirname "${path}")"
-              cp "${stagedPath}" "${path}"
-              chmod ${fileCfg.mode} "${path}"
-              chown ${fileCfg.owner}:${fileCfg.group} "${path}"
-              CHANGED_FILES="$CHANGED_FILES ${path}"
+            if ! cmp -s "${stagedPath}" ${escapeShellArg path} 2>/dev/null; then
+              log ${escapeShellArg "  Updating: ${path}"}
+              mkdir -p ${escapeShellArg (dirOf path)}
+              cp "${stagedPath}" ${escapeShellArg path}
+              CHANGED_FILES+=" "${escapeShellArg path}
             fi
+            # Ownership and mode can change without changing file contents.
+            chmod ${escapeShellArg fileCfg.mode} ${escapeShellArg path}
+            chown ${escapeShellArg "${fileCfg.owner}:${fileCfg.group}"} ${escapeShellArg path}
           fi
         ''
       ) cfg.files

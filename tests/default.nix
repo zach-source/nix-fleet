@@ -310,6 +310,10 @@ in
   };
 }
 // {
+  safe-activation-paths = import ./safe-activation-paths.nix { inherit lib pkgs ubuntuActivation; };
+
+  activation-permissions = import ./activation-paths.nix { inherit lib pkgs ubuntuActivation; };
+
   dsv4-waits-for-dns = mkCheck "dsv4-waits-for-dns" {
     # network-online.target does not imply name resolution: on DGX OS
     # NetworkManager-wait-online is disabled, so the target is reached
