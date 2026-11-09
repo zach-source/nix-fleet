@@ -17,6 +17,8 @@ type Config struct {
 	Host       string      `json:"host"`
 	Port       int         `json:"port"`
 	HTTPS      bool        `json:"https"`
+	VerifyTLS  bool        `json:"verifyTLS"`
+	CAFile     string      `json:"caFile"`
 	User       string      `json:"user"`
 	ISCSILUNs  []LUN       `json:"iscsiLuns"`
 	NFSExports []NFSExport `json:"nfsExports"`

@@ -3,17 +3,20 @@ package synology
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 )
 
 // Client talks to the Synology DSM Web API over HTTPS using a session id (sid).
-// DSM presents a self-signed cert, so TLS verification is skipped (the host is
-// reached over the trusted LAN, same as the synology-csi driver).
+// TLS verification is opt-in for compatibility with existing self-signed hosts.
 type Client struct {
 	baseURL string
 	user    string
@@ -24,22 +27,40 @@ type Client struct {
 
 // NewClient builds a client for the given DSM host. Password is supplied
 // separately (sourced from 1Password/env by the caller) and never logged.
-func NewClient(host string, port int, https bool, user, passwd string) *Client {
+func NewClient(cfg Config, passwd string) (*Client, error) {
+	verify := cfg.VerifyTLS || cfg.CAFile != ""
+	if verify && !cfg.HTTPS {
+		return nil, fmt.Errorf("DSM TLS verification requires https = true")
+	}
+	// shortcut: preserve self-signed defaults, enable verifyTLS when hosts have trusted certificates.
+	tlsConfig := &tls.Config{InsecureSkipVerify: !verify} //nolint:gosec // explicit compatibility mode
+	if cfg.CAFile != "" {
+		certs, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read DSM CA file: %w", err)
+		}
+		tlsConfig.RootCAs = x509.NewCertPool()
+		if !tlsConfig.RootCAs.AppendCertsFromPEM(certs) {
+			return nil, fmt.Errorf("DSM CA file contains no PEM certificates")
+		}
+	}
 	scheme := "https"
-	if !https {
+	if !cfg.HTTPS {
 		scheme = "http"
 	}
 	return &Client{
-		baseURL: fmt.Sprintf("%s://%s:%d/webapi", scheme, host, port),
-		user:    user,
+		baseURL: fmt.Sprintf("%s://%s:%d/webapi", scheme, cfg.Host, cfg.Port),
+		user:    cfg.User,
 		passwd:  passwd,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
+			// Never replay credentials at a redirect target (including HTTPS downgrades).
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // DSM self-signed cert on trusted LAN
+				TLSClientConfig: tlsConfig,
 			},
 		},
-	}
+	}, nil
 }
 
 // apiResponse is the standard DSM envelope.
@@ -86,6 +107,7 @@ func (c *Client) Logout(ctx context.Context) {
 		"version": {"3"},
 		"method":  {"logout"},
 		"session": {"NixFleet"},
+		"_sid":    {c.sid},
 	}
 	_ = c.do(ctx, "auth.cgi", q, nil) // best-effort
 	c.sid = ""
@@ -119,16 +141,25 @@ type rawCapture struct{ into *json.RawMessage }
 // do issues the request, checks the DSM envelope, and decodes data into out.
 // out may be nil (ignore data), a *rawCapture (keep raw), or any json target.
 func (c *Client) do(ctx context.Context, cgi string, q url.Values, out any) error {
-	reqURL := c.baseURL + "/" + cgi + "?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	reqURL := c.baseURL + "/" + cgi
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, strings.NewReader(q.Encode()))
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// URL errors include the full URL; retain the transport cause, not the URL.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return fmt.Errorf("request to %s: %w", cgi, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("DSM %s HTTP status %d", cgi, resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return err
