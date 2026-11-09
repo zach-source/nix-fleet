@@ -12,9 +12,9 @@ func TestPullRetryAndLockLifetime(t *testing.T) {
 	for _, retry := range []bool{false, true} {
 		mode := "legacy"
 		if retry {
-			mode = "retry"
+			mode = "verify"
 		}
-		script, err := renderPullScript(Config{RepoPath: "/unused", HostName: "fixture", Branch: "main", RetryFailedApply: retry, MutationLockTimeout: time.Second})
+		script, err := renderPullScript(Config{RepoPath: "/unused", HostName: "fixture", Branch: "main", RetryFailedApply: retry, VerifyDeploy: retry, MutationLockTimeout: time.Second})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -504,6 +504,11 @@ in
     };
 
     pullMode = {
+      verifyDeployment = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Gate pull activation on local preflight and configured health before recording a successful revision.";
+      };
       enable = mkEnableOption "pull-based deployment mode";
 
       repoURL = mkOption {

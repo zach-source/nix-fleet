@@ -294,13 +294,14 @@ in
               enable = true;
               repoURL = "unused";
               retryFailedApply = true;
+              verifyDeployment = true;
             };
           }
         ];
       };
     in
     pkgs.runCommand "check-pull-retry-and-lock" { nativeBuildInputs = [ pkgs.bash ]; } ''
-      bash ${../cmd/nixfleet/internal/pullmode/testdata/pull-mode.sh} ${host.config.nixfleet.ubuntu.system.pullMode}/nixfleet-pull
+      bash ${../cmd/nixfleet/internal/pullmode/testdata/pull-mode.sh} ${host.config.nixfleet.ubuntu.system.pullMode}/nixfleet-pull verify
       touch $out
     '';
 

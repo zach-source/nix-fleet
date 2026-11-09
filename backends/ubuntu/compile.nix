@@ -400,6 +400,9 @@ let
         log "Activating configuration..."
         (
         ${mutationLock}
+        ${optionalString pullCfg.verifyDeployment (
+          builtins.readFile ../../cmd/nixfleet/internal/pullmode/preflight.sh
+        )}
         if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
             log "ERROR: Activation failed"
             notify "failed" "Activation failed for commit $NEW_COMMIT"
@@ -408,6 +411,7 @@ let
 
         # Update profile
         nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
+        ${optionalString pullCfg.verifyDeployment ''"$SYSTEM_PATH/bin/nixfleet-verify-health" 2>&1 | tee -a "$LOG_FILE"''}
 
         )
         ${optionalString pullCfg.retryFailedApply ''
@@ -533,7 +537,7 @@ let
     [Service]
     Type=simple
     Environment=PATH=/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin
-    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}${homeManagerFlag}${statusSecurityFlags}
+    ExecStart=/usr/local/bin/nixfleet node-status --port ${toString pullCfg.statusServer.port} --bind ${pullCfg.statusServer.bindAddress}${homeManagerFlag}${statusSecurityFlags}${optionalString pullCfg.verifyDeployment " --report-unchecked-health"}
     Restart=always
     RestartSec=10
     StandardOutput=journal

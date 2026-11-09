@@ -3013,6 +3013,7 @@ With home-manager:
 				Interval:            interval,
 				ApplyOnBoot:         applyOnBoot,
 				RetryFailedApply:    retryFailedApply,
+				VerifyDeploy:        verifyDeploy,
 				MutationLockTimeout: mutationLockTimeout,
 				RepoPath:            defaults.RepoPath,
 				WebhookURL:          webhookURL,
@@ -6237,6 +6238,7 @@ func formatNixList(items []string, indent int) string {
 
 // nodeStatusCmd returns the node-status command for running a status server on nodes
 func nodeStatusCmd() *cobra.Command {
+	var reportUncheckedHealth bool
 	var port int
 	var tlsCert, tlsKey, apiTokenFile string
 	var bindAddress string
@@ -6276,6 +6278,7 @@ Example:
 
 			cfg := nodestatus.DefaultConfig()
 			cfg.Port = port
+			cfg.ReportUncheckedHealth = reportUncheckedHealth
 			cfg.TLSCertFile = tlsCert
 			cfg.TLSKeyFile = tlsKey
 			cfg.APITokenFile = apiTokenFile
@@ -6312,6 +6315,7 @@ Example:
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file for HTTPS (requires --tls-key)")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS private key file for HTTPS (requires --tls-cert)")
 
+	cmd.Flags().BoolVar(&reportUncheckedHealth, "report-unchecked-health", false, "Report declared-only health checks as unknown instead of the legacy passing summary")
 	return cmd
 }
 
