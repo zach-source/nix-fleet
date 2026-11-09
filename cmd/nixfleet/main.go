@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -4297,7 +4296,7 @@ Examples:
 
 				// Deploy CA certificate
 				caCertDest := destDir + "/ca.crt"
-				if err := deployFileContent(ctx, client, caCertPEM, caCertDest, "0644"); err != nil {
+				if err := pki.DeployFileContent(ctx, client, caCertPEM, caCertDest, "0644"); err != nil {
 					fmt.Printf("  Failed to deploy CA cert: %v\n", err)
 					failedCount++
 					continue
@@ -4332,7 +4331,7 @@ Examples:
 						} else {
 							// Deploy host certificate
 							hostCertDest := destDir + "/host.crt"
-							if err := deployFileContent(ctx, client, hostCert.CertPEM, hostCertDest, "0644"); err != nil {
+							if err := pki.DeployFileContent(ctx, client, hostCert.CertPEM, hostCertDest, "0644"); err != nil {
 								fmt.Printf("  Failed to deploy host cert: %v\n", err)
 							} else {
 								fmt.Printf("  Host cert: %s\n", hostCertDest)
@@ -4340,7 +4339,7 @@ Examples:
 
 							// Deploy host key (restricted permissions)
 							hostKeyDest := destDir + "/host.key"
-							if err := deployFileContent(ctx, client, hostCert.KeyPEM, hostKeyDest, "0600"); err != nil {
+							if err := pki.DeployFileContent(ctx, client, hostCert.KeyPEM, hostKeyDest, "0600"); err != nil {
 								fmt.Printf("  Failed to deploy host key: %v\n", err)
 							} else {
 								fmt.Printf("  Host key: %s\n", hostKeyDest)
@@ -4886,19 +4885,6 @@ Examples:
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (prints to stdout if not specified)")
 
 	return cmd
-}
-
-// deployFileContent deploys content to a remote path via SSH
-func deployFileContent(ctx context.Context, client *ssh.Client, content []byte, destPath, mode string) error {
-	// Use a heredoc to write content
-	// Base64 encode to handle binary/special characters
-	encoded := base64.StdEncoding.EncodeToString(content)
-
-	cmd := fmt.Sprintf("echo '%s' | base64 -d | sudo tee %s > /dev/null && sudo chmod %s %s",
-		encoded, destPath, mode, destPath)
-
-	_, err := client.Exec(ctx, cmd)
-	return err
 }
 
 func pkiInstallTimerCmd() *cobra.Command {

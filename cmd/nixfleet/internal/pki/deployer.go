@@ -2,7 +2,6 @@ package pki
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"time"
@@ -85,7 +84,7 @@ func (d *Deployer) Deploy(ctx context.Context, client *ssh.Client, host *invento
 
 	// Deploy CA certificate
 	caCertDest := d.config.DestDir + "/ca.crt"
-	if err := d.deployFileContent(ctx, client, caCertPEM, caCertDest, "0644"); err != nil {
+	if err := DeployFileContent(ctx, client, caCertPEM, caCertDest, "0644"); err != nil {
 		result.Error = fmt.Sprintf("deploying CA cert: %v", err)
 		return result
 	}
@@ -131,7 +130,7 @@ func (d *Deployer) Deploy(ctx context.Context, client *ssh.Client, host *invento
 
 		// Deploy host certificate
 		hostCertDest := d.config.DestDir + "/host.crt"
-		if err := d.deployFileContent(ctx, client, hostCert.CertPEM, hostCertDest, "0644"); err != nil {
+		if err := DeployFileContent(ctx, client, hostCert.CertPEM, hostCertDest, "0644"); err != nil {
 			result.Error = fmt.Sprintf("deploying host cert: %v", err)
 			return result
 		}
@@ -139,7 +138,7 @@ func (d *Deployer) Deploy(ctx context.Context, client *ssh.Client, host *invento
 
 		// Deploy host key (restricted permissions)
 		hostKeyDest := d.config.DestDir + "/host.key"
-		if err := d.deployFileContent(ctx, client, hostCert.KeyPEM, hostKeyDest, "0600"); err != nil {
+		if err := DeployFileContent(ctx, client, hostCert.KeyPEM, hostKeyDest, "0600"); err != nil {
 			result.Error = fmt.Sprintf("deploying host key: %v", err)
 			return result
 		}
@@ -239,12 +238,30 @@ func (d *Deployer) RevokeCert(ctx context.Context, hostname string) error {
 
 // helper functions
 
-func (d *Deployer) deployFileContent(ctx context.Context, client *ssh.Client, content []byte, destPath, mode string) error {
-	encoded := base64.StdEncoding.EncodeToString(content)
-	cmd := fmt.Sprintf("echo '%s' | base64 -d | sudo tee %s > /dev/null && sudo chmod %s %s",
-		encoded, destPath, mode, destPath)
-	_, err := client.Exec(ctx, cmd)
-	return err
+type fileExecer interface {
+	ExecSudoStdin(context.Context, string, []byte) (*ssh.ExecResult, error)
+}
+
+// DeployFileContent streams certificate material into a private temporary file.
+// Both CLI and pipeline deployment use this path so private keys never enter argv.
+func DeployFileContent(ctx context.Context, client fileExecer, content []byte, destPath, mode string) error {
+	command := fmt.Sprintf(`set -eu
+umask 077
+dest=%s
+[ ! -d "$dest" ]
+tmp=$(mktemp "${dest}.tmp.XXXXXX")
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+cat > "$tmp"
+chmod %s "$tmp"
+mv -f "$tmp" "$dest"`, ssh.ShellQuote(destPath), ssh.ShellQuote(mode))
+	result, err := client.ExecSudoStdin(ctx, command, content)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("writing %s: remote exit status %d", destPath, result.ExitCode)
+	}
+	return nil
 }
 
 func (d *Deployer) updateSystemTrust(ctx context.Context, client *ssh.Client, base, caCertPath string) error {
