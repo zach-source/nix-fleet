@@ -176,3 +176,27 @@ func TestRunApplyJobWaitsForTheHostLock(t *testing.T) {
 		t.Errorf("job error = %q, want a build failure", job.Error)
 	}
 }
+
+func TestFleetApplyFailureReporting(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		ts := newTestServer(t)
+		ts.config.FailOnError = strict
+		host := stubHost(ts, "broken")
+		job := ts.createJob("apply", "")
+		ts.runApplyAllJob(context.Background(), job, []*inventory.Host{host})
+		want := "completed"
+		if strict {
+			want = "failed"
+		}
+		if job.Status != want {
+			t.Fatalf("strict=%v: status=%s, want %s", strict, job.Status, want)
+		}
+		result := job.Result.(map[string]any)
+		if result["failed"] != 1 || result["success"] != 0 {
+			t.Fatalf("lost per-host outcome: %v", result)
+		}
+		if strict && job.Error != "1 host(s) failed" {
+			t.Fatalf("error=%q", job.Error)
+		}
+	}
+}

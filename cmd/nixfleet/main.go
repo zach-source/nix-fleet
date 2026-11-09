@@ -276,6 +276,7 @@ Compares desired configuration against current deployed state to show:
 }
 
 func applyCmd() *cobra.Command {
+	var failOnError bool
 	var (
 		skipPreflight bool
 		skipHealth    bool
@@ -409,10 +410,14 @@ func applyCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Summary: %d succeeded, %d failed\n", successCount, failedCount)
+			if failOnError && failedCount > 0 {
+				return fmt.Errorf("%d host(s) failed", failedCount)
+			}
 			return nil
 		},
 	}
 
+	cmd.Flags().BoolVar(&failOnError, "fail-on-error", false, "Return an error when any host operation fails")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&skipHealth, "skip-health", false, "Skip post-apply health checks")
 	cmd.Flags().BoolVar(&skipState, "skip-state", false, "Skip updating host state after apply")
@@ -425,6 +430,7 @@ func applyCmd() *cobra.Command {
 
 func rollbackCmd() *cobra.Command {
 	var toGeneration string
+	var failOnError bool
 
 	cmd := &cobra.Command{
 		Use:   "rollback",
@@ -453,12 +459,14 @@ func rollbackCmd() *cobra.Command {
 
 			deployer := nix.NewDeployer(evaluator)
 
+			failedCount := 0
 			for _, host := range hosts {
 				fmt.Printf("Rolling back %s...\n", host.Name)
 
 				client, err := pool.GetWithUser(ctx, host.Addr, host.SSHPort, host.SSHUser)
 				if err != nil {
 					fmt.Printf("  Connection failed: %v\n", err)
+					failedCount++
 					continue
 				}
 
@@ -469,6 +477,7 @@ func rollbackCmd() *cobra.Command {
 
 				if err := deployer.Rollback(ctx, client, host.Base, generation); err != nil {
 					fmt.Printf("  Rollback failed: %v\n", err)
+					failedCount++
 					continue
 				}
 
@@ -479,10 +488,14 @@ func rollbackCmd() *cobra.Command {
 				fmt.Printf("  Done!\n")
 			}
 
+			if failOnError && failedCount > 0 {
+				return fmt.Errorf("%d host(s) failed", failedCount)
+			}
 			return nil
 		},
 	}
 
+	cmd.Flags().BoolVar(&failOnError, "fail-on-error", false, "Return an error when any host operation fails")
 	cmd.Flags().StringVar(&toGeneration, "to", "previous", "Target generation (previous or generation number)")
 
 	return cmd
@@ -2763,6 +2776,7 @@ func driftStatusCmd() *cobra.Command {
 }
 
 func serverCmd() *cobra.Command {
+	var failOnError bool
 	var listenAddr string
 	var apiToken string
 	var webhookURL string
@@ -2824,6 +2838,7 @@ API Endpoints:
 				WebhookSecret:       webhookSecret,
 				WebhookEvents:       webhookEvents,
 				APIToken:            apiToken,
+				FailOnError:         failOnError,
 			}
 
 			srv, err := server.New(config)
@@ -2836,6 +2851,7 @@ API Endpoints:
 		},
 	}
 
+	cmd.Flags().BoolVar(&failOnError, "fail-on-error", false, "Mark fleet apply jobs failed when any host fails")
 	cmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8080", "Address to listen on (non-loopback requires --api-token)")
 	cmd.Flags().StringVar(&apiToken, "api-token", "", "API bearer token (required unless listening on loopback)")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for notifications")
