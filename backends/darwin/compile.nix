@@ -153,13 +153,25 @@ in
     system.activationScripts.postActivation.text =
       let
         # Create managed directories
-        dirCommands = concatStringsSep "\n" (
-          mapAttrsToList (path: dirCfg: ''
-            mkdir -p "${path}"
-            chmod ${dirCfg.mode} "${path}"
-            chown ${dirCfg.owner}:${dirCfg.group} "${path}"
-          '') cfg.directories
-        );
+        dirCommands =
+          optionalString cfg.safeActivationPaths (
+            builtins.replaceStrings [ "@stat@" ] [ "${pkgs.coreutils}/bin/stat" ] (
+              builtins.readFile ../../lib/activation-paths.sh
+            )
+          )
+          + concatStringsSep "\n" (
+            mapAttrsToList (path: dirCfg: ''
+              ${optionalString cfg.safeActivationPaths "nixfleet_check_path ${escapeShellArg path} || exit 1"}
+              ${
+                if cfg.safeActivationPaths then
+                  "(umask 077; mkdir -p ${escapeShellArg path})"
+                else
+                  "mkdir -p ${escapeShellArg path}"
+              }
+              chmod ${escapeShellArg dirCfg.mode} ${escapeShellArg path}
+              chown ${escapeShellArg "${dirCfg.owner}:${dirCfg.group}"} ${escapeShellArg path}
+            '') cfg.directories
+          );
 
         # Pre-activate hook
         preHook = optionalString (cfg.hooks.preActivate != "") ''
