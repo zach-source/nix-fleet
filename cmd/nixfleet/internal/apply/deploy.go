@@ -79,7 +79,7 @@ type HostDeployer interface {
 
 // StateRecorder records a completed apply. *state.Manager satisfies it.
 type StateRecorder interface {
-	UpdateAfterApply(ctx context.Context, client state.Execer, storePath, manifestHash string, generation int, duration time.Duration) error
+	UpdateAfterApply(ctx context.Context, client state.Execer, base, storePath, manifestHash string, generation int, duration time.Duration) error
 }
 
 // ClientPool hands out SSH connections. *ssh.Pool satisfies it.
@@ -188,7 +188,7 @@ func (h HostDeploy) Run(ctx context.Context, host *inventory.Host, opts DeployOp
 		if genErr != nil {
 			result.StateError = fmt.Sprintf("reading generation: %v", genErr)
 		}
-		if err := h.State.UpdateAfterApply(ctx, client, closure.StorePath, closure.ManifestHash, gen, result.Duration); err != nil {
+		if err := h.State.UpdateAfterApply(ctx, client, host.Base, closure.StorePath, closure.ManifestHash, gen, result.Duration); err != nil {
 			result.StateError = err.Error()
 		} else if result.StateError == "" {
 			result.StateUpdated = true

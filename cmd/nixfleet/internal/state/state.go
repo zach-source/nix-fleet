@@ -7,11 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/nixfleet/nixfleet/internal/hostlock"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/nixfleet/nixfleet/internal/hostlock"
+	"github.com/nixfleet/nixfleet/internal/inventory"
 	"github.com/nixfleet/nixfleet/internal/ssh"
 )
 
@@ -37,7 +38,8 @@ type OSInfo struct {
 
 // HostState represents the current state of a managed host
 type HostState struct {
-	original []byte
+	original        []byte
+	deploymentGuard string
 	// Identity
 	Hostname string `json:"hostname"`
 	Base     string `json:"base"` // ubuntu, nixos, darwin
@@ -190,7 +192,7 @@ type Execer interface {
 }
 
 // Manager handles state operations on remote hosts
-type Manager struct{}
+type Manager struct{ MutationLockTimeout time.Duration }
 
 // NewManager creates a new state manager
 func NewManager() *Manager {
@@ -267,14 +269,18 @@ if [ "$current" != %s ]; then
  echo 'state changed since it was read; retry from a fresh read' >&2
  exit 75
 fi
+%s
 tmp=$(mktemp %s/.state.XXXXXX)
 trap 'rm -f "$tmp"' EXIT
 if [ -f %s ]; then cp -p %s "$tmp"; else chmod 0644 "$tmp"; fi
 cat > "$tmp" << 'NIXFLEET_STATE'
 %s
 NIXFLEET_STATE
-mv -f "$tmp" %s`, StateDir, StatePath, StatePath, ssh.ShellQuote(strings.TrimRight(string(state.original), "\n")), StateDir, StatePath, StatePath, data, StatePath)
+mv -f "$tmp" %s`, StateDir, StatePath, StatePath, ssh.ShellQuote(strings.TrimRight(string(state.original), "\n")), state.deploymentGuard, StateDir, StatePath, StatePath, data, StatePath)
 	writeCmd = hostlock.Wrap("(\n"+writeCmd+"\n)", StateDir+"/.state.lock", 5*time.Second)
+	if state.deploymentGuard != "" {
+		writeCmd = hostlock.Wrap(writeCmd, hostlock.MutationPath, m.MutationLockTimeout)
+	}
 
 	result, err := client.ExecSudo(ctx, writeCmd)
 	if err != nil {
@@ -289,10 +295,29 @@ mv -f "$tmp" %s`, StateDir, StatePath, StatePath, ssh.ShellQuote(strings.TrimRig
 }
 
 // UpdateAfterApply updates state after a successful apply
-func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, storePath, manifestHash string, generation int, duration time.Duration) error {
+func (m *Manager) UpdateAfterApply(ctx context.Context, client Execer, base, storePath, manifestHash string, generation int, duration time.Duration) error {
 	state, err := m.ReadState(ctx, client)
 	if err != nil {
 		return err
+	}
+
+	if m.MutationLockTimeout > 0 {
+		profile := "/nix/var/nix/profiles/system"
+		current := "readlink /run/current-system"
+		switch inventory.NormalizeBase(base) {
+		case inventory.BaseUbuntu:
+			profile = "/nix/var/nix/profiles/nixfleet/system"
+			current = "readlink -f " + profile
+		case inventory.BaseNixOS, inventory.BaseDarwin:
+		default:
+			return fmt.Errorf("cannot guard deployment state for base %q", base)
+		}
+		if generation <= 0 {
+			return fmt.Errorf("cannot guard deployment state without a valid generation")
+		}
+		state.deploymentGuard = fmt.Sprintf(`test "$(%s)" = %s || { echo 'active closure changed before state publication' >&2; exit 75; }
+link=$(readlink %s)
+test "$(basename "$link")" = %s || { echo 'generation changed before state publication' >&2; exit 75; }`, current, ssh.ShellQuote(storePath), profile, ssh.ShellQuote(fmt.Sprintf("system-%d-link", generation)))
 	}
 
 	baselinePath := ssh.ShellQuote(storePath + "/nixfleet-managed-files.json")

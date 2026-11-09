@@ -60,7 +60,7 @@ func (f *fakeDeployer) GetCurrentGeneration(ctx context.Context, client *ssh.Cli
 	return f.gen, "", f.genErr
 }
 
-func (f *fakeDeployer) UpdateAfterApply(ctx context.Context, client state.Execer, storePath, manifestHash string, generation int, duration time.Duration) error {
+func (f *fakeDeployer) UpdateAfterApply(ctx context.Context, client state.Execer, base, storePath, manifestHash string, generation int, duration time.Duration) error {
 	f.calls = append(f.calls, "record-state")
 	f.stateArgs = []any{storePath, manifestHash, generation}
 	return f.stateErr

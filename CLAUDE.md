@@ -397,3 +397,9 @@ which reports declared-only checks as unknown. The standalone node-status flag
 is also available. Its default retains the legacy summary for compatibility;
 that legacy summary is not proof of successful checks. Update the node-status
 binary before enabling the new generated service option.
+
+With mutation locking enabled, controller apply/rollback state publication also
+holds the mutation lock and verifies the active closure and generation under
+the state commit lock. If another deployment superseded this operation, the
+stale publisher fails instead of recording its old closure as current. This
+requires all concurrent mutation writers to honor the shared lock.

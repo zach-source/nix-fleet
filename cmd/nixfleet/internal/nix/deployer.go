@@ -279,7 +279,9 @@ func (d *Deployer) RefreshStateAfterRollback(ctx context.Context, client *ssh.Cl
 		return fmt.Errorf("no narHash for %s", storePath)
 	}
 
-	return state.NewManager().UpdateAfterApply(ctx, client, storePath, hash, gen, 0)
+	manager := state.NewManager()
+	manager.MutationLockTimeout = d.MutationLockTimeout
+	return manager.UpdateAfterApply(ctx, client, base, storePath, hash, gen, 0)
 }
 
 func (d *Deployer) rollbackNixOS(ctx context.Context, client state.Execer, generation int) error {
