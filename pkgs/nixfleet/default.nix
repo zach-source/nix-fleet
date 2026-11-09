@@ -4,6 +4,7 @@
   buildGoModule,
   go,
   installShellFiles,
+  nodejs,
   gitCommit ? "",
   gitTag ? "",
 }:
@@ -20,6 +21,7 @@ buildGoModule rec {
   vendorHash = "sha256-JB3QboVypcF0wMFtIP3JJTxbpSeX82F2tWy+n9avQpU=";
 
   nativeBuildInputs = [ installShellFiles ];
+  nativeCheckInputs = [ nodejs ];
 
   ldflags = [
     "-s"

@@ -219,6 +219,7 @@
             packages = with pkgs; [
               # Go toolchain (for CLI)
               go
+              nodejs # Dashboard security regression tests
               gopls
               golangci-lint
               delve
