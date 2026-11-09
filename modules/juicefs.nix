@@ -161,10 +161,15 @@ in
           : "''${CF_ACCESS_CLIENT_ID:?missing in juicefs-op-connect.env}"
           : "''${CF_ACCESS_CLIENT_SECRET:?missing in juicefs-op-connect.env}"
 
-          auth=(-sSfL \
-            -H "X-OP-Token: ''${OP_CONNECT_TOKEN}" \
-            -H "CF-Access-Client-Id: ''${CF_ACCESS_CLIENT_ID}" \
-            -H "CF-Access-Client-Secret: ''${CF_ACCESS_CLIENT_SECRET}")
+          # curl argv is public; keep authentication headers in a private file.
+          umask 077
+          HEADERS=$(mktemp "$OUT_DIR/headers.XXXXXX")
+          trap 'rm -f "$HEADERS"' EXIT
+          printf '%s\n' \
+            "X-OP-Token: ''${OP_CONNECT_TOKEN}" \
+            "CF-Access-Client-Id: ''${CF_ACCESS_CLIENT_ID}" \
+            "CF-Access-Client-Secret: ''${CF_ACCESS_CLIENT_SECRET}" > "$HEADERS"
+          auth=(-sSfL -H "@$HEADERS")
 
           # Resolve vault + item IDs.
           VAULT_ID=$(curl "''${auth[@]}" "$OP_HOST/v1/vaults" \
