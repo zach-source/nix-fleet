@@ -94,7 +94,7 @@ go fmt ./...
 
 ### Key Packages
 
-- **apply/**: Deployment pipeline with preflight, deploy, PKI, k0s reconciliation, health checks
+- **apply/**: Shared HostDeploy sequence with opt-in preflight and configured health gates; dormant Pipeline also contains PKI/k0s orchestration
 - **k0s/**: k0s cluster management - status, reconciliation, orphan cleanup
 - **pki/**: Fleet PKI with ECDSA P-256 - CA init, cert issuance, age-encrypted storage
 - **state/**: Host state tracking including `K0sState` for resource tracking
@@ -364,3 +364,23 @@ three default to zero (legacy unlimited behavior). Capacity rejects new jobs
 with HTTP 503 before creating a record; retained records older than the limit
 become unavailable to job polling clients. Timeout marks accepted work failed.
 These bounds apply to async API jobs, not synchronous routes or scheduler work.
+
+### Deployment verification
+
+`--verify-deploy` opts CLI apply, nix update --apply, and API server jobs into
+real preflight gates (SSH, sudo, disk and platform Nix checks) before activation,
+and configured health checks after recording the actual deployment. Failures
+produce failed outcomes. `--skip-preflight` and `--skip-health` still apply to
+the apply command. Defaults retain legacy behavior.
+
+Each newly compiled Ubuntu/DGX, NixOS and Darwin closure provides
+`bin/nixfleet-verify-health`, generated from nixfleet.healthChecks. Checks run as
+root, once per deployment, with the declared timeout in seconds; command, HTTP
+expected status, and TCP checks share this executable. The interval option is
+not a deployment retry setting. Old closures without this executable fail
+verification explicitly. There is no automatic rollback in this contract.
+
+The dormant internal/apply Pipeline is not used by production commands. PKI
+remains an explicit CLI --with-pki operation; k0s reconciliation is separate.
+Pull verification is configured separately; node status health declarations
+alone are not evidence that checks executed.

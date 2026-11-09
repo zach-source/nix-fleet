@@ -267,6 +267,8 @@ in
 
   state-commit = import ./state-commit.nix { inherit lib pkgs mkNixFleetConfiguration; };
 
+  deployment-health = import ./deployment-health.nix { inherit lib pkgs; };
+
   nixos-translation = import ./nixos-translation.nix { inherit lib pkgs mkNixOSFleetConfiguration; };
   node-status-security = import ./node-status-security.nix {
     inherit pkgs mkNixFleetConfiguration;

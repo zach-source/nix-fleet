@@ -48,6 +48,7 @@ type Config struct {
 	APIToken string
 	// FailOnError reports partial fleet applies as failed; false preserves legacy status.
 	FailOnError         bool
+	VerifyDeploy        bool
 	ManageNixOSProfile  bool
 	MutationLockTimeout time.Duration
 }
@@ -984,7 +985,7 @@ func (s *Server) applyOne(ctx context.Context, host *inventory.Host) (*applyOutc
 	}
 	defer lock.Unlock()
 
-	deployed, err := s.hostDeploy().Run(ctx, host, apply.DeployOptions{})
+	deployed, err := s.hostDeploy().Run(ctx, host, apply.DeployOptions{Verify: s.config.VerifyDeploy})
 	if err != nil {
 		// *apply.PhaseError already reads "build failed: ...".
 		return nil, err
@@ -1135,7 +1136,7 @@ func (s *Server) runApplyAllJob(ctx context.Context, job *Job, hosts []*inventor
 	}
 
 	status, message := "completed", ""
-	if s.config.FailOnError && failed > 0 {
+	if (s.config.FailOnError || s.config.VerifyDeploy) && failed > 0 {
 		status, message = "failed", fmt.Sprintf("%d host(s) failed", failed)
 	}
 	s.updateJob(job, status, map[string]any{

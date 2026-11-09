@@ -457,9 +457,9 @@ let
 
     # Run health checks if available
     SYSTEM_PATH=$(nix-env --profile /nix/var/nix/profiles/nixfleet/system -q --out-path 2>/dev/null | awk '{print $2}' || echo "")
-    if [ -n "$SYSTEM_PATH" ] && [ -x "$SYSTEM_PATH/bin/nixfleet-health-check" ]; then
+    if [ -n "$SYSTEM_PATH" ] && [ -x "$SYSTEM_PATH/bin/nixfleet-verify-health" ]; then
         log "Running health checks..."
-        if ! "$SYSTEM_PATH/bin/nixfleet-health-check" 2>&1 | tee -a "$LOG_FILE"; then
+        if ! "$SYSTEM_PATH/bin/nixfleet-verify-health" 2>&1 | tee -a "$LOG_FILE"; then
             log "WARNING: Health checks failed"
             notify "warning" "Health checks failed"
         fi
@@ -1248,6 +1248,12 @@ in
         }
         ''
           mkdir -p $out/bin
+          ln -s ${
+            import ../../lib/health-check.nix {
+              inherit lib pkgs;
+              checks = cfg.healthChecks;
+            }
+          } $out/bin/nixfleet-verify-health
 
           # Link the packages profile
           ln -s ${packagesProfile} $out/packages

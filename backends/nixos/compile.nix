@@ -25,7 +25,16 @@ in
   };
 
   config = mkIf isNixOS {
-    system.systemBuilderCommands = optionalString cfg.state.trackManagedFiles ''
+    system.systemBuilderCommands = ''
+      mkdir -p $out/bin
+      ln -s ${
+        import ../../lib/health-check.nix {
+          inherit lib pkgs;
+          checks = cfg.healthChecks;
+        }
+      } $out/bin/nixfleet-verify-health
+    ''
+    + optionalString cfg.state.trackManagedFiles ''
       cp ${
         import ../../lib/managed-files.nix {
           inherit lib pkgs;
