@@ -82,6 +82,7 @@ func goModVersion(t *testing.T) string {
 var (
 	devenvGoRe      = regexp.MustCompile(`(?m)^\s*goVersion\s*=\s*"([0-9]+\.[0-9]+)";`)
 	devenvLintRe    = regexp.MustCompile(`(?m)^\s*golangciLintVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)";`)
+	goFloorRe       = regexp.MustCompile(`versionAtLeast\s+(?:pkgs\.)?go\.version\s+"([0-9.]+)"`)
 	ciLintVersionRe = regexp.MustCompile(`(?m)^\s*version:\s*v([0-9]+\.[0-9]+\.[0-9]+)\s*$`)
 )
 
@@ -109,6 +110,10 @@ func TestDevenvPinsMatchCI(t *testing.T) {
 	devenv := read("devenv.nix")
 	if got, want := one(devenvGoRe, devenv, "devenv.nix goVersion"), goModVersion(t); got != want {
 		t.Errorf("devenv.nix goVersion = %s, go.mod = %s", got, want)
+	}
+	floorDevenv := one(goFloorRe, devenv, "devenv.nix versionAtLeast floor")
+	if floorPkg := one(goFloorRe, read("pkgs/nixfleet/default.nix"), "pkgs/nixfleet/default.nix versionAtLeast floor"); floorDevenv != floorPkg {
+		t.Errorf("Go floor: devenv.nix = %s, pkgs/nixfleet/default.nix = %s", floorDevenv, floorPkg)
 	}
 	got := one(devenvLintRe, devenv, "devenv.nix golangciLintVersion")
 	if want := one(ciLintVersionRe, read(".github/workflows/ci.yml"), "ci.yml version"); got != want {
