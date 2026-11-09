@@ -16,9 +16,8 @@ func TestUpgradeRecordsOnlySuccess(t *testing.T) {
 	for _, exitCode := range []int{0, 7} {
 		client := ssh.NewMockClient()
 		client.DefaultResult = &ssh.ExecResult{ExitCode: exitCode}
-		client.RegisterCommandOutput("sudo cat "+state.StatePath, `{"current_generation":42,"last_os_update":"2025-01-01T00:00:00Z"}`, 0)
-		client.RegisterCommandOutput("sudo mkdir", "", 0)
-		client.RegisterCommandOutput("sudo tee", "", 0)
+		client.RegisterCommandOutput("sudo if [ -e "+state.StatePath, `{"current_generation":42,"last_os_update":"2025-01-01T00:00:00Z"}`, 0)
+		client.RegisterCommandOutput("sudo set -eu\nmkdir -p "+state.StateDir, "", 0)
 		s := &Server{aptMgr: apt.NewManager(), stateMgr: state.NewManager()}
 		result, err := s.upgradeApt(context.Background(), client, true)
 		if err != nil {
@@ -29,11 +28,11 @@ func TestUpgradeRecordsOnlySuccess(t *testing.T) {
 		}
 		writes := 0
 		for _, cmd := range client.ExecLog {
-			if strings.HasPrefix(cmd, "sudo tee") {
+			if strings.Contains(cmd, "<< 'NIXFLEET_STATE'") {
 				writes++
 				var recorded state.HostState
-				body := strings.SplitN(cmd, "\n", 2)[1]
-				if err := json.Unmarshal([]byte(strings.TrimSuffix(body, "\nEOF")), &recorded); err != nil {
+				body := strings.SplitN(strings.SplitN(cmd, "<< 'NIXFLEET_STATE'\n", 2)[1], "\nNIXFLEET_STATE", 2)[0]
+				if err := json.Unmarshal([]byte(body), &recorded); err != nil {
 					t.Fatal(err)
 				}
 				if recorded.CurrentGeneration != 42 || !recorded.LastOSUpdate.Equal(result.EndTime) || recorded.LastOSUpdate.Before(time.Now().Add(-time.Minute)) {
