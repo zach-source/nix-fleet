@@ -393,6 +393,8 @@ let
 
         # Activate the configuration
         log "Activating configuration..."
+        (
+        ${mutationLock}
         if ! "$SYSTEM_PATH/activate" 2>&1 | tee -a "$LOG_FILE"; then
             log "ERROR: Activation failed"
             notify "failed" "Activation failed for commit $NEW_COMMIT"
@@ -402,6 +404,7 @@ let
         # Update profile
         nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
 
+        )
         ${optionalString pullCfg.retryFailedApply ''
           printf '%s\n' "$NEW_COMMIT" > "$APPLIED_FILE.tmp"
           mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
@@ -590,8 +593,14 @@ let
   manifestHash = builtins.hashString "sha256" manifestInputs;
 
   # Main activation script
+  mutationLock = optionalString (cfg.mutationLockTimeout > 0) ''
+    ${builtins.readFile ../../cmd/nixfleet/internal/hostlock/lock.sh}
+    nixfleet_lock_enter /var/lib/nixfleet/mutation.lock ${toString cfg.mutationLockTimeout}
+  '';
+
   activateScript = pkgs.writeShellScript "nixfleet-activate" ''
     set -euo pipefail
+    ${mutationLock}
 
     # Ensure Nix is in PATH
     if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then

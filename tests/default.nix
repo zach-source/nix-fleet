@@ -226,6 +226,7 @@ in
               base = "ubuntu";
               addr = "127.0.0.1";
             };
+            nixfleet.mutationLockTimeout = 1;
             nixfleet.pullMode = {
               enable = true;
               repoURL = "unused";

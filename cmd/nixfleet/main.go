@@ -71,6 +71,7 @@ func main() {
 }
 
 var manageNixOSProfile bool
+var mutationLockTimeout time.Duration
 
 func rootCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -95,6 +96,7 @@ It provides Ansible-like UX for:
 	cmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 
+	cmd.PersistentFlags().DurationVar(&mutationLockTimeout, "mutation-lock-timeout", 0, "Opt into a shared host mutation lock with this bounded wait (for example 2m)")
 	cmd.PersistentFlags().BoolVar(&manageNixOSProfile, "manage-nixos-profile", false, "Create and select native NixOS generations during apply and rollback")
 
 	// Add subcommands
@@ -329,6 +331,7 @@ func applyCmd() *cobra.Command {
 
 			deployer := nix.NewDeployer(evaluator)
 			deployer.ManageNixOSProfile = manageNixOSProfile
+			deployer.MutationLockTimeout = mutationLockTimeout
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
 
@@ -470,6 +473,7 @@ func rollbackCmd() *cobra.Command {
 
 			deployer := nix.NewDeployer(evaluator)
 			deployer.ManageNixOSProfile = manageNixOSProfile
+			deployer.MutationLockTimeout = mutationLockTimeout
 
 			failedCount := 0
 			for _, host := range hosts {
@@ -545,6 +549,7 @@ Use --all to show extended status including update counts and drift.`,
 
 			deployer := nix.NewDeployer(evaluator)
 			deployer.ManageNixOSProfile = manageNixOSProfile
+			deployer.MutationLockTimeout = mutationLockTimeout
 			stateMgr := state.NewManager()
 
 			if showAll {
@@ -1455,6 +1460,7 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 			// a package-set bump only needs the closure rolled out.
 			deployer := nix.NewDeployer(evaluator)
 			deployer.ManageNixOSProfile = manageNixOSProfile
+			deployer.MutationLockTimeout = mutationLockTimeout
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
 			stateMgr := state.NewManager()
@@ -2857,6 +2863,7 @@ API Endpoints:
 				TLSKeyFile:          tlsKey,
 				FailOnError:         failOnError,
 				ManageNixOSProfile:  manageNixOSProfile,
+				MutationLockTimeout: mutationLockTimeout,
 			}
 
 			srv, err := server.New(config)
@@ -2989,17 +2996,18 @@ With home-manager:
 
 			defaults := pullmode.DefaultConfig()
 			config := pullmode.Config{
-				RepoURL:           repoURL,
-				Branch:            branch,
-				SSHKeyPath:        sshKeyPath,
-				AgeKeyPath:        ageKeyPath,
-				Interval:          interval,
-				ApplyOnBoot:       applyOnBoot,
-				RetryFailedApply:  retryFailedApply,
-				RepoPath:          defaults.RepoPath,
-				WebhookURL:        webhookURL,
-				WebhookSecret:     webhookSecret,
-				WebhookSecretFile: webhookSecretFile,
+				RepoURL:             repoURL,
+				Branch:              branch,
+				SSHKeyPath:          sshKeyPath,
+				AgeKeyPath:          ageKeyPath,
+				Interval:            interval,
+				ApplyOnBoot:         applyOnBoot,
+				RetryFailedApply:    retryFailedApply,
+				MutationLockTimeout: mutationLockTimeout,
+				RepoPath:            defaults.RepoPath,
+				WebhookURL:          webhookURL,
+				WebhookSecret:       webhookSecret,
+				WebhookSecretFile:   webhookSecretFile,
 			}
 
 			if config.Branch == "" {

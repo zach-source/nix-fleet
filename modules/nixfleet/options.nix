@@ -491,6 +491,12 @@ in
     };
 
     # Pull Mode - GitOps-style self-updating deployments
+    mutationLockTimeout = mkOption {
+      type = types.ints.unsigned;
+      default = 0;
+      description = "Seconds to wait for the shared activation/profile lock. Zero disables it. All writers must opt in; stale locks require operator recovery.";
+    };
+
     pullMode = {
       enable = mkEnableOption "pull-based deployment mode";
 
