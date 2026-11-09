@@ -507,6 +507,12 @@ in
         description = "Pull interval (systemd timer format)";
       };
 
+      retryFailedApply = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Track successful activation commits so initial and failed deployments are retried. Opt in to change legacy checkout-based skipping.";
+      };
+
       applyOnBoot = mkOption {
         type = types.bool;
         default = true;

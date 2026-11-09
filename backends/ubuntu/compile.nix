@@ -281,10 +281,7 @@ let
         ''}
     }
 
-    cleanup() {
-        rm -f "$LOCK_FILE"
-    }
-    trap cleanup EXIT
+    # Keep the lock inode stable; closing fd 200 releases flock.
 
     # Acquire lock
     exec 200>"$LOCK_FILE"
@@ -308,7 +305,12 @@ let
     git fetch origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
     NEW_COMMIT=$(git rev-parse "origin/$BRANCH")
 
-    if [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
+    APPLIED_COMMIT="$OLD_COMMIT"
+    ${optionalString pullCfg.retryFailedApply ''
+      APPLIED_FILE="$REPO_PATH/.git/nixfleet-last-applied-$HOST_NAME"
+      APPLIED_COMMIT=$(cat "$APPLIED_FILE" 2>/dev/null || true)
+    ''}
+    if [ "$APPLIED_COMMIT" != "$NEW_COMMIT" ]; then
         log "NixFleet: new commit available: $NEW_COMMIT"
         NIXFLEET_CHANGED=true
     fi
@@ -390,6 +392,10 @@ let
         # Update profile
         nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
 
+        ${optionalString pullCfg.retryFailedApply ''
+          printf '%s\n' "$NEW_COMMIT" > "$APPLIED_FILE.tmp"
+          mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
+        ''}
         log "Successfully applied NixFleet commit $NEW_COMMIT"
     fi
 

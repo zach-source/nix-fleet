@@ -2899,6 +2899,7 @@ func pullModeInstallCmd() *cobra.Command {
 	var sshKeyPath string
 	var ageKeyPath string
 	var applyOnBoot bool
+	var retryFailedApply bool
 	var webhookURL string
 	var webhookSecret string
 
@@ -2946,15 +2947,16 @@ With home-manager:
 
 			defaults := pullmode.DefaultConfig()
 			config := pullmode.Config{
-				RepoURL:       repoURL,
-				Branch:        branch,
-				SSHKeyPath:    sshKeyPath,
-				AgeKeyPath:    ageKeyPath,
-				Interval:      interval,
-				ApplyOnBoot:   applyOnBoot,
-				RepoPath:      defaults.RepoPath,
-				WebhookURL:    webhookURL,
-				WebhookSecret: webhookSecret,
+				RepoURL:          repoURL,
+				Branch:           branch,
+				SSHKeyPath:       sshKeyPath,
+				AgeKeyPath:       ageKeyPath,
+				Interval:         interval,
+				ApplyOnBoot:      applyOnBoot,
+				RetryFailedApply: retryFailedApply,
+				RepoPath:         defaults.RepoPath,
+				WebhookURL:       webhookURL,
+				WebhookSecret:    webhookSecret,
 			}
 
 			if config.Branch == "" {
@@ -3044,6 +3046,7 @@ With home-manager:
 	cmd.Flags().StringVar(&interval, "interval", "15min", "Pull interval (systemd timer format)")
 	cmd.Flags().StringVar(&sshKeyPath, "ssh-key", "/run/nixfleet-secrets/github-deploy-key", "Path to SSH key for Git access")
 	cmd.Flags().StringVar(&ageKeyPath, "age-key", "/root/.config/age/key.txt", "Path to age key for secrets")
+	cmd.Flags().BoolVar(&retryFailedApply, "retry-failed-apply", false, "Track successful commits and retry initial or failed activations")
 	cmd.Flags().BoolVar(&applyOnBoot, "apply-on-boot", true, "Apply configuration on boot")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for status notifications")
 	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Webhook secret for signing")

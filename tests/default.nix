@@ -199,6 +199,31 @@ in
     inherit pkgs lib mkNixFleetConfiguration;
   };
 
+  pull-retry-and-lock =
+    let
+      host = mkNixFleetConfiguration {
+        system = pkgs.stdenv.hostPlatform.system;
+        modules = [
+          {
+            nixfleet.host = {
+              name = "fixture";
+              base = "ubuntu";
+              addr = "127.0.0.1";
+            };
+            nixfleet.pullMode = {
+              enable = true;
+              repoURL = "unused";
+              retryFailedApply = true;
+            };
+          }
+        ];
+      };
+    in
+    pkgs.runCommand "check-pull-retry-and-lock" { nativeBuildInputs = [ pkgs.bash ]; } ''
+      bash ${./pull-mode.sh} ${host.config.nixfleet.ubuntu.system.pullMode}/nixfleet-pull
+      touch $out
+    '';
+
   # Portable: needs no nix-darwin, so it runs in CI (linux) too.
   darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {
     # `darwin` was missing from the enum, so hosts/mac-1.nix could not be
