@@ -21,7 +21,7 @@ func TestPullRetryAndLockLifetime(t *testing.T) {
 		if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command("bash", "../../../../tests/pull-mode.sh", path, mode)
+		cmd := exec.Command("bash", "testdata/pull-mode.sh", path, mode)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("pull regression: %v\n%s", err, out)
 		}
