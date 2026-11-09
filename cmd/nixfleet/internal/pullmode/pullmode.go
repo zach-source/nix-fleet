@@ -35,6 +35,9 @@ type Config struct {
 	// Whether to apply on boot
 	ApplyOnBoot bool
 
+	// RetryFailedApply tracks successful activation separately from the checkout.
+	RetryFailedApply bool
+
 	// Local path to clone repo to
 	RepoPath string
 
@@ -411,10 +414,7 @@ notify() {
     {{end}}
 }
 
-cleanup() {
-    rm -f "$LOCK_FILE"
-}
-trap cleanup EXIT
+# Keep the lock inode stable; closing fd 200 releases flock.
 
 # Acquire lock
 exec 200>"$LOCK_FILE"
@@ -438,7 +438,12 @@ log "NixFleet current commit: $OLD_COMMIT"
 git fetch origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"
 NEW_COMMIT=$(git rev-parse "origin/$BRANCH")
 
-if [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
+APPLIED_COMMIT="$OLD_COMMIT"
+{{if .RetryFailedApply}}
+APPLIED_FILE="$REPO_PATH/.git/nixfleet-last-applied-$HOST_NAME"
+APPLIED_COMMIT=$(cat "$APPLIED_FILE" 2>/dev/null || true)
+{{end}}
+if [ "$APPLIED_COMMIT" != "$NEW_COMMIT" ]; then
     log "NixFleet: new commit available: $NEW_COMMIT"
     NIXFLEET_CHANGED=true
 fi
@@ -501,6 +506,10 @@ if [ "$NIXFLEET_CHANGED" = "true" ]; then
     # Update profile
     nix-env --profile /nix/var/nix/profiles/nixfleet/system --set "$SYSTEM_PATH"
 
+    {{if .RetryFailedApply}}
+    printf '%s\n' "$NEW_COMMIT" > "$APPLIED_FILE.tmp"
+    mv "$APPLIED_FILE.tmp" "$APPLIED_FILE"
+    {{end}}
     log "Successfully applied NixFleet commit $NEW_COMMIT"
 fi
 
