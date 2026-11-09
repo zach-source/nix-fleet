@@ -35,7 +35,7 @@ func (f *baselineExec) ExecSudo(_ context.Context, cmd string) (*ssh.ExecResult,
 func TestApplyRefreshesImmutableBaseline(t *testing.T) {
 	for _, baseline := range []string{`{"/new":{"path":"/new","hash":"immutable","mode":"644","owner":"root","group":"root"}}`, `{}`, `null`} {
 		f := &baselineExec{baseline: baseline}
-		if err := NewManager().UpdateAfterApply(context.Background(), f, "/nix/store/fixture", "hash", 1, time.Second); err != nil {
+		if err := NewManager().UpdateAfterApply(context.Background(), f, "ubuntu", "/nix/store/fixture", "hash", 1, time.Second); err != nil {
 			t.Fatal(err)
 		}
 		var got HostState

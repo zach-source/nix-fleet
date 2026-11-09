@@ -56,7 +56,7 @@ func TestStateReadErrorsDoNotResetDeployment(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := NewManager().UpdateAfterApply(context.Background(), f, "/nix/store/new", "hash", 2, time.Second); err == nil {
+		if err := NewManager().UpdateAfterApply(context.Background(), f, "ubuntu", "/nix/store/new", "hash", 2, time.Second); err == nil {
 			t.Errorf("accepted invalid state %q", body)
 		}
 		got, err := os.ReadFile(path)
@@ -91,7 +91,7 @@ func TestStateWriteFailurePreservesOldDocument(t *testing.T) {
 func TestMissingStateBootstrapsAndWrites(t *testing.T) {
 	f := &localStateExec{dir: t.TempDir()}
 	m := NewManager()
-	if err := m.UpdateAfterApply(context.Background(), f, "/nix/store/new", "hash", 2, time.Second); err != nil {
+	if err := m.UpdateAfterApply(context.Background(), f, "ubuntu", "/nix/store/new", "hash", 2, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	got, err := m.ReadState(context.Background(), f)

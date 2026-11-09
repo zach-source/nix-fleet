@@ -135,6 +135,7 @@ func New(config Config) (*Server, error) {
 
 	s.deployer.ManageNixOSProfile = config.ManageNixOSProfile
 	s.deployer.MutationLockTimeout = config.MutationLockTimeout
+	s.stateMgr.MutationLockTimeout = config.MutationLockTimeout
 	s.setupRoutes()
 	s.scheduler = NewScheduler(s)
 

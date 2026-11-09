@@ -338,6 +338,7 @@ func applyCmd() *cobra.Command {
 			defer pool.Close()
 
 			stateMgr := state.NewManager()
+			stateMgr.MutationLockTimeout = mutationLockTimeout
 			executor := ssh.NewExecutor(pool, maxParallel)
 
 			fmt.Printf("Applying to %d host(s)...\n\n", len(hosts))
@@ -1467,6 +1468,7 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
 			stateMgr := state.NewManager()
+			stateMgr.MutationLockTimeout = mutationLockTimeout
 
 			fmt.Printf("\nDeploying updated closures to %d host(s)...\n\n", len(hosts))
 			success, failed := 0, 0
