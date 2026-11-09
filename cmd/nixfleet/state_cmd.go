@@ -111,9 +111,11 @@ state anyway. Run with --dry-run first to see the drift report.`,
 					continue
 				}
 
-				current, _ := stateMgr.ReadState(ctx, client)
-				if current == nil {
-					current = state.NewHostState(host.Name, host.Base)
+				current, err := stateMgr.ReadState(ctx, client)
+				if err != nil {
+					fmt.Printf("  ERROR reading state: %v\n\n", err)
+					skipped++
+					continue
 				}
 
 				status := "NEW DEPLOYMENT"
