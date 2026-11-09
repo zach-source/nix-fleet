@@ -72,7 +72,7 @@ func TestRuntimeWebhookNotifyFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := strings.Index(script, "notify() {")
-	end := strings.Index(script[start:], "\ncleanup()") + start
+	end := strings.Index(script[start:], "\n}\n") + start + len("\n}\n")
 	// Run only notify with mocked commands; never execute the pull/deploy body.
 	snippet := "set -euo pipefail\nHOST_NAME=test\nWEBHOOK_URL=https://example.invalid/hook\n" +
 		"nixfleet() { return 7; }\ncurl() { echo unexpected-curl >&2; }\n" + script[start:end] + "\nnotify apply fixture\n"

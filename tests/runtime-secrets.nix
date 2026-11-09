@@ -45,7 +45,21 @@ let
     )
   );
   rejects = extra: lib.any (a: !a.assertion) (mkHost extra).config.assertions;
+  acceptsWebhook =
+    webhook:
+    (builtins.tryEval (
+      builtins.deepSeq
+        (mkHost { nixfleet.pullMode.webhook = webhook; }).config.nixfleet.pullMode.webhook.secretFile
+        true
+    )).success;
   checks = {
+    "webhook rejects conflicting inline key" =
+      !(acceptsWebhook {
+        secret = "fixture";
+        secretFile = "/run/private/key";
+      });
+    "webhook rejects store-backed key" = !(acceptsWebhook { secretFile = "/nix/store/fixture-key"; });
+
     "Dolt migration rejects mixed inline and runtime secrets" = rejects {
       nixfleet.modules.dolt = {
         serverConfigFile = "/run/private/dolt.yaml";
