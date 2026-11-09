@@ -1157,12 +1157,21 @@ let
     # info. Overwriting dropped all of it on every activation, so `state adopt`'s
     # baseline and the k0s inventory survived only until the next apply.
     log "Updating state..."
-    mkdir -p "$NIXFLEET_STATE"
+    (
+    ${builtins.readFile ../../cmd/nixfleet/internal/hostlock/lock.sh}
+    nixfleet_lock_enter "$NIXFLEET_STATE/.state.lock" 5
+    (
     STATE_FILE="$NIXFLEET_STATE/state.json"
     JQ="${pkgs.jq}/bin/jq"
+    if [ -e "$STATE_FILE" ]; then
+      "$JQ" -e 'type == "object" and ((.state_version // 0) == 0 or .state_version == 1)' "$STATE_FILE" > /dev/null
+    fi
+    STATE_NEW=$(mktemp "$NIXFLEET_STATE/.state-new.XXXXXX")
+    STATE_MERGED=$(mktemp "$NIXFLEET_STATE/.state-merged.XXXXXX")
+    trap 'rm -f "$STATE_NEW" "$STATE_MERGED"' EXIT
     GENERATION=$(readlink "$SYSTEM_LINK" | grep -oE '[0-9]+' | tail -1 || echo 0)
     APPLY_TIME=$(date -Iseconds)
-    cat > "$STATE_FILE.new" << STATE_EOF
+    cat > "$STATE_NEW" << STATE_EOF
     {
       "hostname": "${cfg.host.name}",
       "base": "ubuntu",
@@ -1178,19 +1187,19 @@ let
     }
     STATE_EOF
     ${optionalString cfg.state.trackManagedFiles ''
-      "$JQ" --slurpfile files "${managedFiles}" '.managed_files = $files[0]' "$STATE_FILE.new" > "$STATE_FILE.baseline"
-      mv "$STATE_FILE.baseline" "$STATE_FILE.new"
+      "$JQ" --slurpfile files "${managedFiles}" '.managed_files = $files[0]' "$STATE_NEW" > "$STATE_MERGED"
+      mv "$STATE_MERGED" "$STATE_NEW"
     ''}
-    if [ -s "$STATE_FILE" ] && "$JQ" -e . "$STATE_FILE" > /dev/null 2>&1; then
-      if "$JQ" -s '.[0] + .[1]' "$STATE_FILE" "$STATE_FILE.new" > "$STATE_FILE.merged"; then
-        mv "$STATE_FILE.merged" "$STATE_FILE"
-      else
-        log "  WARNING: could not merge state, keeping previous state.json"
-      fi
-      rm -f "$STATE_FILE.new" "$STATE_FILE.merged"
+    if [ -e "$STATE_FILE" ]; then
+      cp -p "$STATE_FILE" "$STATE_MERGED"
+      "$JQ" -s '.[0] + .[1]' "$STATE_FILE" "$STATE_NEW" > "$STATE_MERGED"
     else
-      mv "$STATE_FILE.new" "$STATE_FILE"
+      cp "$STATE_NEW" "$STATE_MERGED"
+      chmod 0644 "$STATE_MERGED"
     fi
+    mv -f "$STATE_MERGED" "$STATE_FILE"
+    )
+    )
 
     # Record what this generation installed, for step 7b of the next
     # activation. Separate from state.json on purpose: that file has more than

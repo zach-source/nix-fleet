@@ -24,7 +24,7 @@ func TestStateFileWritersUseHostStateSchema(t *testing.T) {
 		file   string
 		marker string
 	}{
-		{"../../backends/ubuntu/compile.nix", `cat > "$STATE_FILE.new" << STATE_EOF`},
+		{"../../backends/ubuntu/compile.nix", `cat > "$STATE_NEW" << STATE_EOF`},
 		{"../../scripts/bootstrap-ubuntu.sh", `cat >/var/lib/nixfleet/state.json <<EOF`},
 		{"../../installer/nixfleet-late-commands.sh", `cat > /var/lib/nixfleet/state.json <<STATE`},
 	} {
