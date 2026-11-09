@@ -17,7 +17,7 @@ func TestUpgradeRecordsOnlySuccess(t *testing.T) {
 		client := ssh.NewMockClient()
 		client.DefaultResult = &ssh.ExecResult{ExitCode: exitCode}
 		client.RegisterCommandOutput("sudo if [ -e "+state.StatePath, `{"current_generation":42,"last_os_update":"2025-01-01T00:00:00Z"}`, 0)
-		client.RegisterCommandOutput("sudo set -eu\nmkdir -p "+state.StateDir, "", 0)
+		client.RegisterCommandOutput("sudo (", "", 0)
 		s := &Server{aptMgr: apt.NewManager(), stateMgr: state.NewManager()}
 		result, err := s.upgradeApt(context.Background(), client, true)
 		if err != nil {

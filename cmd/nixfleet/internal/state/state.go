@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/nixfleet/nixfleet/internal/hostlock"
+	"reflect"
 	"strings"
 	"time"
 
@@ -35,6 +37,7 @@ type OSInfo struct {
 
 // HostState represents the current state of a managed host
 type HostState struct {
+	original []byte
 	// Identity
 	Hostname string `json:"hostname"`
 	Base     string `json:"base"` // ubuntu, nixos, darwin
@@ -218,14 +221,40 @@ func (m *Manager) ReadState(ctx context.Context, client Execer) (*HostState, err
 		state.StateVersion = 1
 	}
 
+	state.original = []byte(result.Stdout)
 	return state, nil
 }
 
 // WriteState writes state to a host
 func (m *Manager) WriteState(ctx context.Context, client Execer, state *HostState) error {
+	if state.original == nil {
+		current, err := m.ReadState(ctx, client)
+		if err != nil {
+			return err
+		}
+		state.original = current.original
+	}
 	state.UpdatedAt = time.Now()
-
-	data, err := json.MarshalIndent(state, "", "  ")
+	// Preserve fields added by newer compatible writers, including omitted known fields.
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(state.original, &fields); err != nil {
+		return err
+	}
+	schema := reflect.TypeOf(*state)
+	for i := 0; i < schema.NumField(); i++ {
+		field := schema.Field(i)
+		if field.PkgPath == "" {
+			delete(fields, strings.Split(field.Tag.Get("json"), ",")[0])
+		}
+	}
+	known, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(known, &fields); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
@@ -233,21 +262,28 @@ func (m *Manager) WriteState(ctx context.Context, client Execer, state *HostStat
 	// Same-directory rename keeps the previous document intact on write failure.
 	writeCmd := fmt.Sprintf(`set -eu
 mkdir -p %s
+if [ -e %s ]; then current=$(cat %s); else current='{}'; fi
+if [ "$current" != %s ]; then
+ echo 'state changed since it was read; retry from a fresh read' >&2
+ exit 75
+fi
 tmp=$(mktemp %s/.state.XXXXXX)
 trap 'rm -f "$tmp"' EXIT
 if [ -f %s ]; then cp -p %s "$tmp"; else chmod 0644 "$tmp"; fi
 cat > "$tmp" << 'NIXFLEET_STATE'
 %s
 NIXFLEET_STATE
-mv -f "$tmp" %s`, StateDir, StateDir, StatePath, StatePath, data, StatePath)
+mv -f "$tmp" %s`, StateDir, StatePath, StatePath, ssh.ShellQuote(strings.TrimRight(string(state.original), "\n")), StateDir, StatePath, StatePath, data, StatePath)
+	writeCmd = hostlock.Wrap("(\n"+writeCmd+"\n)", StateDir+"/.state.lock", 5*time.Second)
 
 	result, err := client.ExecSudo(ctx, writeCmd)
 	if err != nil {
 		return fmt.Errorf("writing state: %w", err)
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("writing state failed: %s", result.Stderr)
+	if result == nil || result.ExitCode != 0 {
+		return fmt.Errorf("writing state failed (conflict, lock timeout, or remote write failure)")
 	}
+	state.original = data
 
 	return nil
 }
