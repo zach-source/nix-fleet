@@ -417,6 +417,12 @@ in
     };
 
     # Health checks
+    state.trackManagedFiles = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Record immutable managed-file baselines after apply and rollback on Ubuntu/DGX, NixOS and Darwin. Changes drift monitoring; opt in per host.";
+    };
+
     healthChecks = mkOption {
       type = types.attrsOf healthCheckType;
       default = { };

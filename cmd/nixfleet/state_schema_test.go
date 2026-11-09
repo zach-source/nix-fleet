@@ -101,7 +101,7 @@ func TestActivationScriptMergesState(t *testing.T) {
 		t.Fatalf("reading compile.nix: %v", err)
 	}
 	body := string(src)
-	if !strings.Contains(body, `"$JQ" -s '.[0] * .[1]'`) {
+	if !strings.Contains(body, `"$JQ" -s '.[0] + .[1]'`) {
 		t.Error("activation script no longer merges state.json into the existing state")
 	}
 	if strings.Contains(body, `cat > "$NIXFLEET_STATE/state.json"`) {
