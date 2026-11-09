@@ -1154,6 +1154,10 @@ let
       "base": "ubuntu",
       "current_generation": $GENERATION,
       "manifest_hash": "${manifestHash}",
+      "deployment_id": "$SYSTEM_PATH",
+      "deployment_generation": $GENERATION,
+      "deployment_manifest_hash": "${manifestHash}",
+      "store_path": "$SYSTEM_PATH",
       "last_apply": "$APPLY_TIME",
       "state_version": 1,
       "updated_at": "$APPLY_TIME"

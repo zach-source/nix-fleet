@@ -197,6 +197,15 @@ let
 
 in
 {
+  deployment-identity = mkCheck "deployment-identity" {
+    "activation records authoritative closure identity" = hasSubstring (ubuntuActivation
+      [ ]
+    ) ''"deployment_id": "$SYSTEM_PATH"'';
+    "activation refreshes store path" = hasSubstring (ubuntuActivation
+      [ ]
+    ) ''"store_path": "$SYSTEM_PATH"'';
+  };
+
   nixos-translation = import ./nixos-translation.nix { inherit lib pkgs mkNixOSFleetConfiguration; };
   node-status-security = import ./node-status-security.nix {
     inherit pkgs mkNixFleetConfiguration;

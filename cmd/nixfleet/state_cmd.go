@@ -119,9 +119,9 @@ state anyway. Run with --dry-run first to see the drift report.`,
 				}
 
 				status := "NEW DEPLOYMENT"
-				switch current.ManifestHash {
-				case "":
-				case closure.ManifestHash:
+				switch {
+				case current.DeploymentID == "" && current.ManifestHash == "":
+				case current.MatchesDeployment(closure.StorePath, closure.ManifestHash):
 					status = "already recorded (matching hash)"
 				default:
 					status = "recorded at a different hash"
@@ -158,12 +158,15 @@ state anyway. Run with --dry-run first to see the drift report.`,
 				current.Hostname = host.Name
 				current.Base = host.Base
 				current.StorePath = closure.StorePath
+				current.DeploymentID = closure.StorePath
+				current.DeploymentManifestHash = closure.ManifestHash
 				current.ManifestHash = closure.ManifestHash
 				current.ManagedFiles = expected
 				current.LastApply = time.Now()
 				if current.CurrentGeneration == 0 {
 					current.CurrentGeneration = 1
 				}
+				current.DeploymentGeneration = current.CurrentGeneration
 				if err := stateMgr.WriteState(ctx, client, current); err != nil {
 					fmt.Printf("  ERROR writing state: %v\n\n", err)
 					skipped++
