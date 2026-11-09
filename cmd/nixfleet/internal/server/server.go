@@ -40,6 +40,8 @@ type Config struct {
 
 	// Auth settings
 	APIToken string
+	// FailOnError reports partial fleet applies as failed; false preserves legacy status.
+	FailOnError bool
 }
 
 // Server is the NixFleet HTTP API server
@@ -1006,11 +1008,15 @@ func (s *Server) runApplyAllJob(ctx context.Context, job *Job, hosts []*inventor
 		success++
 	}
 
-	s.updateJob(job, "completed", map[string]any{
+	status, message := "completed", ""
+	if s.config.FailOnError && failed > 0 {
+		status, message = "failed", fmt.Sprintf("%d host(s) failed", failed)
+	}
+	s.updateJob(job, status, map[string]any{
 		"success": success,
 		"failed":  failed,
 		"results": results,
-	}, "")
+	}, message)
 }
 
 // Webhook support
