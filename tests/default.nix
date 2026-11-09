@@ -195,6 +195,10 @@ let
 
 in
 {
+  juicefs-private-headers = import ./juicefs-headers.nix {
+    inherit pkgs lib mkNixFleetConfiguration;
+  };
+
   # Portable: needs no nix-darwin, so it runs in CI (linux) too.
   darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {
     # `darwin` was missing from the enum, so hosts/mac-1.nix could not be
