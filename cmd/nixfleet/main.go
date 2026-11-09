@@ -2899,11 +2899,31 @@ The host will periodically:
   4. Report status via webhooks (optional)`,
 	}
 
+	cmd.AddCommand(pullModeWebhookSignatureCmd())
 	cmd.AddCommand(pullModeInstallCmd())
 	cmd.AddCommand(pullModeUninstallCmd())
 	cmd.AddCommand(pullModeStatusCmd())
 	cmd.AddCommand(pullModeTriggerCmd())
 
+	return cmd
+}
+
+func pullModeWebhookSignatureCmd() *cobra.Command {
+	var secretFile string
+	cmd := &cobra.Command{
+		Use: "webhook-signature", Short: "Sign a webhook payload from stdin with a runtime key file", Hidden: true,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			signature, err := pullmode.WebhookSignature(secretFile, cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), signature)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&secretFile, "secret-file", "", "Runtime key file (bytes used verbatim)")
+	_ = cmd.MarkFlagRequired("secret-file")
 	return cmd
 }
 
@@ -2917,6 +2937,7 @@ func pullModeInstallCmd() *cobra.Command {
 	var retryFailedApply bool
 	var webhookURL string
 	var webhookSecret string
+	var webhookSecretFile string
 
 	// Home-manager options
 	var hmUser string
@@ -2962,16 +2983,17 @@ With home-manager:
 
 			defaults := pullmode.DefaultConfig()
 			config := pullmode.Config{
-				RepoURL:          repoURL,
-				Branch:           branch,
-				SSHKeyPath:       sshKeyPath,
-				AgeKeyPath:       ageKeyPath,
-				Interval:         interval,
-				ApplyOnBoot:      applyOnBoot,
-				RetryFailedApply: retryFailedApply,
-				RepoPath:         defaults.RepoPath,
-				WebhookURL:       webhookURL,
-				WebhookSecret:    webhookSecret,
+				RepoURL:           repoURL,
+				Branch:            branch,
+				SSHKeyPath:        sshKeyPath,
+				AgeKeyPath:        ageKeyPath,
+				Interval:          interval,
+				ApplyOnBoot:       applyOnBoot,
+				RetryFailedApply:  retryFailedApply,
+				RepoPath:          defaults.RepoPath,
+				WebhookURL:        webhookURL,
+				WebhookSecret:     webhookSecret,
+				WebhookSecretFile: webhookSecretFile,
 			}
 
 			if config.Branch == "" {
@@ -3064,7 +3086,9 @@ With home-manager:
 	cmd.Flags().BoolVar(&retryFailedApply, "retry-failed-apply", false, "Track successful commits and retry initial or failed activations")
 	cmd.Flags().BoolVar(&applyOnBoot, "apply-on-boot", true, "Apply configuration on boot")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Webhook URL for status notifications")
-	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Webhook secret for signing")
+	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "", "Legacy inline webhook secret (public in installed script)")
+	cmd.Flags().StringVar(&webhookSecretFile, "webhook-secret-file", "", "Absolute path to a root-only key on each target host (requires updated nixfleet signer)")
+	cmd.MarkFlagsMutuallyExclusive("webhook-secret", "webhook-secret-file")
 
 	// Home-manager flags
 	cmd.Flags().StringVar(&hmUser, "hm-user", "", "Username to run home-manager as (enables home-manager sync)")

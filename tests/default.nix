@@ -251,6 +251,9 @@ in
     }
   );
 
+  dolt-remote-auth = import ./dolt-grants.nix { inherit pkgs lib mkNixFleetConfiguration; };
+  runtime-secrets = import ./runtime-secrets.nix { inherit pkgs lib mkNixFleetConfiguration; };
+
   # Portable: needs no nix-darwin, so it runs in CI (linux) too.
   darwin-base-is-declarable = mkCheck "darwin-base-is-declarable" {
     # `darwin` was missing from the enum, so hosts/mac-1.nix could not be

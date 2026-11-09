@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/nixfleet/nixfleet/internal/ssh"
@@ -46,6 +48,9 @@ type Config struct {
 
 	// Webhook secret for signing (optional)
 	WebhookSecret string
+
+	// Absolute path to a root-only webhook key on the destination host.
+	WebhookSecretFile string
 
 	// Home-manager integration (optional)
 	HomeManager *HomeManagerConfig
@@ -98,6 +103,10 @@ func NewInstaller() *Installer {
 
 // Install sets up pull mode on a host
 func (i *Installer) Install(ctx context.Context, client *ssh.Client, config Config) error {
+	if err := validateWebhookConfig(config); err != nil {
+		return err
+	}
+
 	// Create directories
 	if err := i.createDirectories(ctx, client, config); err != nil {
 		return fmt.Errorf("creating directories: %w", err)
@@ -400,8 +409,13 @@ notify() {
     local message="$2"
     {{if .WebhookURL}}
     local payload="{\"host\":\"$HOST_NAME\",\"status\":\"$status\",\"message\":\"$message\",\"timestamp\":\"$(date -Iseconds)\"}"
-    {{if .WebhookSecret}}
+    {{if or .WebhookSecret .WebhookSecretFile}}
+    {{if .WebhookSecretFile}}
+    local signature
+    signature=$(printf '%s' "$payload" | nixfleet pull-mode webhook-signature --secret-file {{shellQuote .WebhookSecretFile}}) || return 1
+    {{else}}
     local signature=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+    {{end}}
     curl -s -X POST "$WEBHOOK_URL" \
         -H "Content-Type: application/json" \
         -H "X-NixFleet-Signature: sha256=$signature" \
@@ -596,8 +610,24 @@ fi
 log "Pull operation completed successfully"
 `
 
+func validateWebhookConfig(config Config) error {
+	if config.WebhookSecretFile == "" {
+		return nil
+	}
+	if config.WebhookSecret != "" {
+		return fmt.Errorf("webhook secret and secret file are mutually exclusive")
+	}
+	if !filepath.IsAbs(config.WebhookSecretFile) || strings.HasPrefix(filepath.Clean(config.WebhookSecretFile), "/nix/store/") {
+		return fmt.Errorf("webhook secret file must be an absolute runtime path outside the Nix store")
+	}
+	return nil
+}
+
 func renderPullScript(config Config) (string, error) {
-	tmpl, err := template.New("pullscript").Parse(pullScriptTemplate)
+	if err := validateWebhookConfig(config); err != nil {
+		return "", err
+	}
+	tmpl, err := template.New("pullscript").Funcs(template.FuncMap{"shellQuote": ssh.ShellQuote}).Parse(pullScriptTemplate)
 	if err != nil {
 		return "", err
 	}
