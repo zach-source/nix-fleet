@@ -3,6 +3,40 @@
 const API_BASE = "/api";
 let refreshInterval = null;
 
+// Escape data in HTML text and quoted attributes; never interpolate it into code.
+function escapeHTML(value) {
+  return String(value).replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char],
+  );
+}
+
+// Keep host names out of JavaScript event-handler source.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const hostName = button.closest("[data-host]").dataset.host;
+  const actions = {
+    apply: triggerApply,
+    drift: checkDrift,
+    pull: triggerPull,
+    details: viewDetails,
+    updates: checkAptUpdates,
+    upgrade: (name) => aptUpgrade(name, false),
+    security: (name) => aptUpgrade(name, true),
+    autoremove: aptAutoremove,
+    clean: aptClean,
+  };
+  return actions[button.dataset.action]?.(hostName);
+});
+
 // fetch wrapper that sends the API token (stored in localStorage) and asks
 // for it once when the server answers 401.
 async function apiFetch(url, options = {}) {
@@ -76,7 +110,7 @@ async function loadHosts() {
     }
   } catch (error) {
     console.error("Error loading hosts:", error);
-    grid.innerHTML = `<div class="loading">Error loading hosts: ${error.message}</div>`;
+    grid.innerHTML = `<div class="loading">Error loading hosts: ${escapeHTML(error.message)}</div>`;
   }
 }
 
@@ -102,40 +136,40 @@ function renderHostCard(host, status) {
     : "Never";
 
   return `
-        <div class="host-card" data-host="${host.name}">
+        <div class="host-card" data-host="${escapeHTML(host.name)}">
             <div class="host-card-header">
                 <div>
-                    <div class="host-name">${host.name}</div>
-                    <div class="host-addr">${host.addr || "Unknown"}</div>
+                    <div class="host-name">${escapeHTML(host.name)}</div>
+                    <div class="host-addr">${escapeHTML(host.addr || "Unknown")}</div>
                 </div>
                 <div>
-                    <span class="status-badge status-${status}">${status}</span>
+                    <span class="status-badge status-${escapeHTML(status)}">${escapeHTML(status)}</span>
                     ${pullModeBadge}
                 </div>
             </div>
             <div class="host-info">
                 <div class="info-item">
                     <span class="info-label">Base</span>
-                    <span class="info-value">${host.base || "Unknown"}</span>
+                    <span class="info-value">${escapeHTML(host.base || "Unknown")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Generation</span>
-                    <span class="info-value">${host.generation || "-"}</span>
+                    <span class="info-value">${escapeHTML(host.generation || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Last Apply</span>
-                    <span class="info-value">${lastApply}</span>
+                    <span class="info-value">${escapeHTML(lastApply)}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Last Drift Check</span>
-                    <span class="info-value">${lastCheck}</span>
+                    <span class="info-value">${escapeHTML(lastCheck)}</span>
                 </div>
             </div>
             <div class="host-actions">
-                <button onclick="triggerApply('${host.name}')" class="btn btn-primary btn-small">Apply</button>
-                <button onclick="checkDrift('${host.name}')" class="btn btn-secondary btn-small">Check Drift</button>
-                ${host.pull_mode ? `<button onclick="triggerPull('${host.name}')" class="btn btn-secondary btn-small">Trigger Pull</button>` : ""}
-                <button onclick="viewDetails('${host.name}')" class="btn btn-secondary btn-small">Details</button>
+                <button data-action="apply" class="btn btn-primary btn-small">Apply</button>
+                <button data-action="drift" class="btn btn-secondary btn-small">Check Drift</button>
+                ${host.pull_mode ? `<button data-action="pull" class="btn btn-secondary btn-small">Trigger Pull</button>` : ""}
+                <button data-action="details" class="btn btn-secondary btn-small">Details</button>
             </div>
         </div>
     `;
@@ -161,9 +195,12 @@ async function triggerApply(hostName) {
   addActivity(`Triggering apply on ${hostName}...`);
 
   try {
-    const response = await apiFetch(`${API_BASE}/hosts/${hostName}/apply`, {
-      method: "POST",
-    });
+    const response = await apiFetch(
+      `${API_BASE}/hosts/${encodeURIComponent(hostName)}/apply`,
+      {
+        method: "POST",
+      },
+    );
 
     if (!response.ok) throw new Error("Apply failed");
 
@@ -183,7 +220,7 @@ async function checkDrift(hostName) {
 
   try {
     const response = await apiFetch(
-      `${API_BASE}/drift/check?host=${hostName}`,
+      `${API_BASE}/drift/check?host=${encodeURIComponent(hostName)}`,
       {
         method: "POST",
       },
@@ -225,7 +262,7 @@ async function triggerPull(hostName) {
 
   try {
     const response = await apiFetch(
-      `${API_BASE}/pull-mode/${hostName}/trigger`,
+      `${API_BASE}/pull-mode/${encodeURIComponent(hostName)}/trigger`,
       {
         method: "POST",
       },
@@ -252,14 +289,15 @@ async function viewDetails(hostName) {
   const body = document.getElementById("modal-body");
 
   title.textContent = `Host: ${hostName}`;
+  body.dataset.host = hostName;
   body.innerHTML = '<div class="loading">Loading details...</div>';
   modal.classList.remove("hidden");
 
   try {
     // Fetch host details and OS info in parallel
     const [hostResponse, osInfoResponse] = await Promise.all([
-      apiFetch(`${API_BASE}/hosts/${hostName}`),
-      apiFetch(`${API_BASE}/hosts/${hostName}/os-info`),
+      apiFetch(`${API_BASE}/hosts/${encodeURIComponent(hostName)}`),
+      apiFetch(`${API_BASE}/hosts/${encodeURIComponent(hostName)}/os-info`),
     ]);
 
     if (!hostResponse.ok) throw new Error("Failed to fetch details");
@@ -275,19 +313,19 @@ async function viewDetails(hostName) {
                 </div>
                 <div class="info-item">
                     <span class="info-label">Last Pull</span>
-                    <span class="info-value">${host.pull_mode_status.last_run || "Never"}</span>
+                    <span class="info-value">${escapeHTML(host.pull_mode_status.last_run || "Never")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Last Result</span>
-                    <span class="info-value">${host.pull_mode_status.last_result || "-"}</span>
+                    <span class="info-value">${escapeHTML(host.pull_mode_status.last_result || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Next Pull</span>
-                    <span class="info-value">${host.pull_mode_status.next_run || "-"}</span>
+                    <span class="info-value">${escapeHTML(host.pull_mode_status.next_run || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Current Commit</span>
-                    <span class="info-value" style="font-family: monospace;">${host.pull_mode_status.current_commit || "-"}</span>
+                    <span class="info-value" style="font-family: monospace;">${escapeHTML(host.pull_mode_status.current_commit || "-")}</span>
                 </div>
             `
       : "";
@@ -295,7 +333,7 @@ async function viewDetails(hostName) {
     const rolesHtml = host.roles
       ? `<div class="info-item">
                     <span class="info-label">Roles</span>
-                    <span class="info-value">${host.roles.join(", ")}</span>
+                    <span class="info-value">${escapeHTML(host.roles.join(", "))}</span>
                 </div>`
       : "";
 
@@ -305,27 +343,27 @@ async function viewDetails(hostName) {
             <div class="host-info" style="grid-template-columns: 1fr 1fr;">
                 <div class="info-item">
                     <span class="info-label">OS</span>
-                    <span class="info-value">${osInfo.pretty_name || osInfo.name || "-"}</span>
+                    <span class="info-value">${escapeHTML(osInfo.pretty_name || osInfo.name || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Kernel</span>
-                    <span class="info-value" style="font-family: monospace;">${osInfo.kernel || "-"}</span>
+                    <span class="info-value" style="font-family: monospace;">${escapeHTML(osInfo.kernel || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Architecture</span>
-                    <span class="info-value">${osInfo.architecture || "-"}</span>
+                    <span class="info-value">${escapeHTML(osInfo.architecture || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Uptime</span>
-                    <span class="info-value">${osInfo.uptime || "-"}</span>
+                    <span class="info-value">${escapeHTML(osInfo.uptime || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Last Boot</span>
-                    <span class="info-value">${osInfo.last_boot || "-"}</span>
+                    <span class="info-value">${escapeHTML(osInfo.last_boot || "-")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Codename</span>
-                    <span class="info-value">${osInfo.codename || "-"}</span>
+                    <span class="info-value">${escapeHTML(osInfo.codename || "-")}</span>
                 </div>
             </div>
             `
@@ -335,15 +373,15 @@ async function viewDetails(hostName) {
       host.base === "ubuntu"
         ? `
             <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--accent-orange);">Package Management</h4>
-            <div id="apt-status-${hostName}" style="margin-bottom: 1rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px;">
+            <div id="apt-status-${escapeHTML(hostName)}" style="margin-bottom: 1rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px;">
                 <span style="color: var(--text-secondary);">Click "Check Updates" to see available updates</span>
             </div>
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                <button onclick="checkAptUpdates('${hostName}')" class="btn btn-secondary btn-small">Check Updates</button>
-                <button onclick="aptUpgrade('${hostName}', false)" class="btn btn-primary btn-small">Upgrade All</button>
-                <button onclick="aptUpgrade('${hostName}', true)" class="btn btn-secondary btn-small">Security Only</button>
-                <button onclick="aptAutoremove('${hostName}')" class="btn btn-secondary btn-small">Autoremove</button>
-                <button onclick="aptClean('${hostName}')" class="btn btn-secondary btn-small">Clean Cache</button>
+                <button data-action="updates" class="btn btn-secondary btn-small">Check Updates</button>
+                <button data-action="upgrade" class="btn btn-primary btn-small">Upgrade All</button>
+                <button data-action="security" class="btn btn-secondary btn-small">Security Only</button>
+                <button data-action="autoremove" class="btn btn-secondary btn-small">Autoremove</button>
+                <button data-action="clean" class="btn btn-secondary btn-small">Clean Cache</button>
             </div>
             `
         : "";
@@ -352,19 +390,19 @@ async function viewDetails(hostName) {
             <div class="host-info" style="grid-template-columns: 1fr 1fr;">
                 <div class="info-item">
                     <span class="info-label">Name</span>
-                    <span class="info-value">${host.name}</span>
+                    <span class="info-value">${escapeHTML(host.name)}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Address</span>
-                    <span class="info-value">${host.addr || "Unknown"}</span>
+                    <span class="info-value">${escapeHTML(host.addr || "Unknown")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Base OS</span>
-                    <span class="info-value">${host.base || "Unknown"}</span>
+                    <span class="info-value">${escapeHTML(host.base || "Unknown")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">SSH User</span>
-                    <span class="info-value">${host.ssh_user || "default"}</span>
+                    <span class="info-value">${escapeHTML(host.ssh_user || "default")}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Online</span>
@@ -372,7 +410,7 @@ async function viewDetails(hostName) {
                 </div>
                 <div class="info-item">
                     <span class="info-label">Generation</span>
-                    <span class="info-value">${host.generation || "-"}</span>
+                    <span class="info-value">${escapeHTML(host.generation || "-")}</span>
                 </div>
                 ${rolesHtml}
                 <div class="info-item">
@@ -390,10 +428,10 @@ async function viewDetails(hostName) {
                 : ""
             }
             ${aptActionsHtml}
-            ${host.state && Object.keys(host.state).length > 0 ? `<h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">State</h4><pre>${JSON.stringify(host.state, null, 2)}</pre>` : ""}
+            ${host.state && Object.keys(host.state).length > 0 ? `<h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">State</h4><pre>${escapeHTML(JSON.stringify(host.state, null, 2))}</pre>` : ""}
         `;
   } catch (error) {
-    body.innerHTML = `<div class="loading">Error: ${error.message}</div>`;
+    body.innerHTML = `<div class="loading">Error: ${escapeHTML(error.message)}</div>`;
   }
 }
 
@@ -409,7 +447,7 @@ async function checkAptUpdates(hostName) {
 
   try {
     const response = await apiFetch(
-      `${API_BASE}/hosts/${hostName}/apt/updates`,
+      `${API_BASE}/hosts/${encodeURIComponent(hostName)}/apt/updates`,
     );
     if (!response.ok) throw new Error("Failed to check updates");
 
@@ -418,16 +456,16 @@ async function checkAptUpdates(hostName) {
     if (statusDiv) {
       const securityBadge =
         status.security_updates > 0
-          ? `<span style="color: var(--accent-red); font-weight: bold;">${status.security_updates} security</span>`
+          ? `<span style="color: var(--accent-red); font-weight: bold;">${escapeHTML(status.security_updates)} security</span>`
           : "";
 
       statusDiv.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <strong>${status.pending_updates}</strong> updates available ${securityBadge}
+                        <strong>${escapeHTML(status.pending_updates)}</strong> updates available ${securityBadge}
                         ${status.reboot_required ? '<span style="color: var(--accent-orange); margin-left: 1rem;">⚠ Reboot required</span>' : ""}
                     </div>
-                    <span style="color: var(--text-secondary); font-size: 0.8rem;">Checked: ${new Date(status.last_check).toLocaleTimeString()}</span>
+                    <span style="color: var(--text-secondary); font-size: 0.8rem;">Checked: ${escapeHTML(new Date(status.last_check).toLocaleTimeString())}</span>
                 </div>
                 ${
                   status.packages && status.packages.length > 0
@@ -438,8 +476,8 @@ async function checkAptUpdates(hostName) {
                               .map(
                                 (pkg) => `
                                 <div style="display: flex; justify-content: space-between; padding: 0.25rem 0; border-bottom: 1px solid var(--border-color);">
-                                    <span style="font-family: monospace;">${pkg.name}</span>
-                                    <span style="color: var(--text-secondary); font-size: 0.8rem;">${pkg.installed_version} → ${pkg.available_version}${pkg.is_security_update ? ' <span style="color: var(--accent-red);">⚠</span>' : ""}</span>
+                                    <span style="font-family: monospace;">${escapeHTML(pkg.name)}</span>
+                                    <span style="color: var(--text-secondary); font-size: 0.8rem;">${escapeHTML(pkg.installed_version)} → ${escapeHTML(pkg.available_version)}${pkg.is_security_update ? ' <span style="color: var(--accent-red);">⚠</span>' : ""}</span>
                                 </div>
                             `,
                               )
@@ -456,7 +494,7 @@ async function checkAptUpdates(hostName) {
     );
   } catch (error) {
     if (statusDiv) {
-      statusDiv.innerHTML = `<span style="color: var(--accent-red);">Error: ${error.message}</span>`;
+      statusDiv.innerHTML = `<span style="color: var(--accent-red);">Error: ${escapeHTML(error.message)}</span>`;
     }
     addActivity(
       `Failed to check updates on ${hostName}: ${error.message}`,
@@ -472,13 +510,13 @@ async function aptUpgrade(hostName, securityOnly) {
 
   const statusDiv = document.getElementById(`apt-status-${hostName}`);
   if (statusDiv) {
-    statusDiv.innerHTML = `<span style="color: var(--accent-blue);">Running ${action}...</span>`;
+    statusDiv.innerHTML = `<span style="color: var(--accent-blue);">Running ${escapeHTML(action)}...</span>`;
   }
   addActivity(`Running ${action} on ${hostName}...`);
 
   try {
     const response = await apiFetch(
-      `${API_BASE}/hosts/${hostName}/apt/upgrade${securityOnly ? "?security=true" : ""}`,
+      `${API_BASE}/hosts/${encodeURIComponent(hostName)}/apt/upgrade${securityOnly ? "?security=true" : ""}`,
       { method: "POST" },
     );
     if (!response.ok) throw new Error("Upgrade failed");
@@ -487,9 +525,9 @@ async function aptUpgrade(hostName, securityOnly) {
 
     if (statusDiv) {
       if (result.success) {
-        statusDiv.innerHTML = `<span style="color: var(--accent-green);">Upgrade complete! ${result.upgraded_packages?.length || 0} packages upgraded.</span>`;
+        statusDiv.innerHTML = `<span style="color: var(--accent-green);">Upgrade complete! ${escapeHTML(result.upgraded_packages?.length || 0)} packages upgraded.</span>`;
       } else {
-        statusDiv.innerHTML = `<span style="color: var(--accent-red);">Upgrade failed: ${result.error}</span>`;
+        statusDiv.innerHTML = `<span style="color: var(--accent-red);">Upgrade failed: ${escapeHTML(result.error)}</span>`;
       }
     }
 
@@ -499,7 +537,7 @@ async function aptUpgrade(hostName, securityOnly) {
     );
   } catch (error) {
     if (statusDiv) {
-      statusDiv.innerHTML = `<span style="color: var(--accent-red);">Error: ${error.message}</span>`;
+      statusDiv.innerHTML = `<span style="color: var(--accent-red);">Error: ${escapeHTML(error.message)}</span>`;
     }
     addActivity(`${action} failed on ${hostName}: ${error.message}`, "error");
   }
@@ -512,7 +550,7 @@ async function aptAutoremove(hostName) {
 
   try {
     const response = await apiFetch(
-      `${API_BASE}/hosts/${hostName}/apt/autoremove`,
+      `${API_BASE}/hosts/${encodeURIComponent(hostName)}/apt/autoremove`,
       { method: "POST" },
     );
     if (!response.ok) throw new Error("Autoremove failed");
@@ -528,9 +566,12 @@ async function aptClean(hostName) {
   addActivity(`Cleaning apt cache on ${hostName}...`);
 
   try {
-    const response = await apiFetch(`${API_BASE}/hosts/${hostName}/apt/clean`, {
-      method: "POST",
-    });
+    const response = await apiFetch(
+      `${API_BASE}/hosts/${encodeURIComponent(hostName)}/apt/clean`,
+      {
+        method: "POST",
+      },
+    );
     if (!response.ok) throw new Error("Clean failed");
 
     const result = await response.json();
@@ -584,8 +625,8 @@ function renderActivity() {
     .map(
       (item) => `
         <div class="activity-item">
-            <span class="activity-time">${item.time}</span>
-            <span class="activity-message" style="${item.type === "error" ? "color: var(--accent-red)" : ""}">${item.message}</span>
+            <span class="activity-time">${escapeHTML(item.time)}</span>
+            <span class="activity-message" style="${item.type === "error" ? "color: var(--accent-red)" : ""}">${escapeHTML(item.message)}</span>
         </div>
     `,
     )
