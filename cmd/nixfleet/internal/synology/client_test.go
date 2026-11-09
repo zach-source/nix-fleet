@@ -84,11 +84,11 @@ func TestClientTLSInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestClientCredentialsStayInBody(t *testing.T) {
+func TestClientPreservesGETProtocol(t *testing.T) {
 	var methods []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.RawQuery != "" {
-			t.Errorf("credentials must use a POST body, got %s %s", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet {
+			t.Errorf("existing DSM calls must retain GET, got %s", r.Method)
 		}
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
@@ -96,11 +96,13 @@ func TestClientCredentialsStayInBody(t *testing.T) {
 		method := r.Form.Get("method")
 		methods = append(methods, method)
 		if method == "login" {
-			if r.PostForm.Get("passwd") != "test password +/&" {
-				t.Error("password did not survive form encoding")
+			if r.Form.Get("passwd") != "test password +/&" {
+				t.Error("password did not survive query encoding")
 			}
-		} else if r.PostForm.Get("_sid") != "test-session" {
-			t.Error("session missing from request body")
+		} else if method == "list" && r.Form.Get("_sid") != "test-session" {
+			t.Error("session missing from API request")
+		} else if method == "logout" && r.Form.Has("_sid") {
+			t.Error("logout protocol changed")
 		}
 		_, _ = io.WriteString(w, `{"success":true,"data":{"sid":"test-session"}}`)
 	}))
@@ -149,6 +151,23 @@ func TestClientErrorsDoNotExposeCredentials(t *testing.T) {
 	cl.sid = "test-session"
 	_, err = cl.Call(context.Background(), "SYNO.Core.Share", "list", 1, nil)
 	check(err)
+}
+
+func TestClientMalformedURLErrorsDoNotExposeCredentials(t *testing.T) {
+	cl, err := testClient(t, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.baseURL = "http://[::1"
+	err = cl.Login(context.Background())
+	if err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+	for _, secret := range []string{cl.passwd, url.QueryEscape(cl.passwd), "passwd="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Error("invalid URL error exposes credentials")
+		}
+	}
 }
 
 func TestClientDoesNotForwardCredentialsOnRedirect(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -107,7 +106,6 @@ func (c *Client) Logout(ctx context.Context) {
 		"version": {"3"},
 		"method":  {"logout"},
 		"session": {"NixFleet"},
-		"_sid":    {c.sid},
 	}
 	_ = c.do(ctx, "auth.cgi", q, nil) // best-effort
 	c.sid = ""
@@ -141,20 +139,14 @@ type rawCapture struct{ into *json.RawMessage }
 // do issues the request, checks the DSM envelope, and decodes data into out.
 // out may be nil (ignore data), a *rawCapture (keep raw), or any json target.
 func (c *Client) do(ctx context.Context, cgi string, q url.Values, out any) error {
-	reqURL := c.baseURL + "/" + cgi
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, strings.NewReader(q.Encode()))
+	reqURL := c.baseURL + "/" + cgi + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return err
+		return requestError(cgi, err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		// URL errors include the full URL; retain the transport cause, not the URL.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
-		}
-		return fmt.Errorf("request to %s: %w", cgi, err)
+		return requestError(cgi, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -187,6 +179,15 @@ func (c *Client) do(ctx context.Context, cgi string, q url.Values, out any) erro
 		}
 		return json.Unmarshal(env.Data, out)
 	}
+}
+
+// requestError retains the cause without printing credential-bearing URL wrappers.
+func requestError(cgi string, err error) error {
+	var urlErr *url.Error
+	for errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return fmt.Errorf("request to %s: %w", cgi, err)
 }
 
 // unmarshalData decodes a raw DSM data payload, tolerating an empty payload.
