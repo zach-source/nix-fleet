@@ -57,8 +57,10 @@ func sshOpts(host *inventory.Host) string {
 
 // Deployer handles copying closures and activating on hosts
 type Deployer struct {
-	evaluator *Evaluator
-	nixBin    string
+	// ManageNixOSProfile opts into persistent native NixOS generation selection.
+	ManageNixOSProfile bool
+	evaluator          *Evaluator
+	nixBin             string
 }
 
 // NewDeployer creates a new deployer
@@ -111,12 +113,19 @@ func (d *Deployer) ActivateUbuntu(ctx context.Context, client *ssh.Client, closu
 
 // ActivateNixOS activates a configuration on a NixOS host
 func (d *Deployer) ActivateNixOS(ctx context.Context, client *ssh.Client, closure *HostClosure, action string) error {
+	return d.activateNixOS(ctx, client, closure, action)
+}
+
+func (d *Deployer) activateNixOS(ctx context.Context, client state.Execer, closure *HostClosure, action string) error {
 	if action == "" {
 		action = "switch"
 	}
 
 	// Run switch-to-configuration
 	switchCmd := fmt.Sprintf("%s/bin/switch-to-configuration %s", closure.StorePath, action)
+	if d.ManageNixOSProfile && (action == "switch" || action == "boot") {
+		switchCmd = fmt.Sprintf("nix-env --profile /nix/var/nix/profiles/system --set %s && %s", closure.StorePath, switchCmd)
+	}
 
 	result, err := client.ExecSudo(ctx, switchCmd)
 	if err != nil {
@@ -270,7 +279,7 @@ func (d *Deployer) RefreshStateAfterRollback(ctx context.Context, client *ssh.Cl
 	return state.NewManager().UpdateAfterApply(ctx, client, storePath, hash, gen, 0)
 }
 
-func (d *Deployer) rollbackNixOS(ctx context.Context, client *ssh.Client, generation int) error {
+func (d *Deployer) rollbackNixOS(ctx context.Context, client state.Execer, generation int) error {
 	var cmd string
 	if generation == 0 {
 		// Rollback to previous
@@ -280,6 +289,14 @@ func (d *Deployer) rollbackNixOS(ctx context.Context, client *ssh.Client, genera
 	} else {
 		// Rollback to specific generation
 		cmd = fmt.Sprintf("/nix/var/nix/profiles/system-%d-link/bin/switch-to-configuration switch", generation)
+	}
+
+	if d.ManageNixOSProfile {
+		selection := "--rollback"
+		if generation != 0 {
+			selection = fmt.Sprintf("--switch-generation %d", generation)
+		}
+		cmd = "nix-env --profile /nix/var/nix/profiles/system " + selection + " && /nix/var/nix/profiles/system/bin/switch-to-configuration switch"
 	}
 
 	result, err := client.ExecSudo(ctx, cmd)

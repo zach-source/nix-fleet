@@ -70,6 +70,8 @@ func main() {
 	}
 }
 
+var manageNixOSProfile bool
+
 func rootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "nixfleet",
@@ -92,6 +94,8 @@ It provides Ansible-like UX for:
 	cmd.PersistentFlags().IntVarP(&maxParallel, "parallel", "p", 5, "Max parallel operations")
 	cmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+
+	cmd.PersistentFlags().BoolVar(&manageNixOSProfile, "manage-nixos-profile", false, "Create and select native NixOS generations during apply and rollback")
 
 	// Add subcommands
 	cmd.AddCommand(planCmd())
@@ -318,6 +322,7 @@ func applyCmd() *cobra.Command {
 			}
 
 			deployer := nix.NewDeployer(evaluator)
+			deployer.ManageNixOSProfile = manageNixOSProfile
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
 
@@ -458,6 +463,7 @@ func rollbackCmd() *cobra.Command {
 			}
 
 			deployer := nix.NewDeployer(evaluator)
+			deployer.ManageNixOSProfile = manageNixOSProfile
 
 			failedCount := 0
 			for _, host := range hosts {
@@ -532,6 +538,7 @@ Use --all to show extended status including update counts and drift.`,
 			}
 
 			deployer := nix.NewDeployer(evaluator)
+			deployer.ManageNixOSProfile = manageNixOSProfile
 			stateMgr := state.NewManager()
 
 			if showAll {
@@ -1441,6 +1448,7 @@ the default. Use --apply to roll the new closures out to all inventory hosts.`,
 			// not run preflight/PKI (see `nixfleet apply` for the full pipeline);
 			// a package-set bump only needs the closure rolled out.
 			deployer := nix.NewDeployer(evaluator)
+			deployer.ManageNixOSProfile = manageNixOSProfile
 			pool := ssh.NewPool(nil)
 			defer pool.Close()
 			stateMgr := state.NewManager()
@@ -2839,6 +2847,7 @@ API Endpoints:
 				WebhookEvents:       webhookEvents,
 				APIToken:            apiToken,
 				FailOnError:         failOnError,
+				ManageNixOSProfile:  manageNixOSProfile,
 			}
 
 			srv, err := server.New(config)
