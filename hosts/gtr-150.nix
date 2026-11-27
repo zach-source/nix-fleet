@@ -218,6 +218,14 @@
           format = "deepseek";
           budget = 2048;
         };
+        # Canary: llama.cpp 919794500 + zach-source/llama-cpp-rdna-boosts
+        # v18-919794500-r366 on /opt/rocm-10.1 (2026-11-27). build-rdna.sh in
+        # /opt/build/rdna-boosts built it on this host.
+        # llama-bench Qwen3.8-27B Q8_0, master -> rdna (tok/s):
+        #   pp512 349 -> 445, pp4096 197 -> 535, tg128 7.5 -> 8.0
+        # Live with MTP: decode 15 -> 17.6, prefill 247 -> 335.
+        binary = "/opt/llama-rocm-rdna/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-rdna:/opt/rocm-10.1/lib:/opt/rocm-10.1/lib/rocm_sysdeps/lib:/opt/rocm-10.1/lib/llvm/lib:/opt/rocm-10.1/lib/host-math/lib";
         extraFlags = [
           "--lora"
           "/srv/models/Qwen3.8-27B-pi-lora-F16.gguf"
