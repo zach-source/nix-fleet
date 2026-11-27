@@ -25,12 +25,12 @@
       addr = "192.168.3.133";
     };
 
-    # k0s worker, declaratively managed. system-reserved=56Gi -> ~66Gi k8s
-    # allocatable, sized for the support models (~28Gi GTT). It was 78Gi
-    # while Qwen3.8-27B (~42Gi) ran here, 2026-10-10..15.
+    # k0s worker, declaratively managed. system-reserved=78Gi -> ~44Gi k8s
+    # allocatable: the support models (~28Gi GTT) plus Qwen3.8-27B-pi
+    # (~38Gi, 2026-11-20). It was 56Gi from 2026-10-15 to 2026-11-20.
     k0s.worker = {
       enable = true;
-      systemReservedMemory = "56Gi";
+      systemReservedMemory = "78Gi";
     };
 
     # iSCSI initiator so the Synology CSI driver can attach btrfs-backed LUNs.
@@ -188,6 +188,60 @@
         extraFlags = [
           "--reranking"
           "--pooling rank"
+        ];
+      };
+
+      # Qwen3.8-27B with the harness-hub "pi-adapted" LoRA (2026-11-20).
+      # It is an RL post-train for the pi coding agent, with thinking off.
+      # Card scores: SWE-bench Pro hard 39.2 -> 64.7, TB2.1 39.5 -> 55.8.
+      # The card gives these settings:
+      #   - a Q8_0 base (lower quants move away from the trained behavior)
+      #   - 131072 context (the eval setting)
+      #   - thinking off, temp 0.8, top-p 1.0
+      #   - clients use the chat-completions API, not Responses
+      #
+      # The port is 8099. The atelet DaemonSet holds hostPort 8085 on all
+      # k0s nodes (see 62da41b, the old qwen38-27b slot).
+      services.qwen38-pi = {
+        description = "Qwen3.8-27B pi-adapted LoRA (coding agent), thinking off";
+        model = "/srv/models/Qwen3.8-27B-MTP-Q8_0.gguf";
+        port = 8099;
+        ctxSize = 131072;
+        parallel = 2;
+        # The base GGUF has its own MTP head. The LoRA does not change the
+        # nextn layers, so the base model makes the drafts. Acceptance can be
+        # lower, but the adapted model checks each draft token.
+        mtp = {
+          nMax = 2;
+        };
+        reasoning = {
+          format = "deepseek";
+          budget = 2048;
+        };
+        # Canary: llama.cpp 919794500 + zach-source/llama-cpp-rdna-boosts
+        # v18-919794500-r366 on /opt/rocm-10.1 (2026-11-27). build-rdna.sh in
+        # /opt/build/rdna-boosts built it on this host
+        # (copy in scripts/build-rdna.sh).
+        # llama-bench Qwen3.8-27B Q8_0, master -> rdna (tok/s):
+        #   pp512 349 -> 445, pp4096 197 -> 535, tg128 7.5 -> 8.0
+        # Live with MTP: decode 15 -> 17.6, prefill 247 -> 335.
+        binary = "/opt/llama-rocm-rdna/llama-server";
+        ldLibraryPath = "/opt/llama-rocm-rdna:/opt/rocm-10.1/lib:/opt/rocm-10.1/lib/rocm_sysdeps/lib:/opt/rocm-10.1/lib/llvm/lib:/opt/rocm-10.1/lib/host-math/lib";
+        extraFlags = [
+          "--lora"
+          "/srv/models/Qwen3.8-27B-pi-lora-F16.gguf"
+          # --fit off: skip the memory-fit pass that re-reads the whole GGUF.
+          "--fit"
+          "off"
+          # One KV pool for both slots, so one request can use all 131072.
+          "--kv-unified"
+          "--temp"
+          "0.8"
+          "--top-p"
+          "1.0"
+          # Single-quoted so systemd keeps the inner double quotes.
+          "--chat-template-kwargs"
+          "'{\"enable_thinking\":false}'"
         ];
       };
     };

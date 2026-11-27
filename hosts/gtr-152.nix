@@ -59,6 +59,10 @@
 
     modules.llmInference = {
       enable = true;
+      # The rdna-boosts build (2026-11-27), see hosts/gtr-150.nix qwen38-pi.
+      # llama-bench Ornith-1.5 Q6_K, master -> rdna (tok/s):
+      #   pp4096 1158 -> 1526, tg128 44 -> 63
+      rocmLibPath = "/opt/llama-rocm-rdna";
       # Ornith-1.5-35B-A3B (2026-10-05), replacing Ornith-1.0 at the same port.
       # Same Qwen3.6-35B-A3B architecture, so the same build loads it. The
       # official Q6_K GGUF carries its own MTP head (nextn_predict_layers = 1,
