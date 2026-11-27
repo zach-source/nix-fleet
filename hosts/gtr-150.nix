@@ -220,7 +220,8 @@
         };
         # Canary: llama.cpp 919794500 + zach-source/llama-cpp-rdna-boosts
         # v18-919794500-r366 on /opt/rocm-10.1 (2026-11-27). build-rdna.sh in
-        # /opt/build/rdna-boosts built it on this host.
+        # /opt/build/rdna-boosts built it on this host
+        # (copy in scripts/build-rdna.sh).
         # llama-bench Qwen3.8-27B Q8_0, master -> rdna (tok/s):
         #   pp512 349 -> 445, pp4096 197 -> 535, tg128 7.5 -> 8.0
         # Live with MTP: decode 15 -> 17.6, prefill 247 -> 335.
