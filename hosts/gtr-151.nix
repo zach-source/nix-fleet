@@ -60,7 +60,11 @@
 
     modules.llmInference = {
       enable = true;
-      # Runs on upstream llama.cpp built for gfx1151 at /opt/llama-rocm-master
+      # The rdna-boosts build (2026-11-27), see hosts/gtr-150.nix qwen38-pi.
+      # llama-bench Qwen3.6-35B-A3B Q6_K, master -> rdna (tok/s):
+      #   pp4096 1291 -> 1655, tg128 45 -> 52
+      rocmLibPath = "/opt/llama-rocm-rdna";
+      # Before that, it ran upstream llama.cpp built for gfx1151 at /opt/llama-rocm-master
       # (c83f3058b since 2026-10-11; was 6a257d4). Replaces the old custom fork:
       # upstream PR #19493 natively handles qwen35 hybrid speculation, so the
       # 6 fork patches are obsolete (verified empirically — native spec gives
